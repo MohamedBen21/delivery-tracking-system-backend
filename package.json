@@ -24,8 +24,8 @@
     "express": "^4.21.2",
     "ioredis": "^5.9.2",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^9.1.6",
+    "mongoose": "^8.10.1",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.7.3"
   }
 }
