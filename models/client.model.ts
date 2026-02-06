@@ -49,8 +49,9 @@ const locationSchema = new Schema<ICurrentLocation>({
     type: Date,
     default: Date.now,
     required: true
-  }
-});
+  },
+  
+},{_id : false});
 
 const deliveryAddressSchema = new Schema<IDeliveryAddress>(
   {
