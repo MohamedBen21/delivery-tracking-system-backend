@@ -257,6 +257,138 @@ const transporterSchema = new Schema<ITransporter>({
   toObject: { virtuals: true },
 });
 
+
+
+transporterSchema.virtual('isVerified').get(function() {
+  return this.verificationStatus === 'verified';
+});
+
+transporterSchema.virtual('isAvailable').get(function() {
+  return (
+    this.availabilityStatus === 'available' &&
+    this.isActive &&
+    !this.isSuspended &&
+    this.isVerified
+  );
+});
+
+transporterSchema.virtual('isOnDuty').get(function() {
+  return (
+    this.availabilityStatus === 'available' || 
+    this.availabilityStatus === 'on_route'
+  );
+});
+
+transporterSchema.virtual('completionRate').get(function() {
+  if (this.totalTrips === 0) return 0;
+  return (this.completedTrips / this.totalTrips) * 100;
+});
+
+transporterSchema.virtual('canAcceptJobs').get(function() {
+  return (
+    this.isAvailable &&
+    this.isOnDuty &&
+    this.documentStatus === 'complete' &&
+    this.hasValidLicense
+  );
+});
+
+transporterSchema.virtual('hasValidLicense').get(function() {
+  if (!this.documents?.licenseExpiry) return false;
+  return this.documents.licenseExpiry > new Date();
+});
+
+transporterSchema.virtual('documentStatus').get(function() {
+  if (!this.documents) return 'incomplete';
+  
+  const requiredDocs = [
+    'contractImage',
+    'idCardImage', 
+    'licenseImage',
+    'licenseNumber',
+    'licenseExpiry',
+    'backgroundCheck',
+  ];
+  
+  const missingDocs = requiredDocs.filter(doc => !this.documents?.[doc as keyof ITransporterDocuments]);
+  
+  if (missingDocs.length > 0) return 'incomplete';
+  
+  if (this.documents.licenseExpiry && this.documents.licenseExpiry < new Date()) {
+    return 'expired';
+  }
+  
+  return 'complete';
+});
+
+
+transporterSchema.methods.verify = function(
+  verifiedBy: mongoose.Types.ObjectId,
+  notes?: string
+) {
+  this.verificationStatus = 'verified';
+  this.verifiedBy = verifiedBy;
+  this.verifiedAt = new Date();
+  this.verificationNotes = notes;
+  return this.save();
+};
+
+transporterSchema.methods.reject = function(
+  verifiedBy: mongoose.Types.ObjectId,
+  reason: string,
+  notes?: string
+) {
+  this.verificationStatus = 'rejected';
+  this.verifiedBy = verifiedBy;
+  this.verifiedAt = new Date();
+  this.rejectionReason = reason;
+  this.verificationNotes = notes;
+  return this.save();
+};
+
+transporterSchema.methods.setAvailability = function(status: AvailabilityStatus) {
+  this.availabilityStatus = status;
+  this.lastActiveAt = new Date();
+  return this.save();
+};
+
+transporterSchema.methods.assign = function(
+  branchId: mongoose.Types.ObjectId,
+  vehicleId: mongoose.Types.ObjectId
+) {
+  this.currentBranchId = branchId;
+  this.currentVehicleId = vehicleId;
+  this.lastActiveAt = new Date();
+  return this.save();
+};
+
+transporterSchema.methods.release = function() {
+  this.currentBranchId = undefined;
+  this.currentVehicleId = undefined;
+  this.currentRouteId = undefined;
+  this.availabilityStatus = 'available';
+  return this.save();
+};
+
+transporterSchema.pre('save', function(next) {
+  if (this.isModified('availabilityStatus') || this.isModified('verificationStatus')) {
+    this.lastActiveAt = new Date();
+  }
+  
+  if (this.completedTrips + this.cancelledTrips > this.totalTrips) {
+    return next(new Error('Sum of completed and cancelled trips cannot exceed total trips'));
+  }
+  
+  if (this.isSuspended && this.suspensionEndDate && this.suspensionEndDate < new Date()) {
+    this.isSuspended = false;
+    this.suspensionReason = undefined;
+    this.suspensionEndDate = undefined;
+    this.availabilityStatus = 'available';
+  }
+  
+  next();
+});
+
 transporterSchema.index({ userId: 1 });
 transporterSchema.index({ companyId: 1 });
 transporterSchema.index({ verificationStatus: 1, availabilityStatus: 1 });
