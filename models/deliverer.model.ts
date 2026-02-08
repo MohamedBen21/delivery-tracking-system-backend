@@ -330,6 +330,155 @@ const delivererSchema = new Schema<IDeliverer>({
 });
 
 
+
+delivererSchema.virtual('isVerified').get(function() {
+  return this.verificationStatus === 'verified';
+});
+
+delivererSchema.virtual('isAvailable').get(function() {
+  return (
+    this.availabilityStatus === 'available' &&
+    this.isActive &&
+    !this.isSuspended &&
+    this.isVerified
+  );
+});
+
+delivererSchema.virtual('isOnDuty').get(function() {
+  return (
+    this.availabilityStatus === 'available' || 
+    this.availabilityStatus === 'on_route'
+  );
+});
+
+delivererSchema.virtual('successRate').get(function() {
+  if (this.totalDeliveries === 0) return 0;
+  return (this.successfulDeliveries / this.totalDeliveries) * 100;
+});
+
+delivererSchema.virtual('canAcceptDeliveries').get(function() {
+  return (
+    this.isAvailable &&
+    this.isOnDuty &&
+    this.documentStatus === 'complete' &&
+    this.hasValidLicense &&
+    !!this.currentLocation
+  );
+});
+
+delivererSchema.virtual('hasValidLicense').get(function() {
+  if (!this.documents?.licenseExpiry) return false;
+  return this.documents.licenseExpiry > new Date();
+});
+
+delivererSchema.virtual('documentStatus').get(function() {
+  if (!this.documents) return 'incomplete';
+  
+  const requiredDocs = [
+    'contractImage',
+    'idCardImage', 
+    'licenseImage',
+    'licenseNumber',
+    'licenseExpiry',
+    'backgroundCheck',
+  ];
+  
+  const missingDocs = requiredDocs.filter(doc => !this.documents?.[doc as keyof IDelivererDocuments]);
+  
+  if (missingDocs.length > 0) return 'incomplete';
+  
+  if (this.documents.licenseExpiry && this.documents.licenseExpiry < new Date()) {
+    return 'expired';
+  }
+  
+  return 'complete';
+});
+
+
+delivererSchema.methods.verify = function(
+  verifiedBy: mongoose.Types.ObjectId,
+  notes?: string
+) {
+  this.verificationStatus = 'verified';
+  this.verifiedBy = verifiedBy;
+  this.verifiedAt = new Date();
+  this.verificationNotes = notes;
+  return this.save();
+};
+
+
+delivererSchema.methods.reject = function(
+  verifiedBy: mongoose.Types.ObjectId,
+  reason: string,
+  notes?: string
+) {
+  this.verificationStatus = 'rejected';
+  this.verifiedBy = verifiedBy;
+  this.verifiedAt = new Date();
+  this.rejectionReason = reason;
+  this.verificationNotes = notes;
+  return this.save();
+};
+
+
+delivererSchema.methods.setAvailability = function(status: AvailabilityStatus) {
+  this.availabilityStatus = status;
+  this.lastActiveAt = new Date();
+  return this.save();
+};
+
+
+delivererSchema.methods.updateLocation = function(coordinates: [number, number]) {
+  this.currentLocation = {
+    type: 'Point',
+    coordinates: coordinates,
+  };
+  this.lastLocationUpdate = new Date();
+  this.lastActiveAt = new Date();
+  return this.save();
+};
+
+
+delivererSchema.methods.assignVehicle = function(vehicleId: mongoose.Types.ObjectId) {
+  this.currentVehicleId = vehicleId;
+  this.lastActiveAt = new Date();
+  return this.save();
+};
+
+
+delivererSchema.methods.release = function() {
+  this.currentVehicleId = undefined;
+  this.currentRouteId = undefined;
+  this.availabilityStatus = 'available';
+  this.lastActiveAt = new Date();
+  return this.save();
+};
+
+delivererSchema.methods.canAcceptDelivery = function() {
+  return (
+    this.canAcceptDeliveries &&
+    !this.isSuspended &&
+    this.currentVehicleId 
+  );
+};
+
+delivererSchema.pre('save', function(next) {
+
+  if (this.isModified('availabilityStatus')) {
+    this.lastActiveAt = new Date();
+  }
+  
+  if (this.successfulDeliveries + this.failedDeliveries > this.totalDeliveries) {
+    return next(new Error('Sum of successful and failed deliveries cannot exceed total deliveries'));
+  }
+  
+  if (this.successfulDeliveries === 0 && this.performance.averageDeliveryTime > 0) {
+    return next(new Error('Cannot have average delivery time without successful deliveries'));
+  }
+  
+  next();
+});
+
 delivererSchema.index({ userId: 1 });
 delivererSchema.index({ companyId: 1 });
 delivererSchema.index({ branchId: 1 });
