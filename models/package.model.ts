@@ -346,3 +346,231 @@ const trackingEventSchema = new Schema<ITrackingEvent>({
   },
 }, { _id: false });
 
+
+const packageSchema = new Schema<IPackage>({
+
+  trackingNumber: {
+    type: String,
+    required: [true, 'Tracking number is required'],
+    unique: true,
+    uppercase: true,
+    trim: true,
+    match: [/^[A-Z0-9]{8,20}$/, 'Tracking number must be 8-20 alphanumeric characters'],
+  },
+
+  companyId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Company',
+    required: [true, 'Company reference is required'],
+    index: true,
+  },
+
+  clientId: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'Client reference is required'],
+    index: true,
+  },
+  
+  weight: {
+    type: Number,
+    required: [true, 'Weight is required'],
+    min: [0.01, 'Weight must be at least 0.01kg'],
+    max: [500, 'Weight cannot exceed 500kg'],
+  },
+
+  volume: {
+    type: Number,
+    min: [0.001, 'Volume must be at least 0.001m³'],
+    max: [10, 'Volume cannot exceed 10m³'],
+  },
+
+  dimensions: {
+    type: dimensionsSchema,
+    required: false,
+  },
+
+  isFragile: {
+    type: Boolean,
+    default: false,
+  },
+
+  type: {
+    type: String,
+    enum: ['document', 'parcel', 'fragile', 'heavy', 'perishable', 'electronic', 'clothing'],
+    default: 'parcel',
+  },
+
+  description: {
+    type: String,
+    trim: true,
+    maxlength: [1000, 'Description cannot exceed 1000 characters'],
+  },
+
+  declaredValue: {
+    type: Number,
+    min: 0,
+  },
+
+  images: {
+    type: [String],
+    validate: {
+      validator: function(images: string[]) {
+        return images.length <= 10;
+      },
+      message: 'Cannot have more than 10 images',
+    },
+  },
+  
+  originBranchId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Branch',
+    required: [true, 'Origin branch is required'],
+    index: true,
+  },
+
+  currentBranchId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Branch',
+    index: true,
+  },
+
+  destinationBranchId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Branch',
+    index: true,
+  },
+  
+  destination: {
+    type: destinationSchema,
+    required: [true, 'Destination is required'],
+  },
+  
+  status: {
+    type: String,
+    enum: ['pending', 'accepted', 'at_origin_branch', 'in_transit_to_branch', 
+           'at_destination_branch', 'out_for_delivery', 'delivered', 
+           'failed_delivery', 'rescheduled', 'returned', 'cancelled', 
+           'lost', 'damaged', 'on_hold'],
+    default: 'pending',
+
+  },
+  
+  deliveryType: {
+    type: String,
+    enum: ['home', 'branch_pickup', 'locker'],
+    default: 'home',
+  },
+  deliveryPriority: {
+    type: String,
+    enum: ['standard', 'express', 'same_day'],
+    default: 'standard',
+  },
+  
+  totalPrice: {
+    type: Number,
+    required: [true, 'Total price is required'],
+    min: 0,
+  },
+  
+  paymentStatus: {
+    type: String,
+    enum: ['pending', 'paid', 'partially_paid', 'refunded', 'failed'],
+    default: 'pending',
+  },
+  paymentMethod: {
+    type: String,
+    enum: ['cash', 'card', 'cod', 'wallet', 'bank_transfer'],
+  },
+  paidAt: {
+    type: Date,
+  },
+  
+  // Assignment
+  assignedTransporterId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Transporter',
+    index: true,
+  },
+  assignedDelivererId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Deliverer',
+    index: true,
+  },
+  assignedVehicleId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Vehicle',
+    index: true,
+  },
+  currentRouteId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Route',
+    index: true,
+  },
+  
+
+  attemptCount: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  lastAttemptDate: {
+    type: Date,
+  },
+  nextAttemptDate: {
+    type: Date,
+  },
+
+  maxAttempts: {
+    type: Number,
+    default: 3,
+    min: 1,
+    max: 10,
+  },
+  
+
+  issues: {
+    type: [issueSchema],
+    default: [],
+  },
+  
+  returnInfo: {
+    type: returnInfoSchema,
+    default: () => ({
+      isReturn: false,
+    }),
+  },
+  
+  trackingHistory: {
+    type: [trackingEventSchema],
+    default: [],
+  },
+  
+
+  estimatedDeliveryTime: {
+    type: Date,
+  },
+  deliveredAt: {
+    type: Date,
+  },
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true },
+});
+
+
+packageSchema.index({ trackingNumber: 1 });
+packageSchema.index({ companyId: 1, status: 1 });
+packageSchema.index({ clientId: 1 });
+packageSchema.index({ originBranchId: 1, status: 1 });
+packageSchema.index({ currentBranchId: 1, status: 1 });
+packageSchema.index({ 'destination.location': '2dsphere' });
+packageSchema.index({ createdAt: -1 });
+packageSchema.index({ 'trackingHistory.timestamp': -1 });
+
+
+const PackageModel: Model<IPackage> = mongoose.model<IPackage>('Package', packageSchema);
+
+export default PackageModel;
