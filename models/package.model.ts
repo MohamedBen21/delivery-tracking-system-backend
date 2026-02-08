@@ -362,14 +362,12 @@ const packageSchema = new Schema<IPackage>({
     type: Schema.Types.ObjectId,
     ref: 'Company',
     required: [true, 'Company reference is required'],
-    index: true,
   },
 
   clientId: {
     type: Schema.Types.ObjectId,
     ref: 'User',
     required: [true, 'Client reference is required'],
-    index: true,
   },
   
   weight: {
@@ -426,19 +424,16 @@ const packageSchema = new Schema<IPackage>({
     type: Schema.Types.ObjectId,
     ref: 'Branch',
     required: [true, 'Origin branch is required'],
-    index: true,
   },
 
   currentBranchId: {
     type: Schema.Types.ObjectId,
     ref: 'Branch',
-    index: true,
   },
 
   destinationBranchId: {
     type: Schema.Types.ObjectId,
     ref: 'Branch',
-    index: true,
   },
   
   destination: {
@@ -485,27 +480,22 @@ const packageSchema = new Schema<IPackage>({
   paidAt: {
     type: Date,
   },
-  
-  // Assignment
+
   assignedTransporterId: {
     type: Schema.Types.ObjectId,
     ref: 'Transporter',
-    index: true,
   },
   assignedDelivererId: {
     type: Schema.Types.ObjectId,
     ref: 'Deliverer',
-    index: true,
   },
   assignedVehicleId: {
     type: Schema.Types.ObjectId,
     ref: 'Vehicle',
-    index: true,
   },
   currentRouteId: {
     type: Schema.Types.ObjectId,
     ref: 'Route',
-    index: true,
   },
   
 
@@ -560,6 +550,271 @@ const packageSchema = new Schema<IPackage>({
   toObject: { virtuals: true },
 });
 
+
+packageSchema.virtual('isDelivered').get(function() {
+  return this.status === 'delivered';
+});
+
+packageSchema.virtual('isInTransit').get(function() {
+  const transitStatuses: PackageStatus[] = [
+    'in_transit_to_branch',
+    'out_for_delivery',
+    'at_destination_branch',
+  ];
+  return transitStatuses.includes(this.status);
+});
+
+packageSchema.virtual('isAtBranch').get(function() {
+  const branchStatuses: PackageStatus[] = [
+    'at_origin_branch',
+    'at_destination_branch',
+  ];
+  return branchStatuses.includes(this.status);
+});
+
+packageSchema.virtual('needsAttention').get(function() {
+  const attentionStatuses: PackageStatus[] = [
+    'failed_delivery',
+    'damaged',
+    'lost',
+    'on_hold',
+  ];
+  return attentionStatuses.includes(this.status) || 
+         this.issues.some(issue => !issue.resolved) ||
+         (this.nextAttemptDate && this.nextAttemptDate < new Date());
+});
+
+packageSchema.virtual('deliveryProgress').get(function() {
+  const statusOrder: Record<PackageStatus, number> = {
+    'pending': 0,
+    'accepted': 10,
+    'at_origin_branch': 20,
+    'in_transit_to_branch': 40,
+    'at_destination_branch': 60,
+    'out_for_delivery': 80,
+    'delivered': 100,
+    'failed_delivery': 80,
+    'rescheduled': 70,
+    'returned': 100,
+    'cancelled': 0,
+    'lost': 0,
+    'damaged': 100,
+    'on_hold': 50,
+  };
+  return statusOrder[this.status] || 0;
+});
+
+packageSchema.virtual('estimatedTimeRemaining').get(function() {
+  if (!this.estimatedDeliveryTime || this.isDelivered) return undefined;
+  
+  const now = new Date();
+  const diffMs = this.estimatedDeliveryTime.getTime() - now.getTime();
+  return Math.max(0, Math.round(diffMs / (1000 * 60 * 60))); 
+});
+
+packageSchema.virtual('isOverdue').get(function() {
+  if (!this.estimatedDeliveryTime || this.isDelivered) return false;
+  return this.estimatedDeliveryTime < new Date();
+});
+
+packageSchema.virtual('canBeDelivered').get(function() {
+  return (
+    this.status === 'at_destination_branch' ||
+    this.status === 'out_for_delivery' ||
+    this.status === 'failed_delivery'
+  ) && this.paymentStatus === 'paid' && !this.returnInfo.isReturn;
+});
+
+
+packageSchema.methods.updateStatus = function(
+  newStatus: PackageStatus,
+  userId?: mongoose.Types.ObjectId,
+  branchId?: mongoose.Types.ObjectId,
+  notes?: string,
+  location?: string
+) {
+  const oldStatus = this.status;
+  this.status = newStatus;
+  
+  this.trackingHistory.push({
+    status: newStatus,
+    location,
+    branchId,
+    userId,
+    notes: notes || `Status changed from ${oldStatus} to ${newStatus}`,
+    timestamp: new Date(),
+  });
+  
+  if (newStatus === 'delivered') {
+    this.deliveredAt = new Date();
+  } else if (newStatus === 'out_for_delivery') {
+    this.lastAttemptDate = new Date();
+  } else if (newStatus === 'failed_delivery') {
+    this.attemptCount += 1;
+    this.lastAttemptDate = new Date();
+    
+    if (this.attemptCount < this.maxAttempts) {
+      const nextDate = new Date();
+      nextDate.setDate(nextDate.getDate() + 1);
+      this.nextAttemptDate = nextDate;
+    }
+  }
+  
+  return this.save();
+};
+
+
+packageSchema.methods.assignDelivery = function(
+  delivererId: mongoose.Types.ObjectId,
+  vehicleId?: mongoose.Types.ObjectId
+) {
+  this.assignedDelivererId = delivererId;
+  if (vehicleId) this.assignedVehicleId = vehicleId;
+  this.status = 'out_for_delivery';
+  
+  this.trackingHistory.push({
+    status: 'out_for_delivery',
+    notes: `Assigned to deliverer ${delivererId}`,
+    timestamp: new Date(),
+  });
+  
+  return this.save();
+};
+
+
+packageSchema.methods.markAsDelivered = function(
+  deliveredBy: mongoose.Types.ObjectId,
+  notes?: string
+) {
+  return this.updateStatus(
+    'delivered',
+    deliveredBy,
+    this.currentBranchId,
+    notes || 'Package successfully delivered',
+    this.deliveryType === 'home' ? this.destination.address : 'Branch pickup'
+  );
+};
+
+
+packageSchema.methods.addIssue = function(
+  type: IIssue['type'],
+  description: string,
+  reportedBy: mongoose.Types.ObjectId,
+  priority: IIssue['priority'] = 'medium'
+) {
+  this.issues.push({
+    type,
+    description,
+    reportedBy,
+    reportedAt: new Date(),
+    resolved: false,
+    priority,
+  });
+
+  if (type === 'damage') {
+    this.status = 'damaged';
+  } else if (type === 'lost') {
+    this.status = 'lost';
+  } else if (type === 'delay') {
+    this.status = 'on_hold';
+  }
+  
+  return this.save();
+};
+
+packageSchema.methods.resolveIssue = function(
+  issueIndex: number,
+  resolution: string,
+  resolvedBy: mongoose.Types.ObjectId
+) {
+  if (issueIndex >= 0 && issueIndex < this.issues.length) {
+    this.issues[issueIndex].resolved = true;
+    this.issues[issueIndex].resolvedAt = new Date();
+    this.issues[issueIndex].resolution = resolution;
+  }
+  
+  if (this.status === 'on_hold' && this.issues.every((issue : IIssue) => issue.resolved)) {
+    const lastNormalStatus = this.trackingHistory
+      .slice()
+      .reverse()
+      .find((event : any) => 
+        !['on_hold', 'damaged', 'lost'].includes(event.status as PackageStatus)
+      );
+    
+    if (lastNormalStatus) {
+      this.status = lastNormalStatus.status as PackageStatus;
+    }
+  }
+  
+  return this.save();
+};
+
+
+packageSchema.methods.initiateReturn = function(
+  reason: string,
+  refundAmount?: number,
+  notes?: string
+) {
+  this.returnInfo = {
+    isReturn: true,
+    reason,
+    returnDate: new Date(),
+    refundAmount,
+    refundStatus: refundAmount ? 'pending' : undefined,
+    returnNotes: notes,
+  };
+  
+  this.status = 'returned';
+  
+  this.trackingHistory.push({
+    status: 'returned',
+    notes: `Return initiated: ${reason}`,
+    timestamp: new Date(),
+  });
+  
+  return this.save();
+};
+
+
+packageSchema.methods.canBeAccepted = function(): boolean {
+  return (
+    this.status === 'pending' &&
+    this.weight > 0 &&
+    this.totalPrice > 0 &&
+    !!this.destination.recipientPhone
+  );
+};
+
+packageSchema.pre('save', function(next) {
+  if (this.isNew && !this.trackingNumber) {
+    const prefix = 'PKG';
+    const timestamp = Date.now().toString().slice(-6);
+    const random = Math.floor(1000 + Math.random() * 9000);
+    this.trackingNumber = `${prefix}${timestamp}${random}`;
+  }
+  
+  if (this.deliveryType === 'branch_pickup' && !this.destinationBranchId) {
+    return next(new Error('Destination branch is required for branch pickup'));
+  }
+  
+  
+  if (!this.volume && this.dimensions) {
+    const { length, width, height } = this.dimensions;
+    this.volume = (length * width * height) / 1000000; 
+  }
+  
+  if (this.paidAt && this.paymentStatus === 'pending') {
+    this.paymentStatus = 'paid';
+  }
+  
+  if (this.attemptCount >= this.maxAttempts && this.status === 'failed_delivery') {
+    this.status = 'returned';
+    this.returnInfo.isReturn = true;
+    this.returnInfo.reason = 'Maximum delivery attempts exceeded';
+  }
+  
+  next();
+});
 
 packageSchema.index({ trackingNumber: 1 });
 packageSchema.index({ companyId: 1, status: 1 });
