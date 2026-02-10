@@ -1034,3 +1034,212 @@ export const updateBranch = catchAsyncError(
 );
 
 
+
+//  TOGGLE BLOCK / ACTIVATE BRANCH
+
+export const toggleBlockBranch = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const userId = req.user?._id;
+      const { companyId, branchId } = req.params;
+
+      if (!userId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+
+      const [branch, manager, user] = await Promise.all([
+        BranchModel.findOne({ _id: branchId, companyId }).session(session),
+        ManagerModel.findOne({ userId, companyId }).session(session),
+        userModel.findById(userId).select("role").session(session),
+      ]);
+
+      if (!branch) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Branch not found", 404));
+      }
+
+      const isAdmin = user?.role === "admin";
+      const isAuthorizedManager =
+        manager &&
+        manager.isActive &&
+        manager.hasPermission("can_manage_branches") &&
+        manager.canAccessBranch(new mongoose.Types.ObjectId(branchId.toString()));
+
+      if (!isAdmin && !isAuthorizedManager) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Not authorized to change this branch status", 403));
+      }
+
+
+      if (!["active", "inactive"].includes(branch.status)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            `Cannot toggle a branch with status "${branch.status}". Only active/inactive branches can be toggled`,
+            400
+          )
+        );
+      }
+
+      const newStatus: BranchStatus = branch.status === "active" ? "inactive" : "active";
+
+      branch.status = newStatus;
+      await branch.save({ session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const updatedBranch = await BranchModel.findById(branchId)
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: `Branch ${newStatus === "active" ? "activated" : "deactivated"} successfully`,
+        data: {
+          branch: updatedBranch,
+          newStatus,
+        },
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler(error.message || "Error toggling branch status", 500));
+    }
+  }
+);
+
+
+//  GET BRANCH BY ID
+
+export const getBranch = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+    const { companyId, branchId } = req.params;
+
+    if (!userId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+      return next(new ErrorHandler("Invalid company ID", 400));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    const [branch, manager, user] = await Promise.all([
+      BranchModel.findOne({ _id: branchId, companyId })
+        .populate("companyId", "name businessType status")
+        .lean(),
+      ManagerModel.findOne({ userId, companyId }).lean(),
+      userModel.findById(userId).select("role").lean(),
+    ]);
+
+    if (!branch) {
+      return next(new ErrorHandler("Branch not found", 404));
+    }
+
+    const isAdmin = user?.role === "admin";
+    const isAuthorizedManager =
+      manager &&
+      manager.isActive &&
+      manager.canAccessBranch(new mongoose.Types.ObjectId(branchId.toString()));
+
+    if (!isAdmin && !isAuthorizedManager) {
+      return next(new ErrorHandler("Not authorized to view this branch", 403));
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: branch,
+    });
+  }
+);
+
+
+
+//  GET ALL BRANCHES OF MANAGER'S COMPANY
+
+export const getMyBranches = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+    const { companyId } = req.params;
+
+    if (!userId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+      return next(new ErrorHandler("Invalid company ID", 400));
+    }
+
+    const [company, manager] = await Promise.all([
+      CompanyModel.findById(companyId).lean(),
+      ManagerModel.findOne({ userId, companyId }).lean(),
+    ]);
+
+    if (!company) {
+      return next(new ErrorHandler("Company not found", 404));
+    }
+
+    if (!manager || !manager.isActive) {
+      return next(new ErrorHandler("You are not an active manager of this company", 403));
+    }
+
+    const branchQuery: mongoose.FilterQuery<typeof BranchModel> = { companyId };
+
+    if (!manager.branchAccess.allBranches) {
+      branchQuery._id = { $in: manager.branchAccess.specificBranches };
+    }
+
+    const { status, city, search } = req.query;
+
+    if (status && typeof status === "string") {
+      branchQuery.status = status;
+    }
+
+    if (city && typeof city === "string") {
+      branchQuery["address.city"] = { $regex: city, $options: "i" };
+    }
+
+    if (search && typeof search === "string") {
+      branchQuery.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { code: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    const branches = await BranchModel.find(branchQuery)
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: branches.length,
+      data: branches,
+    });
+  }
+);
