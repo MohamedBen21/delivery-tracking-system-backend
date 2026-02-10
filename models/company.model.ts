@@ -43,14 +43,17 @@ const headquartersSchema = new Schema<IHeadquarters>({
   street: {
     type: String,
     trim: true,
+    required: [true, "Street is required if headquarters is provided"],
   },
   city: {
     type: String,
     trim: true,
+    required: [true, "City is required if headquarters is provided"],
   },
   state: {
     type: String,
     trim: true,
+    required: [true, "State is required if headquarters is provided"],
   },
   location: {
     type: {
@@ -60,6 +63,7 @@ const headquartersSchema = new Schema<IHeadquarters>({
     },
     coordinates: {
       type: [Number],
+      required: [true, "Location coordinates are required if headquarters is provided"],
       validate: {
         validator: function(v: number[]) {
           return (
