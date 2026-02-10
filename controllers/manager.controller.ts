@@ -266,7 +266,7 @@ export const updateCompany = catchAsyncError(async (
     if (!userId) {
       await session.abortTransaction();
       session.endSession();
-      return next(new ErrorHandler("Unauthorized", 401));
+      return next(new ErrorHandler("Unauthorized, you are not authenticated", 401));
     }
 
     if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
@@ -474,179 +474,127 @@ export const updateCompany = catchAsyncError(async (
 });
 
 
+type CompanyStatus = "active" | "suspended";
+
 //toggle between suspend and activate company
-export const toggleBlockCompany = catchAsyncError(async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+export const toggleBlockCompany = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-  try {
-    const userId = req.user?._id;
-    const { companyId } = req.params;
+    try {
+      const userId = req.user?._id;
+      const { companyId } = req.params;
 
-    if (!userId) {
+      if (!userId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      const [company, manager, user] = await Promise.all([
+        CompanyModel.findById(companyId).session(session),
+        ManagerModel.findOne({ userId, companyId }).session(session),
+        userModel.findById(userId).select("role").session(session),
+      ]);
+
+      if (!company) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Company not found", 404));
+      }
+
+      const isAdmin = user?.role === "admin";
+      const isAuthorizedManager = manager && manager.hasPermission("can_manage_settings");
+
+      if (!isAdmin && !isAuthorizedManager) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Not authorized to change company status", 403)
+        );
+      }
+
+      if (!["active", "suspended"].includes(company.status)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(`Invalid company status: ${company.status}`, 400)
+        );
+      }
+
+      const newStatus: CompanyStatus = company.status === "active" ? "suspended" : "active";
+
+      company.status = newStatus;
+      await company.save({ session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const updatedCompany = await CompanyModel.findById(companyId)
+        .populate("userId", "firstName lastName email phone username")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: `Company ${newStatus === "active" ? "activated" : "suspended"} successfully`,
+        data: {
+          company: updatedCompany,
+          newStatus,
+        },
+      });
+    } catch (error: any) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized - User not authenticated",
-      });
+      return next(
+        new ErrorHandler(error.message || "Error toggling company status", 500)
+      );
     }
-
-    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "Invalid company ID",
-      });
-    }
-
-
-    const [company, manager, user] = await Promise.all([
-      CompanyModel.findById(companyId).session(session),
-      ManagerModel.findOne({ userId, companyId }).session(session),
-      userModel.findById(userId).session(session),
-    ]);
-
-    if (!company) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({
-        success: false,
-        message: "Company not found",
-      });
-    }
-
-    const isAdmin = user?.role === "admin";
-    const isAuthorizedManager =
-      manager && manager.hasPermission("can_manage_settings");
-
-    if (!isAdmin && !isAuthorizedManager) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(403).json({
-        success: false,
-        message: "You are not authorized to block/unblock this company",
-      });
-    }
-
-    let newStatus: "active" | "suspended";
-    let action: string;
-
-    if (company.status === "active") {
-      newStatus = "suspended";
-      action = "suspended";
-    } else if (company.status === "suspended") {
-      newStatus = "active";
-      action = "activated";
-    } else {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: `Cannot toggle company with status: ${company.status}`,
-      });
-    }
-
-    company.status = newStatus;
-    await company.save({ session });
-
-    if (newStatus === "suspended") {
-      await ManagerModel.updateMany(
-        { companyId },
-        { $set: { isActive: false } }
-      ).session(session);
-    } else {
-
-      await ManagerModel.updateMany(
-        { companyId },
-        { $set: { isActive: true } }
-      ).session(session);
-    }
-
-    await session.commitTransaction();
-    session.endSession();
-
-    const updatedCompany = await CompanyModel.findById(companyId)
-      .populate("userId", "firstName lastName email phone username")
-      .lean();
-
-    return res.status(200).json({
-      success: true,
-      message: `Company ${action} successfully`,
-      data: {
-        company: updatedCompany,
-        previousStatus: company.status === "active" ? "suspended" : "active",
-        newStatus,
-      },
-    });
-  } catch (error: any) {
-    await session.abortTransaction();
-    session.endSession();
-
-    console.error("Toggle block company error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Error toggling company status",
-      error: error.message,
-    });
   }
-});
+);
+
 
 
 //get company 
-export const getCompany = catchAsyncError(async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
-  try {
-    const userId = req.user?._id;
+export const getCompany = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user?._id;
     const { companyId } = req.params;
 
     if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized - User not authenticated",
-      });
+      return next(new ErrorHandler("Unauthorized, user not authenticated.", 401));
     }
 
     if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid company ID",
-      });
+      return next(new ErrorHandler("Invalid company ID", 400));
     }
 
     const [company, manager, user] = await Promise.all([
       CompanyModel.findById(companyId)
-        .populate("userId", "firstName lastName email phone username imageUrl")
+        .populate("userId", "firstName lastName email phone username")
         .lean(),
       ManagerModel.findOne({ userId, companyId }).lean(),
       userModel.findById(userId).select("role").lean(),
     ]);
 
     if (!company) {
-      return res.status(404).json({
-        success: false,
-        message: "Company not found",
-      });
+      return next(new ErrorHandler("Company not found", 404));
     }
-
 
     const isAdmin = user?.role === "admin";
     const isManager = !!manager;
 
     if (!isAdmin && !isManager) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not authorized to view this company",
-      });
+      return next(
+        new ErrorHandler("Not authorized to view this company", 403)
+      );
     }
 
     return res.status(200).json({
@@ -657,50 +605,35 @@ export const getCompany = catchAsyncError(async (
         managerPermissions: manager?.permissions || [],
       },
     });
-  } catch (error: any) {
-    console.error("Get company error:", error);
 
-    return res.status(500).json({
-      success: false,
-      message: "Error fetching company",
-      error: error.message,
-    });
+    } catch (error:any) {
+      return next(new ErrorHandler(error.message || "Error getting company.", 500)
+      );
+    }
   }
-});
+);
 
 
 
-// GET MY COMPANY (Get company where this user is a manager)
-export const getMyCompany = catchAsyncError(async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
-  try {
+
+export const getMyCompany = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?._id;
 
     if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized - User not authenticated",
-      });
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
 
     const manager = await ManagerModel.findOne({ userId })
       .populate({
-        path: "companyId",
-        populate: {
-          path: "userId",
-          select: "firstName lastName email phone username imageUrl",
-        },
-      })
-      .lean();
+        path: "userId",  
+        select: "firstName lastName email phone username"
+      }).populate("companyId").lean();
 
     if (!manager) {
-      return res.status(404).json({
-        success: false,
-        message: "You are not a manager of any company",
-      });
+      return next(
+        new ErrorHandler("You are not a manager of any company", 404)
+      );
     }
 
     return res.status(200).json({
@@ -713,16 +646,8 @@ export const getMyCompany = catchAsyncError(async (
           branchAccess: manager.branchAccess,
           isActive: manager.isActive,
         },
+        user: manager.userId,
       },
     });
-  } catch (error: any) {
-    console.error("Get my company error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Error fetching your company",
-      error: error.message,
-    });
   }
-});
-
+);
