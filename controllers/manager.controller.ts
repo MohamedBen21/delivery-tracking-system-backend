@@ -235,153 +235,244 @@ export const createCompany = catchAsyncError( async (
   }
 });
 
+
+interface IUpdateCompany {
+  name?: string;
+  businessType?: CompanyBusinessType;
+  registrationNumber?: string;
+  email?: string;
+  phone?: string;
+  logo?: {
+    public_id: string;
+    url: string;
+  };
+  headquarters?: IHeadquarters;
+  status?: "active" | "inactive" | "suspended";
+}
+
 //update company
 export const updateCompany = catchAsyncError(async (
   req: Request,
   res: Response,
   next: NextFunction
 ) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const userId = req.user?._id;
     const { companyId } = req.params;
 
     if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized - User not authenticated",
-      });
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("Unauthorized", 401));
     }
 
-    if (!companyId || !mongoose.Types.ObjectId.isValid((companyId.toString()))) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid company ID",
-      });
+    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("Invalid company ID", 400));
     }
 
-    const {
-      name,
-      businessType,
-      registrationNumber,
-      email,
-      phone,
-      logo,
-      headquarters,
-      status,
-    } = req.body;
+    const body = req.body as IUpdateCompany;
 
-    // Check if nothing to update
+    if (Object.keys(body).length === 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("No update data provided", 400));
+    }
+
+
+    if (body.name && typeof body.name !== "string") {
+      
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("Company name must be a string", 400));
+    }
+
     if (
-      !name &&
-      !businessType &&
-      !registrationNumber &&
-      !email &&
-      !phone &&
-      !logo &&
-      !headquarters &&
-      !status
+      body.businessType &&
+      !["solo", "company"].includes(body.businessType)
     ) {
-      return res.status(400).json({
-        success: false,
-        message: "No update data provided",
-      });
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("Invalid business type", 400));
     }
 
-    const [company, manager, nameExists, registrationExists] = await Promise.all([
-      CompanyModel.findById(companyId),
-      ManagerModel.findOne({ userId, companyId }),
-      name
-        ? CompanyModel.findOne({ name, _id: { $ne: companyId } })
-        : Promise.resolve(null),
-      registrationNumber
-        ? CompanyModel.findOne({
-            registrationNumber,
-            _id: { $ne: companyId },
-          })
-        : Promise.resolve(null),
+    if (body.registrationNumber && typeof body.registrationNumber !== "string") {
+
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("Registration number must be a string", 400));
+
+    }
+
+    if (body.email && typeof body.email !== "string") {
+
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("Email must be a string", 400));
+
+    }
+
+    if (body.phone && typeof body.phone !== "string") {
+
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("Phone must be a string", 400));
+      
+    }
+
+    if (body.headquarters) {
+      const hq = body.headquarters;
+
+      if (
+        typeof hq.address !== "string" ||
+        typeof hq.city !== "string"
+      ) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid headquarters address data", 400));
+      }
+
+      if (
+        !hq.location ||
+        hq.location.type !== "Point" ||
+        !Array.isArray(hq.location.coordinates) ||
+        hq.location.coordinates.length !== 2
+      ) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Invalid headquarters location format", 400)
+        );
+      }
+    }
+
+    const [company,user, manager] = await Promise.all([
+      CompanyModel.findById(companyId).session(session),
+      userModel.findById(userId).session(session),
+      ManagerModel.findOne({ userId, companyId }).session(session),
     ]);
 
     if (!company) {
-      return res.status(404).json({
-        success: false,
-        message: "Company not found",
-      });
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("Company not found", 404));
+    }
+
+    if (!user) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("User not found", 404));
     }
 
     if (!manager) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not authorized to update this company",
-      });
+      await session.abortTransaction();
+      session.endSession();
+      return next(
+        new ErrorHandler("You are not authorized to update this company", 403)
+      );
     }
-
 
     if (!manager.hasPermission("can_manage_settings")) {
-      return res.status(403).json({
-        success: false,
-        message: "You don't have permission to update company settings",
-      });
+      await session.abortTransaction();
+      session.endSession();
+      return next(
+        new ErrorHandler(
+          "You don't have permission to update company settings",
+          403
+        )
+      );
     }
 
-    if (nameExists) {
-      return res.status(400).json({
-        success: false,
-        message: "Company name already exists",
-      });
+
+    const finalBusinessType = body.businessType ?? company.businessType;
+    const finalRegistration = body.registrationNumber ?? company.registrationNumber;
+
+    if (finalBusinessType === "company" && !finalRegistration) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(
+        new ErrorHandler(
+          "Registration number is required for company business type",
+          400
+        )
+      );
     }
 
-    if (registrationExists) {
-      return res.status(400).json({
-        success: false,
-        message: "Registration number already exists",
-      });
-    }
 
-    const updateData: any = {};
-    if (name) updateData.name = name;
-    if (businessType) updateData.businessType = businessType;
-    if (registrationNumber) updateData.registrationNumber = registrationNumber;
-    if (email) updateData.email = email;
-    if (phone) updateData.phone = phone;
-    if (logo) updateData.logo = logo;
-    if (headquarters) updateData.headquarters = headquarters;
-    if (status) updateData.status = status;
+    if (body.name) {
+      const nameExists = await CompanyModel.findOne({
+        name: body.name,
+        _id: { $ne: companyId },
+      }).session(session);
 
-    const updatedCompany = await CompanyModel.findByIdAndUpdate(
-      companyId,
-      { $set: updateData },
-      {
-        new: true,
-        runValidators: true,
+      if (nameExists) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Company name already exists", 400));
       }
-    ).populate("userId", "firstName lastName email phone username");
+    }
+
+    if (finalBusinessType === "company" && body.registrationNumber) {
+      const regExists = await CompanyModel.findOne({
+        registrationNumber: body.registrationNumber,
+        _id: { $ne: companyId },
+      }).session(session);
+
+      if (regExists) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "Company with this registration number already exists",
+            400
+          )
+        );
+      }
+    }
+
+
+    Object.assign(company, body);
+    await company.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    const populatedCompany = await CompanyModel.findById(companyId)
+      .populate("userId", "firstName lastName email phone username")
+      .lean();
 
     return res.status(200).json({
       success: true,
       message: "Company updated successfully",
-      data: updatedCompany,
+      data: populatedCompany,
+      user,
+      manager
     });
   } catch (error: any) {
-    console.error("Update company error:", error);
+    await session.abortTransaction();
+    session.endSession();
 
     if (error.name === "ValidationError") {
-      const messages = Object.values(error.errors).map(
-        (err: any) => err.message
+      return next(
+        new ErrorHandler(
+          Object.values(error.errors)
+            .map((err: any) => err.message)
+            .join(", "),
+          400
+        )
       );
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: messages,
-      });
     }
 
-    return res.status(500).json({
-      success: false,
-      message: "Error updating company",
-      error: error.message,
-    });
+    return next(
+      new ErrorHandler(error.message || "Error updating company", 500)
+    );
   }
 });
+
 
 //toggle between suspend and activate company
 export const toggleBlockCompany = catchAsyncError(async (
