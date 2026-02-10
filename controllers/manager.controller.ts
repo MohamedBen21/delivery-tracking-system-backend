@@ -6,6 +6,34 @@ import mongoose from "mongoose";
 import { catchAsyncError } from "../middleware/catchAsyncErrors";
 import ErrorHandler from "../utils/ErrorHandler";
 
+type CompanyBusinessType = "solo" | "company";
+
+interface IHeadquarters {
+  address: string;            
+  city: string;       
+  postalCode?: string;
+  location: {
+    type: "Point";
+    coordinates: [number, number]; 
+  };
+}
+
+interface ICreateCompany {
+  name: string;
+  businessType: CompanyBusinessType;
+
+  registrationNumber?: string;
+
+  email?: string;
+  phone?: string;
+
+  logo?: {
+    public_id: string;
+    url: string;
+  };
+
+  headquarters?: IHeadquarters;
+}
 
 export const createCompany = catchAsyncError( async (
   req: Request,
@@ -32,65 +60,127 @@ export const createCompany = catchAsyncError( async (
       phone,
       logo,
       headquarters,
-    } = req.body;
+    } = req.body as ICreateCompany;
 
     if (!name || !businessType) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "Company name and business type are required",
-      });
+      return next(new ErrorHandler("Name and business type are required", 400));
     }
 
-    const existingManager = await ManagerModel.findOne({ userId }).session(session);
-    if (existingManager) {
+    const companyType = ["solo", "company"];
+
+    if (!businessType || typeof name !== "string" || companyType.includes(businessType)) {
+
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "User already manages a company",
-      });
+      return next(new ErrorHandler("Name and business type does not meet the requirements", 400));
+    }
+
+    if(registrationNumber && typeof registrationNumber !== "string"){
+
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("Registration number must be a string", 400));
+    }
+
+    if (businessType === "company" && !registrationNumber) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(
+        new ErrorHandler(
+          "Registration number is required for company business type",
+          400
+        )
+      );
+    }
+
+
+    if(email && typeof email !== "string"){
+
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("email must be a string", 400));
+
+    }
+
+    if(phone && typeof phone !== "string"){
+
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler("phone number must be a string", 400));
+    }
+
+
+    if (headquarters) {
+        const hq = headquarters;
+
+        if (
+          typeof hq.address !== "string" ||
+          typeof hq.city !== "string" 
+        ) {
+          return next(
+            new ErrorHandler("Invalid headquarters address data", 400)
+          );
+        }
+
+        if (
+          !hq.location ||
+          hq.location.type !== "Point" ||
+          !Array.isArray(hq.location.coordinates) ||
+          hq.location.coordinates.length !== 2
+        ) {
+          return next(
+            new ErrorHandler("Invalid headquarters location format", 400)
+          );
+        }
     }
 
     const existingCompany = await CompanyModel.findOne({ name }).session(session);
+
     if (existingCompany) {
+
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "Company name already exists",
-      });
+      return next(new ErrorHandler("Company with this name already exists.", 400));
+
     }
 
-    const [user, companyWithSameRegistration] = await Promise.all([
+    let companyWithSameRegistration = null;
+
+    if (businessType === "company" && registrationNumber) {
+
+      companyWithSameRegistration = await CompanyModel.findOne({ registrationNumber }).session(session);
+
+      if (companyWithSameRegistration) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "Company with this registration number already exists.",
+            400
+          )
+        );
+      }
+    }
+
+
+    const [user,manager] = await Promise.all([
       userModel.findById(userId).session(session),
-      registrationNumber
-        ? CompanyModel.findOne({ registrationNumber }).session(session)
-        : Promise.resolve(null),
+      ManagerModel.findOne({userId}).session(session),
     ]);
 
     if (!user) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+      return next(new ErrorHandler("User Not found",400));
     }
 
     if (companyWithSameRegistration) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({
-        success: false,
-        message: "Registration number already exists",
-      });
+      return next(new ErrorHandler("Company with this registration number already exists.", 400));
     }
-
-
-    user.role = "manager";
-    await user.save({ session });
 
     const company = await CompanyModel.create(
       [
@@ -109,21 +199,6 @@ export const createCompany = catchAsyncError( async (
       { session }
     );
 
-    const manager = await ManagerModel.create(
-      [
-        {
-          userId,
-          companyId: company[0]._id,
-          accessLevel: "full",
-          branchAccess: {
-            allBranches: true,
-            specificBranches: [],
-          },
-          isActive: true,
-        },
-      ],
-      { session }
-    );
 
     await session.commitTransaction();
     session.endSession();
@@ -137,36 +212,30 @@ export const createCompany = catchAsyncError( async (
       message: "Company created successfully",
       data: {
         company: populatedCompany,
-        manager: manager[0],
+        user,
+        manager
       },
     });
   } catch (error: any) {
     await session.abortTransaction();
     session.endSession();
 
-    console.error("Create company error:", error);
-
-    if (error.name === "ValidationError") {
-      const messages = Object.values(error.errors).map(
-        (err: any) => err.message
+   if (error.name === "ValidationError") {
+      return next(
+        new ErrorHandler(
+          Object.values(error.errors)
+            .map((err: any) => err.message)
+            .join(", "),
+          400
+        )
       );
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: messages,
-      });
     }
 
-    return res.status(500).json({
-      success: false,
-      message: "Error creating company",
-      error: error.message,
-    });
+    return next(new ErrorHandler(error.message || "Error creating company", 500));
   }
 });
 
 //update company
-
 export const updateCompany = catchAsyncError(async (
   req: Request,
   res: Response,
