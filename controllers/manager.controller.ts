@@ -864,3 +864,173 @@ export const createBranch = catchAsyncError(
   }
 );
 
+
+
+//  UPDATE BRANCH
+
+export const updateBranch = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const userId = req.user?._id;
+      const { companyId, branchId } = req.params;
+
+      if (!userId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      const body = req.body as IUpdateBranch;
+
+      if (Object.keys(body).length === 0) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("No update data provided", 400));
+      }
+
+      if (body.name !== undefined && typeof body.name !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("name must be a string", 400));
+      }
+
+      if (body.address) {
+        const { street, city, state } = body.address;
+        if (
+          (street !== undefined && typeof street !== "string") ||
+          (city   !== undefined && typeof city   !== "string") ||
+          (state  !== undefined && typeof state  !== "string")
+        ) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("address fields must be strings", 400));
+        }
+      }
+
+      if (body.location) {
+        if (
+          body.location.type !== "Point" ||
+          !Array.isArray(body.location.coordinates) ||
+          body.location.coordinates.length !== 2 ||
+          typeof body.location.coordinates[0] !== "number" ||
+          typeof body.location.coordinates[1] !== "number"
+        ) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Invalid location format. Expected GeoJSON Point with [lng, lat]", 400));
+        }
+      }
+
+      if (
+        body.capacityLimit !== undefined &&
+        (typeof body.capacityLimit !== "number" || body.capacityLimit < 1)
+      ) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("capacityLimit must be a positive number", 400));
+      }
+
+
+      const [branch, company, manager] = await Promise.all([
+        BranchModel.findOne({ _id: branchId, companyId }).session(session),
+        CompanyModel.findById(companyId).session(session),
+        ManagerModel.findOne({ userId, companyId }).session(session),
+      ]);
+
+      if (!branch) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Branch not found", 404));
+      }
+
+      if (!company) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Company not found", 404));
+      }
+
+      if (!manager || !manager.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active manager of this company", 403));
+      }
+
+      if (!manager.hasPermission("can_manage_branches")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage branches", 403));
+      }
+
+
+      if (!manager.canAccessBranch(new mongoose.Types.ObjectId(branchId.toString()))) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have access to this branch", 403));
+      }
+
+
+      if (
+        body.capacityLimit !== undefined &&
+        body.capacityLimit < branch.currentLoad
+      ) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            `Capacity limit cannot be less than current load (${branch.currentLoad})`,
+            400
+          )
+        );
+      }
+
+      Object.assign(branch, body);
+      await branch.save({ session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedBranch = await BranchModel.findById(branchId)
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: "Branch updated successfully",
+        data: populatedBranch,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler(error.message || "Error updating branch", 500));
+    }
+  }
+);
+
+
