@@ -5,6 +5,7 @@ import userModel from "../models/user.model";
 import mongoose from "mongoose";
 import { catchAsyncError } from "../middleware/catchAsyncErrors";
 import ErrorHandler from "../utils/ErrorHandler";
+import BranchModel from "../models/branch.model";
 
 type CompanyBusinessType = "solo" | "company";
 
@@ -651,3 +652,215 @@ export const getMyCompany = catchAsyncError(
     });
   }
 );
+
+
+// ─────────────────────────────────────────────
+//  BRANCH FUNCTIONS
+// ─────────────────────────────────────────────
+
+interface IBranchLocation {
+  type: "Point";
+  coordinates: [number, number]; // [longitude, latitude]
+}
+
+interface IBranchAddressBody {
+  street: string;
+  city: string;
+  state: string;
+  postalCode?: string;
+}
+
+interface IOperatingHoursBody {
+  open: string;
+  close: string;
+}
+
+interface ICreateBranch {
+  name: string;
+  code: string;
+  address: IBranchAddressBody;
+  location: IBranchLocation;
+  phone: string;
+  email: string;
+  operatingHours?: Record<string, IOperatingHoursBody>;
+  capacityLimit?: number;
+}
+
+interface IUpdateBranch {
+  name?: string;
+  address?: Partial<IBranchAddressBody>;
+  location?: IBranchLocation;
+  phone?: string;
+  email?: string;
+  operatingHours?: Record<string, IOperatingHoursBody>;
+  capacityLimit?: number;
+}
+
+type BranchStatus = "active" | "inactive" | "maintenance" | "pending";
+
+
+export const createBranch = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const userId = req.user?._id;
+      const { companyId } = req.params;
+
+      if (!userId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      const {
+        name,
+        code,
+        address,
+        location,
+        phone,
+        email,
+        operatingHours,
+        capacityLimit,
+      } = req.body as ICreateBranch;
+
+      if (!name || !code || !address || !location || !phone || !email) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("name, code, address, location, phone and email are required", 400)
+        );
+      }
+
+      if (typeof name !== "string" || typeof code !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("name and code must be strings", 400));
+      }
+
+      if (
+        !address.street || typeof address.street !== "string" ||
+        !address.city   || typeof address.city   !== "string" ||
+        !address.state  || typeof address.state  !== "string"
+      ) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("address must include street, city and state", 400));
+      }
+
+
+      if (
+        !location ||
+        location.type !== "Point" ||
+        !Array.isArray(location.coordinates) ||
+        location.coordinates.length !== 2 ||
+        typeof location.coordinates[0] !== "number" ||
+        typeof location.coordinates[1] !== "number"
+      ) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid location format. Expected GeoJSON Point with [lng, lat]", 400));
+      }
+
+      if (capacityLimit !== undefined && (typeof capacityLimit !== "number" || capacityLimit < 1)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("capacityLimit must be a positive number", 400));
+      }
+
+
+      const [company, manager] = await Promise.all([
+        CompanyModel.findById(companyId).session(session),
+        ManagerModel.findOne({ userId, companyId }).session(session),
+      ]);
+
+      if (!company) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Company not found", 404));
+      }
+
+      if (!manager || !manager.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active manager of this company", 403));
+      }
+
+      if (!manager.hasPermission("can_manage_branches")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage branches", 403));
+      }
+
+      if (company.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Cannot create branch for an inactive or suspended company", 400));
+      }
+
+
+      const existingBranch = await BranchModel.findOne({ code: code.toUpperCase() }).session(session);
+
+      if (existingBranch) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("A branch with this code already exists", 400));
+      }
+
+      const branch = await BranchModel.create(
+        [
+          {
+            companyId,
+            name,
+            code,
+            address,
+            location,
+            phone,
+            email,
+            ...(operatingHours && { operatingHours }),
+            ...(capacityLimit !== undefined && { capacityLimit }),
+            status: "active",
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedBranch = await BranchModel.findById(branch[0]._id)
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(201).json({
+        success: true,
+        message: "Branch created successfully",
+        data: populatedBranch,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler(error.message || "Error creating branch", 500));
+    }
+  }
+);
+
