@@ -1424,3 +1424,133 @@ export const createSupervisor = catchAsyncError(
 );
 
 
+//  UPDATE SUPERVISOR
+export const updateSupervisor = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const managerId = req.user?._id;
+      const { companyId, supervisorId } = req.params;
+
+      if (!managerId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      if (!supervisorId || !mongoose.Types.ObjectId.isValid(supervisorId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid supervisor ID", 400));
+      }
+
+      const body = req.body as IUpdateSupervisor;
+
+      if (Object.keys(body).length === 0) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("No update data provided", 400));
+      }
+
+      if (body.permissions !== undefined) {
+        if (!Array.isArray(body.permissions)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("permissions must be an array", 400));
+        }
+        if (new Set(body.permissions).size !== body.permissions.length) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Duplicate permissions are not allowed", 400));
+        }
+      }
+
+      const [supervisor, manager] = await Promise.all([
+        SupervisorModel.findOne({ _id: supervisorId, companyId }).session(session),
+        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
+      ]);
+
+      if (!supervisor) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Supervisor not found", 404));
+      }
+
+      if (!manager || !manager.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active manager of this company", 403));
+      }
+
+      if (!manager.hasPermission("can_manage_supervisors")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage supervisors", 403));
+      }
+
+      if (!manager.canAccessBranch(supervisor.branchId)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have access to this supervisor's branch", 403));
+      }
+
+      if (body.workSchedule) {
+        const days = Object.keys(body.workSchedule) as WeekDay[];
+        days.forEach((day) => {
+          supervisor.workSchedule[day] = {
+            ...supervisor.workSchedule[day],
+            ...body.workSchedule![day],
+          };
+        });
+      }
+
+      if (body.permissions) {
+        supervisor.permissions = body.permissions;
+      }
+
+      await supervisor.save({ session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedSupervisor = await SupervisorModel.findById(supervisorId)
+        .populate("userId", "firstName lastName email phone username imageUrl")
+        .populate("branchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: "Supervisor updated successfully",
+        data: populatedSupervisor,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler(error.message || "Error updating supervisor", 500));
+    }
+  }
+);
+
+
+
