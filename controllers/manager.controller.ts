@@ -1554,3 +1554,210 @@ export const updateSupervisor = catchAsyncError(
 
 
 
+//  TOGGLE BLOCK / ACTIVATE SUPERVISOR
+export const toggleBlockSupervisor = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const managerId = req.user?._id;
+      const { companyId, supervisorId } = req.params;
+
+      if (!managerId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      if (!supervisorId || !mongoose.Types.ObjectId.isValid(supervisorId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid supervisor ID", 400));
+      }
+
+      const [supervisor, manager, requestingUser] = await Promise.all([
+        SupervisorModel.findOne({ _id: supervisorId, companyId }).session(session),
+        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
+        userModel.findById(managerId).select("role").session(session),
+      ]);
+
+      if (!supervisor) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Supervisor not found", 404));
+      }
+
+      const isAdmin = requestingUser?.role === "admin";
+      const isAuthorizedManager =
+        manager &&
+        manager.isActive &&
+        manager.hasPermission("can_manage_supervisors") &&
+        manager.canAccessBranch(supervisor.branchId);
+
+      if (!isAdmin && !isAuthorizedManager) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Not authorized to change this supervisor's status", 403));
+      }
+
+      const newIsActive = !supervisor.isActive;
+
+      await Promise.all([
+        supervisor.set({ isActive: newIsActive }).save({ session }),
+        userModel.findByIdAndUpdate(
+          supervisor.userId,
+          { status: newIsActive ? "active" : "suspended" },
+          { session }
+        ),
+      ]);
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const updatedSupervisor = await SupervisorModel.findById(supervisorId)
+        .populate("userId", "firstName lastName email phone username imageUrl")
+        .populate("branchId", "name code address status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: `Supervisor ${newIsActive ? "activated" : "suspended"} successfully`,
+        data: {
+          supervisor: updatedSupervisor,
+          isActive: newIsActive,
+        },
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler(error.message || "Error toggling supervisor status", 500));
+    }
+  }
+);
+
+
+//  GET BRANCH SUPERVISOR
+export const getBranchSupervisor = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const managerId = req.user?._id;
+    const { companyId, branchId } = req.params;
+
+    if (!managerId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+      return next(new ErrorHandler("Invalid company ID", 400));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    const [supervisor, manager, requestingUser] = await Promise.all([
+      SupervisorModel.findOne({ branchId, companyId })
+        .populate("userId", "firstName lastName email phone username imageUrl")
+        .populate("branchId", "name code address status")
+        .lean(),
+      ManagerModel.findOne({ userId: managerId, companyId }).lean(),
+      userModel.findById(managerId).select("role").lean(),
+    ]);
+
+    const isAdmin = requestingUser?.role === "admin";
+    const isAuthorizedManager =
+      manager &&
+      manager.isActive &&
+      manager.canAccessBranch(new mongoose.Types.ObjectId(branchId.toString()));
+
+    if (!isAdmin && !isAuthorizedManager) {
+      return next(new ErrorHandler("Not authorized to view this branch's supervisor", 403));
+    }
+
+    if (!supervisor) {
+      return next(new ErrorHandler("No supervisor found for this branch", 404));
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: supervisor,
+    });
+  }
+);
+
+
+//  GET ALL ACTIVE SUPERVISORS OF MY COMPANY
+export const getMySupervisors = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const managerId = req.user?._id;
+    const { companyId } = req.params;
+
+    if (!managerId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+      return next(new ErrorHandler("Invalid company ID", 400));
+    }
+
+    const [company, manager] = await Promise.all([
+      CompanyModel.findById(companyId).lean(),
+      ManagerModel.findOne({ userId: managerId, companyId }).lean(),
+    ]);
+
+    if (!company) {
+      return next(new ErrorHandler("Company not found", 404));
+    }
+
+    if (!manager || !manager.isActive) {
+      return next(new ErrorHandler("You are not an active manager of this company", 403));
+    }
+
+    const supervisorQuery: mongoose.FilterQuery<typeof SupervisorModel> = {
+      companyId,
+      isActive: true,
+    };
+
+    if (!manager.branchAccess.allBranches) {
+      supervisorQuery.branchId = { $in: manager.branchAccess.specificBranches };
+    }
+
+    const { search } = req.query;
+
+    const supervisors = await SupervisorModel.find(supervisorQuery)
+      .populate({
+        path: "userId",
+        select: "firstName lastName email phone username imageUrl",
+        ...(search && typeof search === "string"
+          ? {
+              match: {
+                $or: [
+                  { firstName: { $regex: search, $options: "i" } },
+                  { lastName:  { $regex: search, $options: "i" } },
+                  { email:     { $regex: search, $options: "i" } },
+                ],
+              },
+            }
+          : {}),
+      })
+      .populate("branchId", "name code address status")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const filtered = search
+      ? supervisors.filter((s) => s.userId !== null)
+      : supervisors;
+
+    return res.status(200).json({
+      success: true,
+      count: filtered.length,
+      data: filtered,
+    });
+  }
+);
