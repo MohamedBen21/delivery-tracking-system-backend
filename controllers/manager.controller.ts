@@ -1256,16 +1256,32 @@ interface IWorkScheduleDayBody {
 }
 
 interface ICreateSupervisor {
-  userId: string;
   branchId: string;
+
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  password: string;
+
   permissions?: SupervisorPermission[];
   workSchedule?: Partial<Record<WeekDay, IWorkScheduleDayBody>>;
 }
 
+
 interface IUpdateSupervisor {
   permissions?: SupervisorPermission[];
   workSchedule?: Partial<Record<WeekDay, IWorkScheduleDayBody>>;
+  isActive?: boolean;
+
+  userData?: {
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+    imageUrl?: string;
+  };
 }
+
 
 
 //  CREATE SUPERVISOR
@@ -1281,7 +1297,7 @@ export const createSupervisor = catchAsyncError(
       if (!managerId) {
         await session.abortTransaction();
         session.endSession();
-        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+        return next(new ErrorHandler("Unauthorized, user not authenticated.", 401));
       }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
@@ -1290,18 +1306,27 @@ export const createSupervisor = catchAsyncError(
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
-      const { userId, branchId, permissions, workSchedule } = req.body as ICreateSupervisor;
+      const {
+        branchId,
+        firstName,
+        lastName,
+        email,
+        phone,
+        password,
+        permissions,
+        workSchedule,
+      } = req.body as ICreateSupervisor;
 
-      if (!userId || !branchId) {
+      if (!branchId || !firstName || !lastName || !email || !phone || !password) {
         await session.abortTransaction();
         session.endSession();
-        return next(new ErrorHandler("userId and branchId are required", 400));
+        return next(new ErrorHandler("All required fields must be provided", 400));
       }
 
-      if (!mongoose.Types.ObjectId.isValid(userId)) {
+      if (typeof branchId !== "string" || typeof firstName !== "string" || typeof lastName !== "string" || typeof email !== "string" || typeof phone !== "string" || typeof password !== "string") {
         await session.abortTransaction();
         session.endSession();
-        return next(new ErrorHandler("Invalid user ID", 400));
+        return next(new ErrorHandler("All required fields must be in their proper types.", 400));
       }
 
       if (!mongoose.Types.ObjectId.isValid(branchId)) {
@@ -1314,8 +1339,9 @@ export const createSupervisor = catchAsyncError(
         if (!Array.isArray(permissions)) {
           await session.abortTransaction();
           session.endSession();
-          return next(new ErrorHandler("permissions must be an array", 400));
+          return next(new ErrorHandler("Permissions must be an array", 400));
         }
+
         if (new Set(permissions).size !== permissions.length) {
           await session.abortTransaction();
           session.endSession();
@@ -1323,65 +1349,59 @@ export const createSupervisor = catchAsyncError(
         }
       }
 
-      const [manager, targetUser, branch, existingSupervisor] = await Promise.all([
+      // ===== Fetch required data =====
+      const [manager, branch, existingUser] = await Promise.all([
         ManagerModel.findOne({ userId: managerId, companyId }).session(session),
-        userModel.findById(userId).session(session),
         BranchModel.findOne({ _id: branchId, companyId }).session(session),
-        SupervisorModel.findOne({ userId }).session(session),
+        userModel.findOne({ email }).session(session),
       ]);
 
       if (!manager || !manager.isActive) {
         await session.abortTransaction();
         session.endSession();
-        return next(new ErrorHandler("You are not an active manager of this company", 403));
+        return next(new ErrorHandler("You are not an active manager", 403));
       }
 
       if (!manager.hasPermission("can_manage_supervisors")) {
         await session.abortTransaction();
         session.endSession();
-        return next(new ErrorHandler("You don't have permission to manage supervisors", 403));
+        return next(new ErrorHandler("No permission to manage supervisors", 403));
       }
 
-      if (!manager.canAccessBranch(new mongoose.Types.ObjectId(branchId))) {
+      if (!branch || branch.status !== "active") {
         await session.abortTransaction();
         session.endSession();
-        return next(new ErrorHandler("You don't have access to this branch", 403));
+        return next(new ErrorHandler("Invalid or inactive branch", 400));
       }
 
-      if (!targetUser) {
+      if (existingUser) {
         await session.abortTransaction();
         session.endSession();
-        return next(new ErrorHandler("User not found", 404));
+        return next(new ErrorHandler("User with this email already exists", 400));
       }
 
-      if (!branch) {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("Branch not found or does not belong to this company", 404));
-      }
-
-      if (branch.status !== "active") {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("Cannot assign a supervisor to an inactive branch", 400));
-      }
-
-      if (existingSupervisor) {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("This user is already a supervisor", 400));
-      }
-
-      targetUser.role = "supervisor";
-      await targetUser.save({ session });
+      // ===== Create User =====
+      const user = await userModel.create(
+        [
+          {
+            firstName,
+            lastName,
+            email,
+            phone,
+            password, // make sure pre-save hashes it
+            role: "supervisor",
+          },
+        ],
+        { session }
+      );
 
       const supervisor = await SupervisorModel.create(
         [
           {
-            userId,
+            userId: user[0]._id,
             companyId,
             branchId,
-            ...(permissions && { permissions }),
+            permissions: permissions || [],
             ...(workSchedule && { workSchedule }),
             isActive: true,
           },
@@ -1403,6 +1423,7 @@ export const createSupervisor = catchAsyncError(
         message: "Supervisor created successfully",
         data: populatedSupervisor,
       });
+
     } catch (error: any) {
       await session.abortTransaction();
       session.endSession();
@@ -1422,6 +1443,7 @@ export const createSupervisor = catchAsyncError(
     }
   }
 );
+
 
 
 //  UPDATE SUPERVISOR
@@ -1551,6 +1573,7 @@ export const updateSupervisor = catchAsyncError(
     }
   }
 );
+
 
 
 
