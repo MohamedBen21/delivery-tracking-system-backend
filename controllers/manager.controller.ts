@@ -1454,18 +1454,12 @@ export const updateSupervisor = catchAsyncError(
 
     try {
       const managerId = req.user?._id;
-      const { companyId, supervisorId } = req.params;
+      const { supervisorId } = req.params;
 
       if (!managerId) {
         await session.abortTransaction();
         session.endSession();
-        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
-      }
-
-      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("Invalid company ID", 400));
+        return next(new ErrorHandler("Unauthorized, user is not authenticated", 401));
       }
 
       if (!supervisorId || !mongoose.Types.ObjectId.isValid(supervisorId.toString())) {
@@ -1474,31 +1468,26 @@ export const updateSupervisor = catchAsyncError(
         return next(new ErrorHandler("Invalid supervisor ID", 400));
       }
 
-      const body = req.body as IUpdateSupervisor;
+      const {
+        permissions,
+        workSchedule,
+        isActive,
+        userData,
+      } = req.body as IUpdateSupervisor;
 
-      if (Object.keys(body).length === 0) {
+      if (
+        permissions === undefined &&
+        workSchedule === undefined &&
+        isActive === undefined &&
+        userData === undefined
+      ) {
         await session.abortTransaction();
         session.endSession();
         return next(new ErrorHandler("No update data provided", 400));
       }
 
-      if (body.permissions !== undefined) {
-        if (!Array.isArray(body.permissions)) {
-          await session.abortTransaction();
-          session.endSession();
-          return next(new ErrorHandler("permissions must be an array", 400));
-        }
-        if (new Set(body.permissions).size !== body.permissions.length) {
-          await session.abortTransaction();
-          session.endSession();
-          return next(new ErrorHandler("Duplicate permissions are not allowed", 400));
-        }
-      }
-
-      const [supervisor, manager] = await Promise.all([
-        SupervisorModel.findOne({ _id: supervisorId, companyId }).session(session),
-        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
-      ]);
+      const supervisor = await SupervisorModel.findById(supervisorId)
+        .session(session);
 
       if (!supervisor) {
         await session.abortTransaction();
@@ -1506,54 +1495,123 @@ export const updateSupervisor = catchAsyncError(
         return next(new ErrorHandler("Supervisor not found", 404));
       }
 
+      const manager = await ManagerModel.findOne({
+        userId: managerId,
+        companyId: supervisor.companyId,
+      }).session(session);
+
       if (!manager || !manager.isActive) {
         await session.abortTransaction();
         session.endSession();
-        return next(new ErrorHandler("You are not an active manager of this company", 403));
+        return next(
+          new ErrorHandler("You are not authorized to update supervisors", 403)
+        );
       }
 
       if (!manager.hasPermission("can_manage_supervisors")) {
         await session.abortTransaction();
         session.endSession();
-        return next(new ErrorHandler("You don't have permission to manage supervisors", 403));
+        return next(
+          new ErrorHandler("Permission denied", 403)
+        );
       }
 
-      if (!manager.canAccessBranch(supervisor.branchId)) {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("You don't have access to this supervisor's branch", 403));
+      if (permissions !== undefined) {
+        if (!Array.isArray(permissions)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("permissions must be an array", 400));
+        }
+
+        if (new Set(permissions).size !== permissions.length) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("Duplicate permissions are not allowed", 400)
+          );
+        }
+
+        supervisor.permissions = permissions;
       }
 
-      if (body.workSchedule) {
-        const days = Object.keys(body.workSchedule) as WeekDay[];
-        days.forEach((day) => {
-          supervisor.workSchedule[day] = {
-            ...supervisor.workSchedule[day],
-            ...body.workSchedule![day],
-          };
-        });
+      if (workSchedule !== undefined) {
+        supervisor.workSchedule = {
+          ...supervisor.workSchedule,
+          ...workSchedule,
+        };
       }
 
-      if (body.permissions) {
-        supervisor.permissions = body.permissions;
+
+      if (typeof isActive === "boolean") {
+        supervisor.isActive = isActive;
       }
 
       await supervisor.save({ session });
 
+      if (userData) {
+        const user = await userModel
+          .findById(supervisor.userId)
+          .session(session);
+
+        if (!user) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Linked user not found", 404));
+        }
+
+        if (userData.firstName !== undefined) {
+          if (typeof userData.firstName !== "string") {
+            await session.abortTransaction();
+            session.endSession();
+            return next(new ErrorHandler("firstName must be string", 400));
+          }
+          user.firstName = userData.firstName;
+        }
+
+        if (userData.lastName !== undefined) {
+          if (typeof userData.lastName !== "string") {
+            await session.abortTransaction();
+            session.endSession();
+            return next(new ErrorHandler("lastName must be string", 400));
+          }
+          user.lastName = userData.lastName;
+        }
+
+        if (userData.phone !== undefined) {
+          if (typeof userData.phone !== "string") {
+            await session.abortTransaction();
+            session.endSession();
+            return next(new ErrorHandler("phone must be string", 400));
+          }
+          user.phone = userData.phone;
+        }
+
+        if (userData.imageUrl !== undefined) {
+          if (typeof userData.imageUrl !== "string") {
+            await session.abortTransaction();
+            session.endSession();
+            return next(new ErrorHandler("imageUrl must be string", 400));
+          }
+          user.imageUrl = userData.imageUrl;
+        }
+
+        await user.save({ session });
+      }
+
       await session.commitTransaction();
       session.endSession();
 
-      const populatedSupervisor = await SupervisorModel.findById(supervisorId)
+      const updatedSupervisor = await SupervisorModel.findById(supervisorId)
         .populate("userId", "firstName lastName email phone username imageUrl")
         .populate("branchId", "name code address status")
-        .populate("companyId", "name businessType status")
         .lean();
 
       return res.status(200).json({
         success: true,
         message: "Supervisor updated successfully",
-        data: populatedSupervisor,
+        data: updatedSupervisor,
       });
+
     } catch (error: any) {
       await session.abortTransaction();
       session.endSession();
@@ -1569,7 +1627,9 @@ export const updateSupervisor = catchAsyncError(
         );
       }
 
-      return next(new ErrorHandler(error.message || "Error updating supervisor", 500));
+      return next(
+        new ErrorHandler(error.message || "Error updating supervisor", 500)
+      );
     }
   }
 );
