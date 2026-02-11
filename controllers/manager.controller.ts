@@ -5,7 +5,8 @@ import userModel from "../models/user.model";
 import mongoose from "mongoose";
 import { catchAsyncError } from "../middleware/catchAsyncErrors";
 import ErrorHandler from "../utils/ErrorHandler";
-import BranchModel from "../models/branch.model";
+import BranchModel, { WeekDay } from "../models/branch.model";
+import SupervisorModel, { SupervisorPermission } from "../models/supervisor.model";
 
 type CompanyBusinessType = "solo" | "company";
 
@@ -1243,3 +1244,183 @@ export const getMyBranches = catchAsyncError(
     });
   }
 );
+
+
+
+//supervisor functions and interfaces
+
+interface IWorkScheduleDayBody {
+  start: string;
+  end: string;
+  dayOff: boolean;
+}
+
+interface ICreateSupervisor {
+  userId: string;
+  branchId: string;
+  permissions?: SupervisorPermission[];
+  workSchedule?: Partial<Record<WeekDay, IWorkScheduleDayBody>>;
+}
+
+interface IUpdateSupervisor {
+  permissions?: SupervisorPermission[];
+  workSchedule?: Partial<Record<WeekDay, IWorkScheduleDayBody>>;
+}
+
+
+//  CREATE SUPERVISOR
+export const createSupervisor = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const managerId = req.user?._id;
+      const { companyId } = req.params;
+
+      if (!managerId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      const { userId, branchId, permissions, workSchedule } = req.body as ICreateSupervisor;
+
+      if (!userId || !branchId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("userId and branchId are required", 400));
+      }
+
+      if (!mongoose.Types.ObjectId.isValid(userId)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid user ID", 400));
+      }
+
+      if (!mongoose.Types.ObjectId.isValid(branchId)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (permissions !== undefined) {
+        if (!Array.isArray(permissions)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("permissions must be an array", 400));
+        }
+        if (new Set(permissions).size !== permissions.length) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Duplicate permissions are not allowed", 400));
+        }
+      }
+
+      const [manager, targetUser, branch, existingSupervisor] = await Promise.all([
+        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
+        userModel.findById(userId).session(session),
+        BranchModel.findOne({ _id: branchId, companyId }).session(session),
+        SupervisorModel.findOne({ userId }).session(session),
+      ]);
+
+      if (!manager || !manager.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active manager of this company", 403));
+      }
+
+      if (!manager.hasPermission("can_manage_supervisors")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage supervisors", 403));
+      }
+
+      if (!manager.canAccessBranch(new mongoose.Types.ObjectId(branchId))) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have access to this branch", 403));
+      }
+
+      if (!targetUser) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User not found", 404));
+      }
+
+      if (!branch) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Branch not found or does not belong to this company", 404));
+      }
+
+      if (branch.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Cannot assign a supervisor to an inactive branch", 400));
+      }
+
+      if (existingSupervisor) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("This user is already a supervisor", 400));
+      }
+
+      targetUser.role = "supervisor";
+      await targetUser.save({ session });
+
+      const supervisor = await SupervisorModel.create(
+        [
+          {
+            userId,
+            companyId,
+            branchId,
+            ...(permissions && { permissions }),
+            ...(workSchedule && { workSchedule }),
+            isActive: true,
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedSupervisor = await SupervisorModel.findById(supervisor[0]._id)
+        .populate("userId", "firstName lastName email phone username imageUrl")
+        .populate("branchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(201).json({
+        success: true,
+        message: "Supervisor created successfully",
+        data: populatedSupervisor,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler(error.message || "Error creating supervisor", 500));
+    }
+  }
+);
+
+
