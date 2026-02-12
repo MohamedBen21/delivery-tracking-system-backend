@@ -644,3 +644,225 @@ export const getMyDeliverers = catchAsyncError(
 
 
 
+//  TRANSPORTERS INTERFACES
+
+interface ITransporterDocumentsBody {
+  contractImage?: string;
+  idCardImage?: string;
+  licenseImage?: string;
+  licenseNumber?: string;
+  licenseExpiry?: Date;
+  backgroundCheck?: string;
+  insuranceImage?: string;
+}
+
+interface ICreateTransporter {
+
+  email: string;
+  phone: string;
+  username: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+  imageUrl?: string;
+
+  documents?: ITransporterDocumentsBody;
+}
+
+interface IUpdateTransporter {
+
+  email?: string;
+  phone?: string;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  imageUrl?: string;
+
+  documents?: ITransporterDocumentsBody;
+  availabilityStatus?: "available" | "on_route" | "off_duty" | "on_break" | "maintenance";
+  currentBranchId?: string;
+}
+
+
+
+//  CREATE TRANSPORTER
+export const createTransporter = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const managerId = req.user?._id;
+      const { companyId } = req.params;
+
+      if (!managerId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      const {
+        email,
+        phone,
+        username,
+        password,
+        firstName,
+        lastName,
+        imageUrl,
+        documents,
+      } = req.body as ICreateTransporter;
+
+
+      if (!email || !phone || !username || !password || !firstName || !lastName) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("email, phone, username, password, firstName, and lastName are required", 400)
+        );
+      }
+
+
+      if (
+        typeof email !== "string" ||
+        typeof phone !== "string" ||
+        typeof username !== "string" ||
+        typeof password !== "string" ||
+        typeof firstName !== "string" ||
+        typeof lastName !== "string"
+      ) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("All required fields must be strings", 400));
+      }
+
+
+      const [manager, company] = await Promise.all([
+        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
+        CompanyModel.findById(companyId).session(session),
+      ]);
+
+      if (!manager || !manager.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active manager of this company", 403));
+      }
+
+      if (!manager.hasPermission("can_manage_users")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage transporters", 403));
+      }
+
+      if (!company) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Company not found", 404));
+      }
+
+      if (company.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Cannot create transporter for an inactive company", 400));
+      }
+
+
+      const [existingEmail, existingPhone, existingUsername] = await Promise.all([
+        userModel.findOne({ email }).session(session),
+        userModel.findOne({ phone }).session(session),
+        userModel.findOne({ username }).session(session),
+      ]);
+
+      if (existingEmail) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Email already exists", 400));
+      }
+
+      if (existingPhone) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Phone number already exists", 400));
+      }
+
+      if (existingUsername) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Username already exists", 400));
+      }
+
+
+      const user = await userModel.create(
+        [
+          {
+            email,
+            phone,
+            username,
+            passwordHash: password,
+            firstName,
+            lastName,
+            imageUrl,
+            role: "transporter",
+            status: "pending",
+          },
+        ],
+        { session }
+      );
+
+      const transporter = await TransporterModel.create(
+        [
+          {
+            userId: user[0]._id,
+            companyId,
+            ...(documents && { documents }),
+            availabilityStatus: "off_duty",
+            verificationStatus: "pending",
+            isActive: true,
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedTransporter = await TransporterModel.findById(transporter[0]._id)
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(201).json({
+        success: true,
+        message: "Transporter created successfully",
+        data: populatedTransporter,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler(error.message || "Error creating transporter", 500));
+    }
+  }
+);
+
+
+
+
+
+
