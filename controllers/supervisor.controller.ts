@@ -1039,6 +1039,230 @@ export const updateTransporter = catchAsyncError(
 
 
 
+//  TOGGLE BLOCK / ACTIVATE TRANSPORTER
+export const toggleBlockTransporter = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
+    try {
+      const managerId = req.user?._id;
+      const { companyId, transporterId } = req.params;
+
+      if (!managerId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      if (!transporterId || !mongoose.Types.ObjectId.isValid(transporterId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid transporter ID", 400));
+      }
+
+      const [transporter, manager, requestingUser] = await Promise.all([
+        TransporterModel.findOne({ _id: transporterId, companyId }).session(session),
+        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
+        userModel.findById(managerId).select("role").session(session),
+      ]);
+
+      if (!transporter) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Transporter not found", 404));
+      }
+
+      const isAdmin = requestingUser?.role === "admin";
+      const isAuthorizedManager = manager && manager.isActive && manager.hasPermission("can_manage_users");
+
+      if (!isAdmin && !isAuthorizedManager) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Not authorized to change this transporter's status", 403));
+      }
+
+      const newIsActive = !transporter.isActive;
+
+
+      await Promise.all([
+        transporter.set({ isActive: newIsActive }).save({ session }),
+        userModel.findByIdAndUpdate(
+          transporter.userId,
+          { status: newIsActive ? "active" : "suspended" },
+          { session }
+        ),
+      ]);
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const updatedTransporter = await TransporterModel.findById(transporterId)
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("companyId", "name businessType status")
+        .populate("currentBranchId", "name code address status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: `Transporter ${newIsActive ? "activated" : "suspended"} successfully`,
+        data: {
+          transporter: updatedTransporter,
+          isActive: newIsActive,
+        },
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler(error.message || "Error toggling transporter status", 500));
+    }
+  }
+);
+
+
+
+//  GET TRANSPORTER BY ID
+export const getTransporter = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const managerId = req.user?._id;
+    const { companyId, transporterId } = req.params;
+
+    if (!managerId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+      return next(new ErrorHandler("Invalid company ID", 400));
+    }
+
+    if (!transporterId || !mongoose.Types.ObjectId.isValid(transporterId.toString())) {
+      return next(new ErrorHandler("Invalid transporter ID", 400));
+    }
+
+    const [transporter, manager, requestingUser] = await Promise.all([
+      TransporterModel.findOne({ _id: transporterId, companyId })
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("companyId", "name businessType status")
+        .populate("currentBranchId", "name code address status")
+        .populate("currentVehicleId", "type brand model registrationNumber")
+        .lean(),
+      ManagerModel.findOne({ userId: managerId, companyId }).lean(),
+      userModel.findById(managerId).select("role").lean(),
+    ]);
+
+    const isAdmin = requestingUser?.role === "admin";
+    const isAuthorizedManager = manager && manager.isActive;
+
+    if (!isAdmin && !isAuthorizedManager) {
+      return next(new ErrorHandler("Not authorized to view this transporter", 403));
+    }
+
+    if (!transporter) {
+      return next(new ErrorHandler("Transporter not found", 404));
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: transporter,
+    });
+  }
+);
+
+
+
+//  GET ALL MY TRANSPORTERS (COMPANY)
+export const getMyTransporters = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const managerId = req.user?._id;
+    const { companyId } = req.params;
+
+    if (!managerId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+      return next(new ErrorHandler("Invalid company ID", 400));
+    }
+
+    const [company, manager] = await Promise.all([
+      CompanyModel.findById(companyId).lean(),
+      ManagerModel.findOne({ userId: managerId, companyId }).lean(),
+    ]);
+
+    if (!company) {
+      return next(new ErrorHandler("Company not found", 404));
+    }
+
+    if (!manager || !manager.isActive) {
+      return next(new ErrorHandler("You are not an active manager of this company", 403));
+    }
+
+    const transporterQuery: mongoose.FilterQuery<typeof TransporterModel> = {
+      companyId,
+    };
+
+    const { verificationStatus, availabilityStatus, isActive, currentBranchId, search } = req.query;
+
+    if (verificationStatus && typeof verificationStatus === "string") {
+      transporterQuery.verificationStatus = verificationStatus;
+    }
+
+    if (availabilityStatus && typeof availabilityStatus === "string") {
+      transporterQuery.availabilityStatus = availabilityStatus;
+    }
+
+    if (isActive !== undefined) {
+      transporterQuery.isActive = isActive === "true";
+    }
+
+    if (currentBranchId && typeof currentBranchId === "string") {
+      if (mongoose.Types.ObjectId.isValid(currentBranchId)) {
+        transporterQuery.currentBranchId = new mongoose.Types.ObjectId(currentBranchId);
+      }
+    }
+
+    if (search && typeof search === "string") {
+      const matchingUsers = await userModel.find({
+        $or: [
+          { firstName: { $regex: search, $options: "i" } },
+          { lastName: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } },
+        ],
+      }).select("_id").lean();
+      
+      const matchingUserIds = matchingUsers.map(user => user._id);
+      
+      if (matchingUserIds.length > 0) {
+        transporterQuery.userId = { $in: matchingUserIds };
+      } else {
+
+        return res.status(200).json({
+          success: true,
+          count: 0,
+          data: [],
+        });
+      }
+    }
+
+    const transporters = await TransporterModel.find(transporterQuery)
+      .populate("userId", "firstName lastName email phone username imageUrl role status")
+      .populate("currentBranchId", "name code address status")
+      .populate("currentVehicleId", "type brand model registrationNumber")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: transporters.length,
+      data: transporters,
+    });
+  }
+);
 
 
