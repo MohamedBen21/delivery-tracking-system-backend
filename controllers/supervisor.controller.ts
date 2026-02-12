@@ -864,5 +864,181 @@ export const createTransporter = catchAsyncError(
 
 
 
+//  UPDATE TRANSPORTER
+export const updateTransporter = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const managerId = req.user?._id;
+      const { companyId, transporterId } = req.params;
+
+      if (!managerId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      if (!transporterId || !mongoose.Types.ObjectId.isValid(transporterId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid transporter ID", 400));
+      }
+
+      const body = req.body as IUpdateTransporter;
+
+      if (Object.keys(body).length === 0) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("No update data provided", 400));
+      }
+
+
+      if (body.email !== undefined && typeof body.email !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("email must be a string", 400));
+      }
+
+      if (body.phone !== undefined && typeof body.phone !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("phone must be a string", 400));
+      }
+
+      if (body.username !== undefined && typeof body.username !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("username must be a string", 400));
+      }
+
+      if (body.currentBranchId !== undefined && !mongoose.Types.ObjectId.isValid(body.currentBranchId)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+
+      const [transporter, manager] = await Promise.all([
+        TransporterModel.findOne({ _id: transporterId, companyId }).session(session),
+        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
+      ]);
+
+      if (!transporter) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Transporter not found", 404));
+      }
+
+      if (!manager || !manager.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active manager of this company", 403));
+      }
+
+      if (!manager.hasPermission("can_manage_users")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage transporters", 403));
+      }
+
+      const duplicateChecks: Promise<any>[] = [];
+
+      if (body.email) {
+        duplicateChecks.push(
+          userModel.findOne({ email: body.email, _id: { $ne: transporter.userId } }).session(session)
+        );
+      }
+
+      if (body.phone) {
+        duplicateChecks.push(
+          userModel.findOne({ phone: body.phone, _id: { $ne: transporter.userId } }).session(session)
+        );
+      }
+
+      if (body.username) {
+        duplicateChecks.push(
+          userModel.findOne({ username: body.username, _id: { $ne: transporter.userId } }).session(session)
+        );
+      }
+
+      const duplicateResults = await Promise.all(duplicateChecks);
+
+      if (duplicateResults.some((result) => result !== null)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Email, phone, or username already exists", 400));
+      }
+
+      const userUpdates: any = {};
+      const transporterUpdates: any = {};
+
+      if (body.email) userUpdates.email = body.email;
+      if (body.phone) userUpdates.phone = body.phone;
+      if (body.username) userUpdates.username = body.username;
+      if (body.firstName) userUpdates.firstName = body.firstName;
+      if (body.lastName) userUpdates.lastName = body.lastName;
+      if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
+
+      if (body.documents) transporterUpdates.documents = body.documents;
+      if (body.availabilityStatus) transporterUpdates.availabilityStatus = body.availabilityStatus;
+      if (body.currentBranchId !== undefined) {
+        transporterUpdates.currentBranchId = body.currentBranchId
+          ? new mongoose.Types.ObjectId(body.currentBranchId)
+          : undefined;
+      }
+
+
+      if (Object.keys(userUpdates).length > 0) {
+        await userModel.findByIdAndUpdate(transporter.userId, { $set: userUpdates }, { session });
+      }
+
+      Object.assign(transporter, transporterUpdates);
+      await transporter.save({ session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedTransporter = await TransporterModel.findById(transporterId)
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("companyId", "name businessType status")
+        .populate("currentBranchId", "name code address status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: "Transporter updated successfully",
+        data: populatedTransporter,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler(error.message || "Error updating transporter", 500));
+    }
+  }
+);
+
+
+
+
 
 
