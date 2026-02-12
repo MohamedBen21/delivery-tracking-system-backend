@@ -425,4 +425,222 @@ export const updateDeliverer = catchAsyncError(
 
 
 
+//  TOGGLE BLOCK / ACTIVATE DELIVERER
+export const toggleBlockDeliverer = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const supervisorUserId = req.user?._id;
+      const { branchId, delivererId } = req.params;
+
+      if (!supervisorUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!delivererId || !mongoose.Types.ObjectId.isValid(delivererId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid deliverer ID", 400));
+      }
+
+      const [deliverer, supervisor, requestingUser] = await Promise.all([
+        DelivererModel.findOne({ _id: delivererId, branchId }).session(session),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+        userModel.findById(supervisorUserId).select("role").session(session),
+      ]);
+
+      if (!deliverer) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Deliverer not found", 404));
+      }
+
+      const isAdmin = requestingUser?.role === "admin";
+      const isAuthorizedSupervisor =
+        supervisor && supervisor.isActive && supervisor.hasPermission("can_manage_deliverers");
+
+      if (!isAdmin && !isAuthorizedSupervisor) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Not authorized to change this deliverer's status", 403));
+      }
+
+      const newIsActive = !deliverer.isActive;
+
+      await Promise.all([
+        deliverer.set({ isActive: newIsActive }).save({ session }),
+        userModel.findByIdAndUpdate(
+          deliverer.userId,
+          { status: newIsActive ? "active" : "suspended" },
+          { session }
+        ),
+      ]);
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const updatedDeliverer = await DelivererModel.findById(delivererId)
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("branchId", "name code address status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: `Deliverer ${newIsActive ? "activated" : "suspended"} successfully`,
+        data: {
+          deliverer: updatedDeliverer,
+          isActive: newIsActive,
+        },
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler(error.message || "Error toggling deliverer status", 500));
+    }
+  }
+);
+
+
+
+//  GET DELIVERER BY ID
+export const getDeliverer = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const supervisorUserId = req.user?._id;
+    const { branchId, delivererId } = req.params;
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    if (!delivererId || !mongoose.Types.ObjectId.isValid(delivererId.toString())) {
+      return next(new ErrorHandler("Invalid deliverer ID", 400));
+    }
+
+    const [deliverer, supervisor, requestingUser] = await Promise.all([
+      DelivererModel.findOne({ _id: delivererId, branchId })
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("branchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean(),
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+      userModel.findById(supervisorUserId).select("role").lean(),
+    ]);
+
+    const isAdmin = requestingUser?.role === "admin";
+    const isAuthorizedSupervisor = supervisor && supervisor.isActive;
+
+    if (!isAdmin && !isAuthorizedSupervisor) {
+      return next(new ErrorHandler("Not authorized to view this deliverer", 403));
+    }
+
+    if (!deliverer) {
+      return next(new ErrorHandler("Deliverer not found", 404));
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: deliverer,
+    });
+  }
+);
+
+
+
+//  GET ALL MY DELIVERERS (BRANCH)
+export const getMyDeliverers = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const supervisorUserId = req.user?._id;
+    const { branchId } = req.params;
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    const [branch, supervisor] = await Promise.all([
+      BranchModel.findById(branchId).lean(),
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+    ]);
+
+    if (!branch) {
+      return next(new ErrorHandler("Branch not found", 404));
+    }
+
+    if (!supervisor || !supervisor.isActive) {
+      return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+    }
+
+    const delivererQuery: mongoose.FilterQuery<typeof DelivererModel> = {
+      branchId,
+    };
+
+    const { verificationStatus, availabilityStatus, isActive, search } = req.query;
+
+    if (verificationStatus && typeof verificationStatus === "string") {
+      delivererQuery.verificationStatus = verificationStatus;
+    }
+
+    if (availabilityStatus && typeof availabilityStatus === "string") {
+      delivererQuery.availabilityStatus = availabilityStatus;
+    }
+
+    if (isActive !== undefined) {
+      delivererQuery.isActive = isActive === "true";
+    }
+
+    if (search && typeof search === "string") {
+      const matchingUsers = await userModel.find({
+        $or: [
+          { firstName: { $regex: search, $options: "i" } },
+          { lastName: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } },
+        ],
+      }).select("_id").lean();
+      
+      const matchingUserIds = matchingUsers.map(user => user._id);
+      
+      if (matchingUserIds.length > 0) {
+        delivererQuery.userId = { $in: matchingUserIds };
+      } else {
+        return res.status(200).json({
+          success: true,
+          count: 0,
+          data: [],
+        });
+      }
+    }
+
+    const deliverers = await DelivererModel.find(delivererQuery)
+      .populate("userId", "firstName lastName email phone username imageUrl role status")
+      .populate("branchId", "name code address status")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: deliverers.length,
+      data: deliverers,
+    });
+  }
+);
+
+
+
 
