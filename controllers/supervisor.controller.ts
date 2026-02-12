@@ -1534,3 +1534,173 @@ export const createPackage = catchAsyncError(
   }
 );
 
+
+
+//  UPDATE PACKAGE
+export const updatePackage = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const supervisorUserId = req.user?._id;
+      const { branchId, packageId } = req.params;
+
+      if (!supervisorUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid package ID", 400));
+      }
+
+      const body = req.body as IUpdatePackage;
+
+      if (Object.keys(body).length === 0) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("No update data provided", 400));
+      }
+
+      const [packageDoc, supervisor] = await Promise.all([
+        PackageModel.findOne({
+          _id: packageId,
+          $or: [{ originBranchId: branchId }, { currentBranchId: branchId }],
+        }).session(session),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+      ]);
+
+      if (!packageDoc) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Package not found in this branch", 404));
+      }
+
+      if (!supervisor || !supervisor.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+
+      if (!supervisor.hasPermission("can_manage_packages")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage packages", 403));
+      }
+
+      if (["delivered", "cancelled", "returned", "lost", "damaged"].includes(packageDoc.status)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler(`Cannot update package in ${packageDoc.status} status`, 400));
+      }
+
+      if (body.destinationBranchId) {
+        const destinationBranch = await BranchModel.findById(body.destinationBranchId).session(session);
+        if (!destinationBranch) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Destination branch not found", 404));
+        }
+      }
+
+      if (body.assignedDelivererId) {
+        const deliverer = await DelivererModel.findOne({
+          _id: body.assignedDelivererId,
+          branchId,
+          isActive: true,
+        }).session(session);
+
+        if (!deliverer) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Deliverer not found or not active in this branch", 404));
+        }
+
+        if (deliverer.availabilityStatus !== "available") {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Deliverer is not available", 400));
+        }
+      }
+
+      const packageUpdates: any = { ...body };
+
+      if (body.paymentStatus === "paid" && !packageDoc.paidAt) {
+        packageUpdates.paidAt = new Date();
+      }
+
+      await PackageModel.findByIdAndUpdate(
+        packageId,
+        { $set: packageUpdates },
+        { session }
+      );
+
+      if (
+        body.status &&
+        body.status !== packageDoc.status &&
+        !["delivered", "cancelled", "returned"].includes(body.status)
+      ) {
+        await PackageModel.findByIdAndUpdate(
+          packageId,
+          {
+            $push: {
+              trackingHistory: {
+                status: body.status,
+                branchId,
+                userId: supervisorUserId,
+                notes: `Status updated from ${packageDoc.status} to ${body.status}`,
+                timestamp: new Date(),
+              },
+            },
+          },
+          { session }
+        );
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const updatedPackage = await PackageModel.findById(packageId)
+        .populate("clientId", "firstName lastName email phone username")
+        .populate("originBranchId", "name code address")
+        .populate("currentBranchId", "name code address")
+        .populate("destinationBranchId", "name code address")
+        .populate("assignedDelivererId")
+        .populate("assignedVehicleId")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: "Package updated successfully",
+        data: updatedPackage,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler(error.message || "Error updating package", 500));
+    }
+  }
+);
+
