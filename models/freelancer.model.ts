@@ -24,7 +24,7 @@ export interface IFreelancer extends Document {
   
   statistics: IFreelancerStatistics;
 
-  defaultOriginBranchId?: mongoose.Types.ObjectId;
+  defaultOriginBranchId: mongoose.Types.ObjectId;
   preferredDeliveryType?: 'home' | 'branch_pickup';
   
   createdAt: Date;
@@ -133,6 +133,7 @@ const freelancerSchema = new Schema<IFreelancer>({
   defaultOriginBranchId: {
     type: Schema.Types.ObjectId,
     ref: 'Branch',
+    required: [true, 'Default origin branch reference is required'],
   },
   
   preferredDeliveryType: {
