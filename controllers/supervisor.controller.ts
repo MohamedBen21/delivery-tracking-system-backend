@@ -10,6 +10,7 @@ import ManagerModel from "../models/manager.model";
 import CompanyModel from "../models/company.model";
 import TransporterModel from "../models/transporter.model";
 import PackageModel, { PackageStatus } from "../models/package.model";
+import FreelancerModel from "../models/freelancer.model";
 
 
 interface ILocationBody {
@@ -2252,3 +2253,212 @@ export const resolvePackageIssue = catchAsyncError(
 
 
 
+
+interface ICreateFreelancer {
+  email: string;
+  phone: string;
+  username: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+  imageUrl?: string;
+
+  businessName?: string;
+  businessType?: 'individual' | 'small_business' | 'ecommerce' | 'other';
+  preferredDeliveryType?: 'home' | 'branch_pickup';
+}
+
+
+interface IUpdateFreelancer {
+  email?: string;
+  phone?: string;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  imageUrl?: string;
+
+  businessName?: string;
+  businessType?: 'individual' | 'small_business' | 'ecommerce' | 'other';
+  preferredDeliveryType?: 'home' | 'branch_pickup';
+}
+
+
+
+//  CREATE FREELANCER
+export const createFreelancer = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const supervisorUserId = req.user?._id;
+      const { branchId } = req.params;
+
+      if (!supervisorUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      const {
+        email,
+        phone,
+        username,
+        password,
+        firstName,
+        lastName,
+        imageUrl,
+        businessName,
+        businessType,
+        preferredDeliveryType,
+      } = req.body as ICreateFreelancer;
+
+      if (!email || !phone || !username || !password || !firstName || !lastName) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("email, phone, username, password, firstName, and lastName are required", 400)
+        );
+      }
+
+
+      if (
+        typeof email !== "string" ||
+        typeof phone !== "string" ||
+        typeof username !== "string" ||
+        typeof password !== "string" ||
+        typeof firstName !== "string" ||
+        typeof lastName !== "string"
+      ) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("All required fields must be strings", 400));
+      }
+
+
+      const [supervisor, branch] = await Promise.all([
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+        BranchModel.findById(branchId).session(session),
+      ]);
+
+      if (!supervisor || !supervisor.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+
+      if (!supervisor.hasPermission("can_manage_deliverers")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage freelancers", 403));
+      }
+
+      if (!branch) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Branch not found", 404));
+      }
+
+      if (branch.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Cannot create freelancer for an inactive branch", 400));
+      }
+
+
+      const [existingEmail, existingPhone, existingUsername] = await Promise.all([
+        userModel.findOne({ email }).session(session),
+        userModel.findOne({ phone }).session(session),
+        userModel.findOne({ username }).session(session),
+      ]);
+
+      if (existingEmail) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Email already exists", 400));
+      }
+
+      if (existingPhone) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Phone number already exists", 400));
+      }
+
+      if (existingUsername) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Username already exists", 400));
+      }
+
+
+      const user = await userModel.create(
+        [
+          {
+            email,
+            phone,
+            username,
+            passwordHash: password,
+            firstName,
+            lastName,
+            imageUrl,
+            role: "freelancer",
+            status: "pending",
+          },
+        ],
+        { session }
+      );
+
+      const freelancer = await FreelancerModel.create(
+        [
+          {
+            userId: user[0]._id,
+            companyId: branch.companyId,
+            defaultOriginBranchId: branchId,
+            ...(businessName && { businessName }),
+            ...(businessType && { businessType }),
+            ...(preferredDeliveryType && { preferredDeliveryType }),
+            status: "pending_verification",
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedFreelancer = await FreelancerModel.findById(freelancer[0]._id)
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("defaultOriginBranchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(201).json({
+        success: true,
+        message: "Freelancer created successfully",
+        data: populatedFreelancer,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler(error.message || "Error creating freelancer", 500));
+    }
+  }
+);

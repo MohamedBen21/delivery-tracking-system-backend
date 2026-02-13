@@ -16,7 +16,7 @@ export interface IUser extends Document {
   firstName: string;
   lastName: string;
   imageUrl? : string;
-  role: "admin" | "manager" | "client" | "deliverer" | "transporter" | "supervisor";
+  role: "admin" | "manager" | "client" | "deliverer" | "transporter" | "supervisor" | "freelancer";
   status: "active" | "pending" | "suspended" | "inactive";
 
   comparePassword: (password: string) => Promise<boolean>;
@@ -88,7 +88,7 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
     role: {
       type: String,
       enum: {
-        values: ["admin", "manager", "client", "deliverer", "transporter", "supervisor"],
+        values: ["admin", "manager", "client", "deliverer", "transporter", "supervisor","freelancer"],
         message: "{VALUE} is not a valid role.", 
       },
       default: "client",
