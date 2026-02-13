@@ -1997,3 +1997,258 @@ export const getMyBranchPackages = catchAsyncError(
   }
 );
 
+
+
+//ADD PACKAGE PROBLEM 
+export const addPackageIssue = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const supervisorUserId = req.user?._id;
+      const { branchId, packageId } = req.params;
+      const { type, description, priority } = req.body as IAddIssue;
+
+      if (!supervisorUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid package ID", 400));
+      }
+
+      if (!type || !description) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Issue type and description are required", 400));
+      }
+
+      const [packageDoc, supervisor] = await Promise.all([
+        PackageModel.findOne({
+          _id: packageId,
+          $or: [{ originBranchId: branchId }, { currentBranchId: branchId }],
+        }).session(session),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+      ]);
+
+      if (!packageDoc) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Package not found", 404));
+      }
+
+      if (!supervisor || !supervisor.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+
+      if (!supervisor.hasPermission("can_handle_complaints")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to handle complaints", 403));
+      }
+
+      if (packageDoc.status === "delivered" || packageDoc.status === "cancelled") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler(`Cannot add issue to ${packageDoc.status} package`, 400));
+      }
+
+      const issue = {
+        type,
+        description,
+        reportedBy: supervisorUserId,
+        reportedAt: new Date(),
+        resolved: false,
+        priority: priority || "medium",
+      };
+
+      let statusUpdate: any = {
+        $push: { issues: issue },
+      };
+
+      if (type === "damage") {
+        statusUpdate.$set = { status: "damaged" };
+      } else if (type === "lost") {
+        statusUpdate.$set = { status: "lost" };
+      } else if (type === "delay" || type === "customer_unavailable") {
+        statusUpdate.$set = { status: "on_hold" };
+      }
+
+      statusUpdate.$push = {
+        ...statusUpdate.$push,
+        trackingHistory: {
+          status: statusUpdate.$set?.status || packageDoc.status,
+          branchId,
+          userId: supervisorUserId,
+          notes: `Issue reported: ${type} - ${description}`,
+          timestamp: new Date(),
+        },
+      };
+
+      await PackageModel.findByIdAndUpdate(packageId, statusUpdate, { session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const updatedPackage = await PackageModel.findById(packageId)
+        .populate("clientId", "firstName lastName email phone username")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: "Issue reported successfully",
+        data: updatedPackage,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler(error.message || "Error reporting issue", 500));
+    }
+  }
+);
+
+//RESOLVE PACKAGE PROBLEM
+export const resolvePackageIssue = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const supervisorUserId = req.user?._id;
+      const { branchId, packageId, issueIndex } = req.params;
+      const { resolution } = req.body;
+
+      if (!supervisorUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid package ID", 400));
+      }
+
+      if (!issueIndex || isNaN(parseInt(issueIndex as string))) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid issue index", 400));
+      }
+
+      if (!resolution) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Resolution description is required", 400));
+      }
+
+      const [packageDoc, supervisor] = await Promise.all([
+        PackageModel.findOne({
+          _id: packageId,
+          $or: [{ originBranchId: branchId }, { currentBranchId: branchId }],
+        }).session(session),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+      ]);
+
+      if (!packageDoc) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Package not found", 404));
+      }
+
+      if (!supervisor || !supervisor.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+
+      if (!supervisor.hasPermission("can_handle_complaints")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to handle complaints", 403));
+      }
+
+      // 👇 FIX: cast to string and parse
+      const index = parseInt(issueIndex as string, 10);
+      
+      if (!packageDoc.issues || index >= packageDoc.issues.length) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Issue not found", 404));
+      }
+
+      const issue = packageDoc.issues[index];
+      if (issue.resolved) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Issue is already resolved", 400));
+      }
+
+      const updateQuery: any = {
+        $set: {
+          [`issues.${index}.resolved`]: true,
+          [`issues.${index}.resolvedAt`]: new Date(),
+          [`issues.${index}.resolution`]: resolution,
+        },
+        $push: {
+          trackingHistory: {
+            status: packageDoc.status,
+            branchId,
+            userId: supervisorUserId,
+            notes: `Issue resolved: ${issue.type} - ${resolution}`,
+            timestamp: new Date(),
+          },
+        },
+      };
+
+      const allIssuesResolved = packageDoc.issues.every((iss: any, i: number) => 
+        i === index ? true : iss.resolved
+      );
+
+      if (allIssuesResolved && ["damaged", "lost", "on_hold"].includes(packageDoc.status)) {
+        updateQuery.$set.status = "at_destination_branch";
+      }
+
+      await PackageModel.findByIdAndUpdate(packageId, updateQuery, { session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const updatedPackage = await PackageModel.findById(packageId)
+        .populate("clientId", "firstName lastName email phone username")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: "Issue resolved successfully",
+        data: updatedPackage,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler(error.message || "Error resolving issue", 500));
+    }
+  }
+);
+
+
+
