@@ -2462,3 +2462,174 @@ export const createFreelancer = catchAsyncError(
     }
   }
 );
+
+
+
+//  UPDATE FREELANCER
+export const updateFreelancer = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const supervisorUserId = req.user?._id;
+      const { branchId, freelancerId } = req.params;
+
+      if (!supervisorUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!freelancerId || !mongoose.Types.ObjectId.isValid(freelancerId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid freelancer ID", 400));
+      }
+
+      const body = req.body as IUpdateFreelancer;
+
+      if (Object.keys(body).length === 0) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("No update data provided", 400));
+      }
+
+
+      if (body.email !== undefined && typeof body.email !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("email must be a string", 400));
+      }
+
+      if (body.phone !== undefined && typeof body.phone !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("phone must be a string", 400));
+      }
+
+      if (body.username !== undefined && typeof body.username !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("username must be a string", 400));
+      }
+
+
+      const [freelancer, supervisor] = await Promise.all([
+        FreelancerModel.findOne({ _id: freelancerId, defaultOriginBranchId: branchId }).session(session),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+      ]);
+
+      if (!freelancer) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Freelancer not found in this branch", 404));
+      }
+
+      if (!supervisor || !supervisor.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+
+      if (!supervisor.hasPermission("can_manage_deliverers")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage freelancers", 403));
+      }
+
+
+      const duplicateChecks: Promise<any>[] = [];
+
+      if (body.email) {
+        duplicateChecks.push(
+          userModel.findOne({ email: body.email, _id: { $ne: freelancer.userId } }).session(session)
+        );
+      }
+
+      if (body.phone) {
+        duplicateChecks.push(
+          userModel.findOne({ phone: body.phone, _id: { $ne: freelancer.userId } }).session(session)
+        );
+      }
+
+      if (body.username) {
+        duplicateChecks.push(
+          userModel.findOne({ username: body.username, _id: { $ne: freelancer.userId } }).session(session)
+        );
+      }
+
+      const duplicateResults = await Promise.all(duplicateChecks);
+
+      if (duplicateResults.some((result) => result !== null)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Email, phone, or username already exists", 400));
+      }
+
+
+      const userUpdates: any = {};
+      const freelancerUpdates: any = {};
+
+      if (body.email) userUpdates.email = body.email;
+      if (body.phone) userUpdates.phone = body.phone;
+      if (body.username) userUpdates.username = body.username;
+      if (body.firstName) userUpdates.firstName = body.firstName;
+      if (body.lastName) userUpdates.lastName = body.lastName;
+      if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
+
+      if (body.businessName !== undefined) freelancerUpdates.businessName = body.businessName;
+      if (body.businessType) freelancerUpdates.businessType = body.businessType;
+      if (body.preferredDeliveryType) freelancerUpdates.preferredDeliveryType = body.preferredDeliveryType;
+
+      if (Object.keys(userUpdates).length > 0) {
+        await userModel.findByIdAndUpdate(freelancer.userId, { $set: userUpdates }, { session });
+      }
+
+
+      Object.assign(freelancer, freelancerUpdates);
+      await freelancer.save({ session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedFreelancer = await FreelancerModel.findById(freelancerId)
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("defaultOriginBranchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: "Freelancer updated successfully",
+        data: populatedFreelancer,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler(error.message || "Error updating freelancer", 500));
+    }
+  }
+);
+
+
+
+
