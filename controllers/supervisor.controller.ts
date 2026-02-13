@@ -1704,3 +1704,296 @@ export const updatePackage = catchAsyncError(
   }
 );
 
+
+
+//  TOGGLE CANCEL / REACTIVATE PACKAGE
+export const toggleCancelPackage = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const supervisorUserId = req.user?._id;
+      const { branchId, packageId } = req.params;
+
+      if (!supervisorUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid package ID", 400));
+      }
+
+      const [packageDoc, supervisor, requestingUser] = await Promise.all([
+        PackageModel.findOne({
+          _id: packageId,
+          $or: [{ originBranchId: branchId }, { currentBranchId: branchId }],
+        }).session(session),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+        userModel.findById(supervisorUserId).select("role").session(session),
+      ]);
+
+      if (!packageDoc) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Package not found", 404));
+      }
+
+      const isAdmin = requestingUser?.role === "admin";
+      const isAuthorizedSupervisor =
+        supervisor && supervisor.isActive && supervisor.hasPermission("can_manage_packages");
+
+      if (!isAdmin && !isAuthorizedSupervisor) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Not authorized to change this package's status", 403));
+      }
+
+      if (packageDoc.status === "delivered") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Cannot cancel a delivered package", 400));
+      }
+
+      if (packageDoc.status === "returned") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Cannot cancel a returned package", 400));
+      }
+
+      const newStatus = packageDoc.status === "cancelled" ? "pending" : "cancelled";
+
+      await PackageModel.findByIdAndUpdate(
+        packageId,
+        {
+          $set: { status: newStatus },
+          $push: {
+            trackingHistory: {
+              status: newStatus,
+              branchId,
+              userId: supervisorUserId,
+              notes: `Package ${newStatus === "cancelled" ? "cancelled" : "reactivated"}`,
+              timestamp: new Date(),
+            },
+          },
+        },
+        { session }
+      );
+
+      if (newStatus === "cancelled") {
+        await BranchModel.findByIdAndUpdate(
+          branchId,
+          { $inc: { currentLoad: -1 } },
+          { session }
+        );
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const updatedPackage = await PackageModel.findById(packageId)
+        .populate("clientId", "firstName lastName email phone username")
+        .populate("originBranchId", "name code address")
+        .populate("currentBranchId", "name code address")
+        .populate("destinationBranchId", "name code address")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: `Package ${newStatus === "cancelled" ? "cancelled" : "reactivated"} successfully`,
+        data: updatedPackage,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler(error.message || "Error toggling package status", 500));
+    }
+  }
+);
+
+// GET PACKAGE BY ID (SUPERVISOR)
+export const getPackage = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const supervisorUserId = req.user?._id;
+    const { branchId, packageId } = req.params;
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
+      return next(new ErrorHandler("Invalid package ID", 400));
+    }
+
+    const [packageDoc, supervisor, requestingUser] = await Promise.all([
+      PackageModel.findOne({
+        _id: packageId,
+        $or: [{ originBranchId: branchId }, { currentBranchId: branchId }],
+      })
+        .populate("clientId", "firstName lastName email phone username imageUrl")
+        .populate("originBranchId", "name code address status")
+        .populate("currentBranchId", "name code address status")
+        .populate("destinationBranchId", "name code address status")
+        .populate({
+          path: "assignedDelivererId",
+          populate: {
+            path: "userId",
+            select: "firstName lastName email phone",
+          },
+        })
+        .populate("assignedVehicleId", "type brand model registrationNumber")
+        .lean(),
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+      userModel.findById(supervisorUserId).select("role").lean(),
+    ]);
+
+    const isAdmin = requestingUser?.role === "admin";
+    const isAuthorizedSupervisor = supervisor && supervisor.isActive;
+
+    if (!isAdmin && !isAuthorizedSupervisor) {
+      return next(new ErrorHandler("Not authorized to view this package", 403));
+    }
+
+    if (!packageDoc) {
+      return next(new ErrorHandler("Package not found", 404));
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: packageDoc,
+    });
+  }
+);
+
+//GET MY BRANCH PACKAGES (SUPERVISOR)
+export const getMyBranchPackages = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const supervisorUserId = req.user?._id;
+    const { branchId } = req.params;
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    const [branch, supervisor] = await Promise.all([
+      BranchModel.findById(branchId).lean(),
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+    ]);
+
+    if (!branch) {
+      return next(new ErrorHandler("Branch not found", 404));
+    }
+
+    if (!supervisor || !supervisor.isActive) {
+      return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+    }
+
+    const packageQuery: mongoose.FilterQuery<typeof PackageModel> = {
+      $or: [
+        { originBranchId: branchId },
+        { currentBranchId: branchId },
+      ],
+    };
+
+    const {
+      status,
+      clientId,
+      deliveryType,
+      deliveryPriority,
+      paymentStatus,
+      fromDate,
+      toDate,
+      search,
+      page = "1",
+      limit = "20",
+    } = req.query;
+
+    if (status && typeof status === "string") {
+      packageQuery.status = status;
+    }
+
+    if (clientId && typeof clientId === "string" && mongoose.Types.ObjectId.isValid(clientId)) {
+      packageQuery.clientId = clientId;
+    }
+
+    if (deliveryType && typeof deliveryType === "string") {
+      packageQuery.deliveryType = deliveryType;
+    }
+
+    if (deliveryPriority && typeof deliveryPriority === "string") {
+      packageQuery.deliveryPriority = deliveryPriority;
+    }
+
+    if (paymentStatus && typeof paymentStatus === "string") {
+      packageQuery.paymentStatus = paymentStatus;
+    }
+
+    if (fromDate && toDate && typeof fromDate === "string" && typeof toDate === "string") {
+      packageQuery.createdAt = {
+        $gte: new Date(fromDate),
+        $lte: new Date(toDate),
+      };
+    }
+
+    if (search && typeof search === "string") {
+      packageQuery.$or = packageQuery.$or || [];
+      packageQuery.$or.push(
+        { trackingNumber: { $regex: search, $options: "i" } },
+        { "destination.recipientName": { $regex: search, $options: "i" } },
+        { "destination.recipientPhone": { $regex: search, $options: "i" } }
+      );
+    }
+
+    const pageNum = parseInt(page as string, 10);
+    const limitNum = parseInt(limit as string, 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [packages, totalCount] = await Promise.all([
+      PackageModel.find(packageQuery)
+        .populate("clientId", "firstName lastName email phone username")
+        .populate("originBranchId", "name code")
+        .populate("currentBranchId", "name code")
+        .populate("destinationBranchId", "name code")
+        .populate({
+          path: "assignedDelivererId",
+          populate: {
+            path: "userId",
+            select: "firstName lastName",
+          },
+        })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      PackageModel.countDocuments(packageQuery),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      count: packages.length,
+      totalCount,
+      currentPage: pageNum,
+      totalPages: Math.ceil(totalCount / limitNum),
+      data: packages,
+    });
+  }
+);
+
