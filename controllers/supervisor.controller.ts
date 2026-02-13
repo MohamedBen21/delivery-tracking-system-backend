@@ -2632,4 +2632,221 @@ export const updateFreelancer = catchAsyncError(
 
 
 
+//  TOGGLE BLOCK / ACTIVATE FREELANCER
+export const toggleBlockFreelancer = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
+    try {
+      const supervisorUserId = req.user?._id;
+      const { branchId, freelancerId } = req.params;
+
+      if (!supervisorUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!freelancerId || !mongoose.Types.ObjectId.isValid(freelancerId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid freelancer ID", 400));
+      }
+
+      const [freelancer, supervisor, requestingUser] = await Promise.all([
+        FreelancerModel.findOne({ _id: freelancerId, defaultOriginBranchId: branchId }).session(session),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+        userModel.findById(supervisorUserId).select("role").session(session),
+      ]);
+
+      if (!freelancer) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Freelancer not found in this branch", 404));
+      }
+
+      const isAdmin = requestingUser?.role === "admin";
+      const isAuthorizedSupervisor =
+        supervisor && supervisor.isActive && supervisor.hasPermission("can_manage_deliverers");
+
+      if (!isAdmin && !isAuthorizedSupervisor) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Not authorized to change this freelancer's status", 403));
+      }
+
+
+      let newStatus: 'active' | 'suspended';
+      
+      if (freelancer.status === 'active') {
+        newStatus = 'suspended';
+      } else if (freelancer.status === 'suspended' || freelancer.status === 'pending_verification') {
+        newStatus = 'active';
+      } else {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Cannot toggle freelancer with current status", 400));
+      }
+
+
+      await Promise.all([
+        freelancer.set({ status: newStatus }).save({ session }),
+        userModel.findByIdAndUpdate(
+          freelancer.userId,
+          { status: newStatus === 'active' ? "active" : "suspended" },
+          { session }
+        ),
+      ]);
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const updatedFreelancer = await FreelancerModel.findById(freelancerId)
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("defaultOriginBranchId", "name code address status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: `Freelancer ${newStatus === "active" ? "activated" : "suspended"} successfully`,
+        data: {
+          freelancer: updatedFreelancer,
+          status: newStatus,
+        },
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler(error.message || "Error toggling freelancer status", 500));
+    }
+  }
+);
+
+
+
+//  GET FREELANCER BY ID
+export const getFreelancer = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const supervisorUserId = req.user?._id;
+    const { branchId, freelancerId } = req.params;
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    if (!freelancerId || !mongoose.Types.ObjectId.isValid(freelancerId.toString())) {
+      return next(new ErrorHandler("Invalid freelancer ID", 400));
+    }
+
+    const [freelancer, supervisor, requestingUser] = await Promise.all([
+      FreelancerModel.findOne({ _id: freelancerId, defaultOriginBranchId: branchId })
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("defaultOriginBranchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean(),
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+      userModel.findById(supervisorUserId).select("role").lean(),
+    ]);
+
+    const isAdmin = requestingUser?.role === "admin";
+    const isAuthorizedSupervisor = supervisor && supervisor.isActive;
+
+    if (!isAdmin && !isAuthorizedSupervisor) {
+      return next(new ErrorHandler("Not authorized to view this freelancer", 403));
+    }
+
+    if (!freelancer) {
+      return next(new ErrorHandler("Freelancer not found in this branch", 404));
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: freelancer,
+    });
+  }
+);
+
+
+
+//  GET ALL FREELANCERS IN MY BRANCH
+export const getMyFreelancers = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const supervisorUserId = req.user?._id;
+    const { branchId } = req.params;
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    const [branch, supervisor] = await Promise.all([
+      BranchModel.findById(branchId).lean(),
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+    ]);
+
+    if (!branch) {
+      return next(new ErrorHandler("Branch not found", 404));
+    }
+
+    if (!supervisor || !supervisor.isActive) {
+      return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+    }
+
+    const freelancerQuery: mongoose.FilterQuery<typeof FreelancerModel> = {
+      defaultOriginBranchId: branchId,
+    };
+
+
+    const { status, businessType, search } = req.query;
+
+    if (status && typeof status === "string") {
+      freelancerQuery.status = status;
+    }
+
+    if (businessType && typeof businessType === "string") {
+      freelancerQuery.businessType = businessType;
+    }
+
+    const freelancers = await FreelancerModel.find(freelancerQuery)
+      .populate({
+        path: "userId",
+        select: "firstName lastName email phone username imageUrl role status",
+        ...(search && typeof search === "string"
+          ? {
+              match: {
+                $or: [
+                  { firstName: { $regex: search, $options: "i" } },
+                  { lastName: { $regex: search, $options: "i" } },
+                  { email: { $regex: search, $options: "i" } },
+                ],
+              },
+            }
+          : {}),
+      })
+      .populate("defaultOriginBranchId", "name code address status")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const filtered = search ? freelancers.filter((f) => f.userId !== null) : freelancers;
+
+    return res.status(200).json({
+      success: true,
+      count: filtered.length,
+      data: filtered,
+    });
+  }
+);
