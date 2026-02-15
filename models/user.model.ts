@@ -11,7 +11,6 @@ const phoneRegex: RegExp = /^(\+213|0)(5|6|7)[0-9]{8}$/;
 export interface IUser extends Document {
   email: string;
   phone?: string;
-  username: string;
   passwordHash: string;
   firstName: string;
   lastName: string;
@@ -56,16 +55,6 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
       },
     },
 
-    username: {
-      type: String,
-      required: [true, "Please enter a username"],
-      unique: true,
-      trim: true,
-
-      minlength: [3, "Username must be at least 3 characters long"],
-      maxlength: [30, "Username must not exceed 30 characters"],
-    },
-
     passwordHash: {
       type: String,
       required: [true, "Please enter your password"],
@@ -102,6 +91,7 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
       },
       default: "pending",
     },
+    
     imageUrl: {
       type: String,
       default: null,
