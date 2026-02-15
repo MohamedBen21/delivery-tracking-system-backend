@@ -1844,3 +1844,103 @@ export const getMySupervisors = catchAsyncError(
     });
   }
 );
+
+
+interface ICreateUser {
+  email: string;
+  phone?: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+}
+
+const emailRegex: RegExp = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const phoneRegex: RegExp = /^(\+213|0)(5|6|7)[0-9]{8}$/;
+
+export const createUser = catchAsyncError(async (req:Request, res:Response,next:NextFunction) => {
+try {
+
+  const user_id = req.user?._id;
+
+  const { email, phone, password, firstName, lastName } = req.body as ICreateUser;
+
+  if (!email || !password || !firstName || !lastName) {
+    return next(new ErrorHandler("email, password, firstName and lastName are required", 400));
+  }
+
+  const user = await userModel.findById(user_id).select("role").lean();
+
+  if(!["admin","supervisor","manager"].includes(user?.role as string)){
+
+    return next(new ErrorHandler("Unauthorized, you don't have permission to create users", 403));
+  }
+  
+  if(typeof email !== "string" || email.trim() === ""  || emailRegex.test(email) === false){
+
+    return next(new ErrorHandler("Invalid email format", 400));
+  }
+
+  if(phone !== undefined && (typeof phone !== "string" || phone.trim() === "" || phoneRegex.test(phone) === false)){
+
+    return next(new ErrorHandler("Invalid phone number format", 400));
+  }
+
+  if(typeof password !== "string" || password.length < 6 || password.length > 30){
+
+    return next(new ErrorHandler("Password must be at least 6 characters and doesn't exceed 30 characters", 400));
+  }
+
+  if(typeof firstName !== "string" || firstName.trim() === "" || firstName.length >20){
+
+    return next(new ErrorHandler("firstName must be a non-empty string and doesn't exceed 20 characters", 400));
+  }
+
+  if(typeof lastName !== "string" || lastName.trim() === ""|| lastName.length >20){
+
+    return next(new ErrorHandler("lastName must be a non-empty string and doesn't exceed 20 characters", 400));
+  }
+
+
+
+  const existingUser = await userModel.findOne({
+    $or: [
+      { email },
+      ...(phone ? [{ phone }] : []),
+    ],
+  });
+
+  if (existingUser) {
+
+    return next(new ErrorHandler("A user with the same email or phone number already exists", 400));
+  }
+
+  const newUser = await userModel.create({
+    email,
+    phone,
+    password,
+    firstName,
+    lastName,
+  });
+    
+  return res.status(200).json({
+    success: true,
+    message : "user created successfully",
+    newUser
+  })
+
+  
+} catch (error:any) {
+  if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+    return next(new ErrorHandler(error.message || "Error creating user", 500));
+}
+});
