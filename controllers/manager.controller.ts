@@ -1944,3 +1944,221 @@ try {
     return next(new ErrorHandler(error.message || "Error creating user", 500));
 }
 });
+
+
+
+
+interface IBulkCreateUsers {
+  users: ICreateUser[];
+}
+
+
+export const createUsers = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const creatorId = req.user?._id;
+
+      if (!creatorId) {
+
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, user not authenticated.", 401));
+      }
+
+      const { users } = req.body as IBulkCreateUsers;
+
+      if (!Array.isArray(users) || users.length === 0) {
+
+        await session.abortTransaction();
+        session.endSession();
+
+        return next(new ErrorHandler("Users array is required", 400));
+      }
+
+      const creator = await userModel
+        .findById(creatorId)
+        .select("role")
+        .lean()
+        .session(session);
+
+      if (!["admin", "supervisor", "manager"].includes(creator?.role as string)) {
+
+        await session.abortTransaction();
+        session.endSession();
+
+        return next(
+          new ErrorHandler("Unauthorized, you don't have permission", 403)
+        );
+      }
+
+      const emailRegex: RegExp = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const phoneRegex: RegExp = /^(\+213|0)(5|6|7)[0-9]{8}$/;
+
+      const preparedUsers: ICreateUser[] = [];
+
+      for (const user of users) {
+        const { email, phone, password, firstName, lastName } = user;
+
+        if (!email || !password || !firstName || !lastName) {
+
+          await session.abortTransaction();
+          session.endSession();
+
+          return next(
+            new ErrorHandler(
+              "email, password, firstName and lastName are required",
+              400
+            )
+          );
+        }
+
+        if (
+          typeof email !== "string" ||
+          email.trim() === "" ||
+          !emailRegex.test(email)
+        ) {
+
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Invalid email format", 400));
+        }
+
+        if (
+          phone !== undefined &&
+          (typeof phone !== "string" ||
+            phone.trim() === "" ||
+            !phoneRegex.test(phone))
+        ) {
+
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Invalid phone number format", 400));
+        }
+
+        if (
+          typeof password !== "string" ||
+          password.length < 6 ||
+          password.length > 30
+        ) {
+
+          await session.abortTransaction();
+          session.endSession();
+          
+          return next(
+            new ErrorHandler(
+              "Password must be between 6 and 30 characters",
+              400
+            )
+          );
+        }
+
+        if (
+          typeof firstName !== "string" ||
+          firstName.trim() === "" ||
+          firstName.length > 20
+        ) {
+
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Invalid firstName", 400));
+        }
+
+        if (
+          typeof lastName !== "string" ||
+          lastName.trim() === "" ||
+          lastName.length > 20
+        ) {
+
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Invalid lastName", 400));
+        }
+
+        preparedUsers.push({
+          email,
+          phone,
+          password,
+          firstName,
+          lastName,
+        });
+      }
+
+
+      const emails = preparedUsers.map((u) => u.email);
+      const phones = preparedUsers.filter((u) => u.phone).map((u) => u.phone);
+
+      if (new Set(emails).size !== emails.length) {
+
+        await session.abortTransaction();
+        session.endSession();
+
+        return next(new ErrorHandler("Duplicate emails in request", 400));
+      }
+
+      if (new Set(phones).size !== phones.length) {
+
+        await session.abortTransaction();
+        session.endSession();
+
+        return next(new ErrorHandler("Duplicate phone numbers in request", 400));
+      }
+
+
+      const existingUsers = await userModel
+        .find({
+          $or: [
+            { email: { $in: emails } },
+            ...(phones.length ? [{ phone: { $in: phones } }] : []),
+          ],
+        })
+        .session(session);
+
+      if (existingUsers.length > 0) {
+
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "Some users already exist with same email or phone",
+            400
+          )
+        );
+      }
+
+      const createdUsers = await userModel.insertMany(preparedUsers, {
+        session,
+      });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(201).json({
+        success: true,
+        message: `${createdUsers.length} users created successfully`,
+        count: createdUsers.length,
+        data: createdUsers,
+      });
+    } catch (error: any) {
+      
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler(error.message || "Bulk create failed", 500));
+    }
+  }
+);
+
