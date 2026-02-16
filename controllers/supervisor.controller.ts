@@ -2851,3 +2851,191 @@ export const getMyFreelancers = catchAsyncError(
   }
 );
 
+
+
+
+interface IAssignDeliverer {
+  userId: string;
+  branchId: string;
+  currentLocation?: ILocationBody;
+  documents?: IDelivererDocumentsBody;
+}
+
+export const assignDeliverer = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const supervisorUserId = req.user?._id;
+
+      if (!supervisorUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      const { branchId } = req.params;
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      const { userId, currentLocation, documents } = req.body as IAssignDeliverer;
+
+      if (!userId || !branchId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("userId and branchId are required", 400));
+      }
+
+      if (typeof userId !== "string" || typeof branchId !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("userId and branchId must be strings", 400));
+      }
+
+      if (!mongoose.Types.ObjectId.isValid(userId) || !mongoose.Types.ObjectId.isValid(branchId)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid userId or branchId format", 400));
+      }
+
+      if (currentLocation) {
+        if (
+          currentLocation.type !== "Point" ||
+          !Array.isArray(currentLocation.coordinates) ||
+          currentLocation.coordinates.length !== 2 ||
+          typeof currentLocation.coordinates[0] !== "number" ||
+          typeof currentLocation.coordinates[1] !== "number"
+        ) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Invalid location format. Expected GeoJSON Point", 400));
+        }
+      }
+
+      const [supervisor, branch, userToAssign, existingDeliverer] = await Promise.all([
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+        BranchModel.findById(branchId).session(session),
+        userModel.findById(userId).session(session),
+        DelivererModel.findOne({ userId }).session(session),
+      ]);
+
+      if (!supervisor || !supervisor.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+
+      if (!supervisor.hasPermission("can_manage_deliverers")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage deliverers", 403));
+      }
+
+      if (!branch) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Branch not found", 404));
+      }
+
+      if (branch.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Cannot assign deliverer to an inactive branch", 400));
+      }
+
+      if (!userToAssign) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User not found", 404));
+      }
+
+      if(["admin", "manager", "supervisor", "transporter","freelancer"].includes(userToAssign.role) === true){
+              return next(new ErrorHandler(`User cannot be assigned because he is already a ${userToAssign.role}`, 400));
+        }
+
+      if (existingDeliverer) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User is already a deliverer", 400));
+      }
+
+      const existingFreelancer = await FreelancerModel.findOne({ userId }).session(session);
+      if (existingFreelancer) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User is already a freelancer, cannot assign as deliverer", 400));
+      }
+
+      const existingTransporter = await TransporterModel.findOne({ userId }).session(session);
+      if (existingTransporter) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User is already a transporter, cannot assign as deliverer", 400));
+      }
+
+      if (userToAssign.role !== "deliverer") {
+        userToAssign.role = "deliverer";
+        userToAssign.status = "active";
+        await userToAssign.save({ session });
+      }
+
+      const deliverer = await DelivererModel.create(
+        [
+          {
+            userId,
+            companyId: branch.companyId,
+            branchId,
+            ...(currentLocation && { currentLocation }),
+            ...(documents && { documents }),
+            availabilityStatus: "off_duty",
+            verificationStatus: "approved",
+            isActive: true,
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedDeliverer = await DelivererModel.findById(deliverer[0]._id)
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("branchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(201).json({
+        success: true,
+        message: "Deliverer assigned successfully",
+        data: populatedDeliverer,
+      });
+
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      if (error.code === 11000) {
+        return next(new ErrorHandler("Deliverer already exists for this user", 400));
+      }
+
+      return next(new ErrorHandler(error.message || "Error assigning deliverer", 500));
+    }
+  }
+);
+
