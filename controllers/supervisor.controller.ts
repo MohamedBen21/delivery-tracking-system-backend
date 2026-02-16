@@ -3222,3 +3222,171 @@ export const assignTransporter = catchAsyncError(
     }
   }
 );
+
+
+
+
+interface IAssignFreelancer {
+  userId: string;
+  businessName?: string;
+  businessType?: 'individual' | 'small_business' | 'ecommerce' | 'other';
+  preferredDeliveryType?: 'home' | 'branch_pickup';
+}
+
+export const assignFreelancer = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const supervisorUserId = req.user?._id;
+      const { branchId } = req.params;
+
+      if (!supervisorUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      const { userId, businessName, businessType, preferredDeliveryType } = req.body as IAssignFreelancer;
+
+      if (!userId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("userId is required", 400));
+      }
+
+      if (typeof userId !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("userId must be a string", 400));
+      }
+
+      if (!mongoose.Types.ObjectId.isValid(userId)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid userId format", 400));
+      }
+
+      const [supervisor, branch, userToAssign, existingFreelancer] = await Promise.all([
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+        BranchModel.findById(branchId).session(session),
+        userModel.findById(userId).session(session),
+        FreelancerModel.findOne({ userId }).session(session),
+      ]);
+
+      if (!supervisor || !supervisor.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+
+      if (!supervisor.hasPermission("can_manage_deliverers")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage freelancers", 403));
+      }
+
+      if (!branch) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Branch not found", 404));
+      }
+
+      if (branch.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Cannot assign freelancer to an inactive branch", 400));
+      }
+
+      if (!userToAssign) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User not found", 404));
+      }
+
+      if (existingFreelancer) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User is already a freelancer", 400));
+      }
+
+      const existingDeliverer = await DelivererModel.findOne({ userId }).session(session);
+      if (existingDeliverer) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User is already a deliverer, cannot assign as freelancer", 400));
+      }
+
+      const existingTransporter = await TransporterModel.findOne({ userId }).session(session);
+      if (existingTransporter) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User is already a transporter, cannot assign as freelancer", 400));
+      }
+
+      if (userToAssign.role !== "freelancer") {
+        userToAssign.role = "freelancer";
+        userToAssign.status = "active";
+        await userToAssign.save({ session });
+      }
+
+      const freelancer = await FreelancerModel.create(
+        [
+          {
+            userId,
+            companyId: branch.companyId,
+            defaultOriginBranchId: branchId,
+            ...(businessName && { businessName }),
+            ...(businessType && { businessType }),
+            ...(preferredDeliveryType && { preferredDeliveryType }),
+            status: "active",
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedFreelancer = await FreelancerModel.findById(freelancer[0]._id)
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("defaultOriginBranchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(201).json({
+        success: true,
+        message: "Freelancer assigned successfully",
+        data: populatedFreelancer,
+      });
+
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      if (error.code === 11000) {
+        return next(new ErrorHandler("Freelancer already exists for this user", 400));
+      }
+
+      return next(new ErrorHandler(error.message || "Error assigning freelancer", 500));
+    }
+  }
+);
