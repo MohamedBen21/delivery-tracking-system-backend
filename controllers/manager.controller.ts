@@ -1380,7 +1380,6 @@ export const createSupervisor = catchAsyncError(
         return next(new ErrorHandler("User with this email already exists", 400));
       }
 
-      // ===== Create User =====
       const user = await userModel.create(
         [
           {
@@ -1388,7 +1387,7 @@ export const createSupervisor = catchAsyncError(
             lastName,
             email,
             phone,
-            password, // make sure pre-save hashes it
+            password, 
             role: "supervisor",
           },
         ],
@@ -1955,6 +1954,7 @@ interface IBulkCreateUsers {
 
 export const createUsers = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+    
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -2162,3 +2162,181 @@ export const createUsers = catchAsyncError(
   }
 );
 
+
+
+interface IAssignSupervisor {
+  userId: string;
+  branchId: string;
+  permissions?: SupervisorPermission[];
+  workSchedule?: Partial<Record<WeekDay, IWorkScheduleDayBody>>;
+}
+
+export const assignSupervisor = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const managerId = req.user?._id;
+      const { companyId } = req.params;
+
+      if (!managerId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, user not authenticated.", 401));
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      const {
+        userId,
+        branchId,
+        permissions,
+        workSchedule,
+      } = req.body as IAssignSupervisor;
+
+      if (!userId || !branchId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("userId and branchId are required", 400));
+      }
+
+      if (typeof userId !== "string" || typeof branchId !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("userId and branchId must be strings", 400));
+      }
+
+      if (!mongoose.Types.ObjectId.isValid(userId) || !mongoose.Types.ObjectId.isValid(branchId)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid userId or branchId format", 400));
+      }
+
+      if (permissions !== undefined) {
+        if (!Array.isArray(permissions)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Permissions must be an array", 400));
+        }
+
+        if (new Set(permissions).size !== permissions.length) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Duplicate permissions are not allowed", 400));
+        }
+      }
+
+
+      const [manager, branch, userToAssign, existingSupervisor] = await Promise.all([
+        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
+        BranchModel.findOne({ _id: branchId, companyId }).session(session),
+        userModel.findById(userId).session(session),
+        SupervisorModel.findOne({ userId, companyId }).session(session),
+      ]);
+
+      if (!manager || !manager.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active manager", 403));
+      }
+
+      if (!manager.hasPermission("can_manage_supervisors")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("No permission to manage supervisors", 403));
+      }
+
+      if (!branch || branch.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid or inactive branch", 400));
+      }
+
+      if (!userToAssign) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User not found", 404));
+      }
+
+      if (existingSupervisor) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User is already a supervisor in this company", 400));
+      }
+
+      const existingManager = await ManagerModel.findOne({ userId, companyId }).session(session);
+      if (existingManager) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User is already a manager, cannot assign as supervisor", 400));
+      }
+
+      if(["admin", "manager", "deliverer", "transporter","freelancer"].includes(userToAssign.role) === true){
+        return next(new ErrorHandler(`User cannot be assigned because he is already a ${userToAssign.role}`, 400));
+      }
+
+      if (userToAssign.role !== "supervisor") {
+        userToAssign.role = "supervisor";
+        await userToAssign.save({ session });
+      }
+
+
+      const supervisor = await SupervisorModel.create(
+        [
+          {
+            userId,
+            companyId,
+            branchId,
+            permissions: permissions || [],
+            ...(workSchedule && { workSchedule }),
+            isActive: true,
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedSupervisor = await SupervisorModel.findById(supervisor[0]._id)
+        .populate("userId", "firstName lastName email phone username imageUrl role")
+        .populate("branchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(201).json({
+        success: true,
+        message: "Supervisor assigned successfully",
+        data: populatedSupervisor,
+      });
+
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      if (error.code === 11000) {
+        return next(
+          new ErrorHandler("Duplicate key error. Supervisor might already exist.", 400)
+        );
+      }
+
+      return next(new ErrorHandler(error.message || "Error assigning supervisor", 500));
+    }
+  }
+);
