@@ -3039,3 +3039,186 @@ export const assignDeliverer = catchAsyncError(
   }
 );
 
+
+
+
+
+
+interface IAssignTransporter {
+  userId: string;
+  currentBranchId?: string;
+  documents?: ITransporterDocumentsBody;
+}
+
+export const assignTransporter = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const managerId = req.user?._id;
+      const { companyId } = req.params;
+
+      if (!managerId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      const { userId, currentBranchId, documents } = req.body as IAssignTransporter;
+
+      if (!userId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("userId is required", 400));
+      }
+
+      if (typeof userId !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("userId must be a string", 400));
+      }
+
+      if (!mongoose.Types.ObjectId.isValid(userId)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid userId format", 400));
+      }
+
+      if (currentBranchId && !mongoose.Types.ObjectId.isValid(currentBranchId)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID format", 400));
+      }
+
+      const [manager, company, userToAssign, existingTransporter] = await Promise.all([
+        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
+        CompanyModel.findById(companyId).session(session),
+        userModel.findById(userId).session(session),
+        TransporterModel.findOne({ userId }).session(session),
+      ]);
+
+      if (!manager || !manager.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active manager of this company", 403));
+      }
+
+      if (!manager.hasPermission("can_manage_users")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage transporters", 403));
+      }
+
+      if (!company) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Company not found", 404));
+      }
+
+      if (company.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Cannot assign transporter to an inactive company", 400));
+      }
+
+      if (!userToAssign) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User not found", 404));
+      }
+
+      if (existingTransporter) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User is already a transporter", 400));
+      }
+
+      const existingDeliverer = await DelivererModel.findOne({ userId }).session(session);
+      if (existingDeliverer) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User is already a deliverer, cannot assign as transporter", 400));
+      }
+
+      const existingFreelancer = await FreelancerModel.findOne({ userId }).session(session);
+      if (existingFreelancer) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User is already a freelancer, cannot assign as transporter", 400));
+      }
+
+      if (currentBranchId) {
+        const branch = await BranchModel.findOne({ _id: currentBranchId, companyId }).session(session);
+        if (!branch) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Branch not found in this company", 404));
+        }
+      }
+
+      if (userToAssign.role !== "transporter") {
+        userToAssign.role = "transporter";
+        userToAssign.status = "active";
+        await userToAssign.save({ session });
+      }
+
+      const transporter = await TransporterModel.create(
+        [
+          {
+            userId,
+            companyId,
+            ...(currentBranchId && { currentBranchId: new mongoose.Types.ObjectId(currentBranchId) }),
+            ...(documents && { documents }),
+            availabilityStatus: "off_duty",
+            verificationStatus: "approved",
+            isActive: true,
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedTransporter = await TransporterModel.findById(transporter[0]._id)
+        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("companyId", "name businessType status")
+        .populate("currentBranchId", "name code address status")
+        .lean();
+
+      return res.status(201).json({
+        success: true,
+        message: "Transporter assigned successfully",
+        data: populatedTransporter,
+      });
+
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      if (error.code === 11000) {
+        return next(new ErrorHandler("Transporter already exists for this user", 400));
+      }
+
+      return next(new ErrorHandler(error.message || "Error assigning transporter", 500));
+    }
+  }
+);
