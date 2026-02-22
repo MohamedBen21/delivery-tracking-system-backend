@@ -10,11 +10,11 @@ const phoneRegex: RegExp = /^(\+213|0)(5|6|7)[0-9]{8}$/;
 
 export interface IUser extends Document {
   email: string;
-  phone?: string;
-  passwordHash: string;
+  phone: string;
+  passwordHash?: string;
   firstName: string;
   lastName: string;
-  imageUrl? : string;
+  imageUrl?: string;
   role: "admin" | "manager" | "client" | "deliverer" | "transporter" | "supervisor" | "freelancer";
   status: "active" | "pending" | "suspended" | "inactive";
 
@@ -57,9 +57,15 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
 
     passwordHash: {
       type: String,
-      required: [true, "Please enter your password"],
       minlength: [6, "Password must be at least 6 characters"],
       select: false,
+      required: [
+        function(this: IUser) {
+
+          return this.role !== "client";
+        },
+        "Password is required for this role"
+      ],
     },
 
     firstName: {
@@ -100,13 +106,14 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
   { timestamps: true }
 );
 
-userSchema.index({ username: 1 });
+userSchema.index({ email: 1 });
 userSchema.index({ phone: 1 });
 userSchema.index({ role: 1, status: 1 });
 
 
 userSchema.pre<IUser>("save", async function (next) {
-  if (!this.isModified("passwordHash")) {
+
+  if (!this.passwordHash || !this.isModified("passwordHash")) {
     return next();
   }
 
@@ -145,6 +152,12 @@ userSchema.methods.SignRefreshToken = function () {
 userSchema.methods.comparePassword = async function (
   enteredPassword: string
 ): Promise<boolean> {
+
+  if (!this.passwordHash) {
+
+    return false;
+  }
+  
   return await bcrypt.compare(enteredPassword, this.passwordHash);
 };
 
@@ -152,3 +165,4 @@ userSchema.methods.comparePassword = async function (
 const userModel: Model<IUser> = mongoose.model<IUser>("User", userSchema);
 
 export default userModel;
+

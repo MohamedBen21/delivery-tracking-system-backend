@@ -11,6 +11,7 @@ import CompanyModel from "../models/company.model";
 import TransporterModel from "../models/transporter.model";
 import PackageModel, { PackageStatus } from "../models/package.model";
 import FreelancerModel from "../models/freelancer.model";
+import clientModel from "../models/client.model";
 
 
 interface ILocationBody {
@@ -1292,8 +1293,17 @@ interface IDimensionsBody {
   height: number;
 }
 
+
 interface ICreatePackage {
-  clientId: string;
+  senderId: string;
+  senderType: "freelancer" | "client";
+  recipient: {
+    clientId?: string;
+    name?: string;
+    phone?: string;
+    email?: string;
+  };
+  
   weight: number;
   dimensions?: IDimensionsBody;
   isFragile?: boolean;
@@ -1301,14 +1311,19 @@ interface ICreatePackage {
   description?: string;
   declaredValue?: number;
   images?: string[];
+
   destinationBranchId?: string;
+
   destination: IDestinationBody;
+
   deliveryType: "home" | "branch_pickup";
   deliveryPriority?: "standard" | "express" | "same_day";
+
   totalPrice: number;
   paymentMethod?: "cash" | "card" | "cod" | "wallet" | "bank_transfer";
   estimatedDeliveryTime?: Date;
 }
+
 
 interface IUpdatePackage {
   weight?: number;
@@ -1341,199 +1356,282 @@ interface IAddIssue {
   priority?: "low" | "medium" | "high";
 }
 
-//  UPDATE PACKAGE
-export const createPackage = catchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
-      const supervisorUserId = req.user?._id;
-      const { branchId } = req.params;
-
-      if (!supervisorUserId) {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
-      }
-
-      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("Invalid branch ID", 400));
-      }
-
-      const {
-        clientId,
-        weight,
-        dimensions,
-        isFragile,
-        type,
-        description,
-        declaredValue,
-        images,
-        destinationBranchId,
-        destination,
-        deliveryType,
-        deliveryPriority,
-        totalPrice,
-        paymentMethod,
-        estimatedDeliveryTime,
-      } = req.body as ICreatePackage;
-
-      if (!clientId || !weight || !type || !destination || !deliveryType || !totalPrice) {
-        await session.abortTransaction();
-        session.endSession();
-        return next(
-          new ErrorHandler("clientId, weight, type, destination, deliveryType, and totalPrice are required", 400)
-        );
-      }
-
-      const [supervisor, branch, client] = await Promise.all([
-        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
-        BranchModel.findById(branchId).session(session),
-        userModel.findOne({ _id: clientId, role: "client" }).session(session),
-      ]);
-
-      if (!supervisor || !supervisor.isActive) {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
-      }
-
-      if (!supervisor.hasPermission("can_manage_packages")) {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("You don't have permission to manage packages", 403));
-      }
-
-      if (!branch) {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("Branch not found", 404));
-      }
-
-      if (branch.status !== "active") {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("Cannot create package for an inactive branch", 400));
-      }
-
-      if (!client) {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("Client not found", 404));
-      }
-
-      if (deliveryType === "branch_pickup" && !destinationBranchId) {
-        await session.abortTransaction();
-        session.endSession();
-        return next(new ErrorHandler("Destination branch is required for branch pickup", 400));
-      }
-
-      if (destinationBranchId) {
-        const destinationBranch = await BranchModel.findById(destinationBranchId).session(session);
-        if (!destinationBranch) {
-          await session.abortTransaction();
-          session.endSession();
-          return next(new ErrorHandler("Destination branch not found", 404));
-        }
-      }
-
-      const trackingPrefix = "PKG";
-      const timestamp = Date.now().toString().slice(-6);
-      const random = Math.floor(1000 + Math.random() * 9000);
-      const trackingNumber = `${trackingPrefix}${timestamp}${random}`;
-
-      const packageData = await PackageModel.create(
-        [
-          {
-            trackingNumber,
-            companyId: branch.companyId,
-            clientId,
-            weight,
-            dimensions,
-            isFragile: isFragile || false,
-            type,
-            description,
-            declaredValue,
-            images,
-            originBranchId: branchId,
-            currentBranchId: branchId,
-            destinationBranchId,
-            destination,
-            status: "pending",
-            deliveryType,
-            deliveryPriority: deliveryPriority || "standard",
-            totalPrice,
-            paymentStatus: "pending",
-            paymentMethod,
-            paidAt: null,
-            maxAttempts: 3,
-            attemptCount: 0,
-            issues: [],
-            returnInfo: { isReturn: false },
-            trackingHistory: [
-              {
-                status: "pending",
-                branchId,
-                userId: supervisorUserId,
-                notes: "Package created",
-                timestamp: new Date(),
-              },
-            ],
-            estimatedDeliveryTime,
-          },
-        ],
-        { session }
-      );
-
-      await BranchModel.findByIdAndUpdate(
-        branchId,
-        { $inc: { currentLoad: 1 } },
-        { session }
-      );
-
-      await session.commitTransaction();
-      session.endSession();
-
-      const populatedPackage = await PackageModel.findById(packageData[0]._id)
-        .populate("clientId", "firstName lastName email phone username")
-        .populate("originBranchId", "name code address")
-        .populate("currentBranchId", "name code address")
-        .populate("destinationBranchId", "name code address")
-        .populate("assignedDelivererId")
-        .populate("assignedVehicleId")
-        .lean();
-
-      return res.status(201).json({
-        success: true,
-        message: "Package created successfully",
-        data: populatedPackage,
-      });
-    } catch (error: any) {
-      await session.abortTransaction();
-      session.endSession();
-
-      if (error.name === "ValidationError") {
-        return next(
-          new ErrorHandler(
-            Object.values(error.errors)
-              .map((err: any) => err.message)
-              .join(", "),
-            400
-          )
-        );
-      }
-
-      if (error.code === 11000) {
-        return next(new ErrorHandler("Tracking number already exists, please try again", 400));
-      }
-
-      return next(new ErrorHandler(error.message || "Error creating package", 500));
+async function getOrCreateClient(
+  recipientInfo: { clientId?: string; name?: string; phone?: string; email?: string },
+  destination: IDestinationBody,
+  session: mongoose.ClientSession
+): Promise<mongoose.Types.ObjectId> {
+  
+  if (recipientInfo.clientId) {
+    if (!mongoose.Types.ObjectId.isValid(recipientInfo.clientId)) {
+      throw new Error("Invalid client id format");
     }
+    
+    const existingClient = await userModel.findOne({
+      _id: recipientInfo.clientId,
+      role: "client"
+    }).session(session);
+    
+    if (!existingClient) {
+      throw new Error("Client not found");
+    }
+    
+    return existingClient._id;
   }
-);
+  
+
+  if (!recipientInfo.phone) {
+    throw new Error("Either clientId or recipient phone is required");
+  }
+  
+
+  let client = await userModel.findOne({ 
+    phone: recipientInfo.phone,
+    role: "client" 
+  }).session(session);
+  
+  if (client) {
+    return client._id;
+  }
+  
+
+  const recipientName = recipientInfo.name || destination.recipientName;
+  
+  if (!recipientName) {
+    throw new Error("Recipient name is required to create new client");
+  }
+  
+  const [firstName, ...lastNameParts] = recipientName.trim().split(' ');
+  const lastName = lastNameParts.join(' ') || 'Client';
+  
+
+  const email = recipientInfo.email;
+  
+  const [newUser] = await userModel.create([{
+    email,
+    phone: recipientInfo.phone,
+    firstName,
+    lastName,
+    role: 'client',
+    status: 'active',
+  }], { session });
+  
+
+  await clientModel.create([{
+    userId: newUser._id,
+    deliveryAddresses: [{
+      label: 'Package Delivery Address',
+      street: destination.address,
+      city: destination.city,
+      state: destination.state,
+      isDefault: true,
+    }],
+    ...(destination.location && {
+      currentLocation: {
+        type: 'Point',
+        coordinates: destination.location.coordinates,
+        timestamp: new Date(),
+      }
+    }),
+  }], { session });
+  
+  return newUser._id;
+}
+
+//  CREATE PACKAGE
+// export const createPackage = catchAsyncError(
+//   async (req: Request, res: Response, next: NextFunction) => {
+//     const session = await mongoose.startSession();
+//     session.startTransaction();
+
+//     try {
+//       const supervisorUserId = req.user?._id;
+//       const { branchId } = req.params;
+
+//       if (!supervisorUserId) {
+//         await session.abortTransaction();
+//         session.endSession();
+//         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+//       }
+
+//       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+//         await session.abortTransaction();
+//         session.endSession();
+//         return next(new ErrorHandler("Invalid branch ID", 400));
+//       }
+
+//       const {
+//         clientId,
+//         weight,
+//         dimensions,
+//         isFragile,
+//         type,
+//         description,
+//         declaredValue,
+//         images,
+//         destinationBranchId,
+//         destination,
+//         deliveryType,
+//         deliveryPriority,
+//         totalPrice,
+//         paymentMethod,
+//         estimatedDeliveryTime,
+//       } = req.body as ICreatePackage;
+
+//       if (!clientId || !weight || !type || !destination || !deliveryType || !totalPrice) {
+//         await session.abortTransaction();
+//         session.endSession();
+//         return next(
+//           new ErrorHandler("clientId, weight, type, destination, deliveryType, and totalPrice are required", 400)
+//         );
+//       }
+
+//       const [supervisor, branch, client] = await Promise.all([
+//         SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+//         BranchModel.findById(branchId).session(session),
+//         userModel.findOne({ _id: clientId, role: "client" }).session(session),
+//       ]);
+
+//       if (!supervisor || !supervisor.isActive) {
+//         await session.abortTransaction();
+//         session.endSession();
+//         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+//       }
+
+//       if (!supervisor.hasPermission("can_manage_packages")) {
+//         await session.abortTransaction();
+//         session.endSession();
+//         return next(new ErrorHandler("You don't have permission to manage packages", 403));
+//       }
+
+//       if (!branch) {
+//         await session.abortTransaction();
+//         session.endSession();
+//         return next(new ErrorHandler("Branch not found", 404));
+//       }
+
+//       if (branch.status !== "active") {
+//         await session.abortTransaction();
+//         session.endSession();
+//         return next(new ErrorHandler("Cannot create package for an inactive branch", 400));
+//       }
+
+//       if (!client) {
+//         await session.abortTransaction();
+//         session.endSession();
+//         return next(new ErrorHandler("Client not found", 404));
+//       }
+
+//       if (deliveryType === "branch_pickup" && !destinationBranchId) {
+//         await session.abortTransaction();
+//         session.endSession();
+//         return next(new ErrorHandler("Destination branch is required for branch pickup", 400));
+//       }
+
+//       if (destinationBranchId) {
+//         const destinationBranch = await BranchModel.findById(destinationBranchId).session(session);
+//         if (!destinationBranch) {
+//           await session.abortTransaction();
+//           session.endSession();
+//           return next(new ErrorHandler("Destination branch not found", 404));
+//         }
+//       }
+
+//       const trackingPrefix = "PKG";
+//       const timestamp = Date.now().toString().slice(-6);
+//       const random = Math.floor(1000 + Math.random() * 9000);
+//       const trackingNumber = `${trackingPrefix}${timestamp}${random}`;
+
+//       const packageData = await PackageModel.create(
+//         [
+//           {
+//             trackingNumber,
+//             companyId: branch.companyId,
+//             clientId,
+//             weight,
+//             dimensions,
+//             isFragile: isFragile || false,
+//             type,
+//             description,
+//             declaredValue,
+//             images,
+//             originBranchId: branchId,
+//             currentBranchId: branchId,
+//             destinationBranchId,
+//             destination,
+//             status: "pending",
+//             deliveryType,
+//             deliveryPriority: deliveryPriority || "standard",
+//             totalPrice,
+//             paymentStatus: "pending",
+//             paymentMethod,
+//             paidAt: null,
+//             maxAttempts: 3,
+//             attemptCount: 0,
+//             issues: [],
+//             returnInfo: { isReturn: false },
+//             trackingHistory: [
+//               {
+//                 status: "pending",
+//                 branchId,
+//                 userId: supervisorUserId,
+//                 notes: "Package created",
+//                 timestamp: new Date(),
+//               },
+//             ],
+//             estimatedDeliveryTime,
+//           },
+//         ],
+//         { session }
+//       );
+
+//       await BranchModel.findByIdAndUpdate(
+//         branchId,
+//         { $inc: { currentLoad: 1 } },
+//         { session }
+//       );
+
+//       await session.commitTransaction();
+//       session.endSession();
+
+//       const populatedPackage = await PackageModel.findById(packageData[0]._id)
+//         .populate("clientId", "firstName lastName email phone username")
+//         .populate("originBranchId", "name code address")
+//         .populate("currentBranchId", "name code address")
+//         .populate("destinationBranchId", "name code address")
+//         .populate("assignedDelivererId")
+//         .populate("assignedVehicleId")
+//         .lean();
+
+//       return res.status(201).json({
+//         success: true,
+//         message: "Package created successfully",
+//         data: populatedPackage,
+//       });
+//     } catch (error: any) {
+//       await session.abortTransaction();
+//       session.endSession();
+
+//       if (error.name === "ValidationError") {
+//         return next(
+//           new ErrorHandler(
+//             Object.values(error.errors)
+//               .map((err: any) => err.message)
+//               .join(", "),
+//             400
+//           )
+//         );
+//       }
+
+//       if (error.code === 11000) {
+//         return next(new ErrorHandler("Tracking number already exists, please try again", 400));
+//       }
+
+//       return next(new ErrorHandler(error.message || "Error creating package", 500));
+//     }
+//   }
+// );
+
 
 
 
@@ -1640,6 +1738,50 @@ export const updatePackage = catchAsyncError(
         packageUpdates.paidAt = new Date();
       }
 
+      // // ADDED , Handle freelancer statistics updates based on status changes --- we will use it later
+      // if (body.status && body.status !== packageDoc.status && packageDoc.senderType === 'freelancer') {
+      //   const freelancer = await FreelancerModel.findOne({ userId: packageDoc.senderId }).session(session);
+        
+      //   if (freelancer) {
+      //     const statsUpdate: any = {};
+
+      //     if (body.status === 'delivered') {
+      //       statsUpdate.$inc = {
+      //         ...statsUpdate.$inc,
+      //         'statistics.packagesDelivered': 1,
+      //       };
+      //       if (['in_transit_to_branch', 'at_destination_branch', 'out_for_delivery'].includes(packageDoc.status)) {
+      //         statsUpdate.$inc['statistics.packagesInTransit'] = -1;
+      //       }
+      //     }
+          
+      //     if (body.status === 'failed_delivery') {
+      //       statsUpdate.$inc = {
+      //         ...statsUpdate.$inc,
+      //         'statistics.packagesFailed': 1,
+      //       };
+      //       if (['in_transit_to_branch', 'at_destination_branch', 'out_for_delivery'].includes(packageDoc.status)) {
+      //         statsUpdate.$inc['statistics.packagesInTransit'] = -1;
+      //       }
+      //     }
+          
+
+      //     if (body.status === 'cancelled') {
+      //       statsUpdate.$inc = {
+      //         ...statsUpdate.$inc,
+      //         'statistics.packagesCancelled': 1,
+      //       };
+      //       if (['in_transit_to_branch', 'at_destination_branch', 'out_for_delivery'].includes(packageDoc.status)) {
+      //         statsUpdate.$inc['statistics.packagesInTransit'] = -1;
+      //       }
+      //     }
+          
+      //     if (Object.keys(statsUpdate).length > 0) {
+      //       await FreelancerModel.findByIdAndUpdate(freelancer._id, statsUpdate, { session });
+      //     }
+      //   }
+      // }
+
       await PackageModel.findByIdAndUpdate(
         packageId,
         { $set: packageUpdates },
@@ -1672,7 +1814,8 @@ export const updatePackage = catchAsyncError(
       session.endSession();
 
       const updatedPackage = await PackageModel.findById(packageId)
-        .populate("clientId", "firstName lastName email phone username")
+        .populate("senderId", "firstName lastName email phone role")
+        .populate("clientId", "firstName lastName email phone")
         .populate("originBranchId", "name code address")
         .populate("currentBranchId", "name code address")
         .populate("destinationBranchId", "name code address")
