@@ -1633,6 +1633,283 @@ async function getOrCreateClient(
 // );
 
 
+export const createPackage = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+
+      const supervisorUserId = req.user?._id;
+      const { branchId } = req.params;
+
+      if (!supervisorUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      const {
+        senderId,
+        senderType,
+        recipient,
+        weight,
+        dimensions,
+        isFragile,
+        type,
+        description,
+        declaredValue,
+        images,
+        destinationBranchId,
+        destination,
+        deliveryType,
+        deliveryPriority,
+        totalPrice,
+        paymentMethod,
+        estimatedDeliveryTime,
+      } = req.body as ICreatePackage;
+
+
+      if (!senderId || !senderType || !weight || !type || !destination || !deliveryType || !totalPrice) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "senderId, senderType, weight, type, destination, deliveryType, and totalPrice are required",
+            400
+          )
+        );
+      }
+
+      if (!recipient || (!recipient.clientId && !recipient.phone)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Recipient info is required (either clientId or phone)", 400)
+        );
+      }
+
+
+      if (!mongoose.Types.ObjectId.isValid(senderId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid sender ID", 400));
+      }
+
+
+      const [supervisor, branch, sender, freelancer] = await Promise.all([
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+        BranchModel.findById(branchId).session(session),
+        userModel.findById(senderId).session(session),
+        FreelancerModel.findOne({ userId: senderId }).session(session)
+      ]);
+
+
+      if (!supervisor || !supervisor.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+
+      if (!supervisor.hasPermission("can_manage_packages")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage packages", 403));
+      }
+
+
+      if (!branch) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Branch not found", 404));
+      }
+
+      if (branch.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Cannot create package for an inactive branch", 400));
+      }
+
+
+      if (!sender) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Sender not found", 404));
+      }
+
+
+      if(sender.role !== "freelancer"){
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Freelancer not found", 404));
+      }
+
+      if (!freelancer) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Freelancer not found", 404));
+      }
+
+      if (freelancer.status !== 'active') {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Freelancer account is not active", 403));
+      }
+
+      if (freelancer.defaultOriginBranchId.toString() !== branchId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Package origin must be freelancer's default branch", 400));
+      }
+      
+
+      if (deliveryType === "branch_pickup" && !destinationBranchId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Destination branch is required for branch pickup", 400));
+      }
+
+      if (destinationBranchId) {
+        const destinationBranch = await BranchModel.findById(destinationBranchId).session(session);
+        if (!destinationBranch) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Destination branch not found", 404));
+        }
+      }
+
+      let clientId: mongoose.Types.ObjectId;
+
+      try {
+        clientId = await getOrCreateClient(recipient, destination, session);
+      } catch (error: any) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler(error.message || "Error processing recipient info", 400));
+      }
+
+      const trackingPrefix = "PKG";
+      const timestamp = Date.now().toString().slice(-6);
+      const random = Math.floor(1000 + Math.random() * 9000);
+      const trackingNumber = `${trackingPrefix}${timestamp}${random}`;
+
+
+      const packageData = await PackageModel.create(
+        [
+          {
+            trackingNumber,
+            companyId: branch.companyId,
+            senderId,
+            senderType,
+            clientId,           
+            weight,
+            dimensions,
+            isFragile: isFragile || false,
+            type,
+            description,
+            declaredValue,
+            images,
+            originBranchId: branchId,
+            currentBranchId: branchId,
+            destinationBranchId,
+            destination,
+            status: "pending",
+            deliveryType,
+            deliveryPriority: deliveryPriority || "standard",
+            totalPrice,
+            paymentStatus: "pending",
+            paymentMethod,
+            paidAt: null,
+            maxAttempts: 3,
+            attemptCount: 0,
+            issues: [],
+            returnInfo: { isReturn: false },
+            trackingHistory: [
+              {
+                status: "pending",
+                branchId,
+                userId: supervisorUserId,
+                notes: `Package created by supervisor for ${senderType}`,
+                timestamp: new Date(),
+              },
+            ],
+            estimatedDeliveryTime,
+          },
+        ],
+        { session }
+      );
+
+
+      await BranchModel.findByIdAndUpdate(
+        branchId,
+        { $inc: { currentLoad: 1 } },
+        { session }
+      );
+
+      // // Update freelancer statistics if sender is freelancer --- i will use it later
+      // if (senderType === 'freelancer' && freelancer) {
+      //   await FreelancerModel.findByIdAndUpdate(
+      //     freelancer._id,
+      //     {
+      //       $inc: {
+      //         'statistics.totalPackagesSent': 1,
+      //         'statistics.packagesInTransit': 1,
+      //         'statistics.totalSpent': totalPrice,
+      //       },
+      //       $set: { lastActiveAt: new Date() }
+      //     },
+      //     { session }
+      //   );
+      // }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const populatedPackage = await PackageModel.findById(packageData[0]._id)
+        .populate("senderId", "firstName lastName email phone role")
+        .populate("clientId", "firstName lastName email phone")
+        .populate("originBranchId", "name code address")
+        .populate("currentBranchId", "name code address")
+        .populate("destinationBranchId", "name code address")
+        .populate("assignedDelivererId")
+        .populate("assignedVehicleId")
+        .lean();
+
+      return res.status(201).json({
+        success: true,
+        message: "Package created successfully",
+        data: populatedPackage,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      if (error.code === 11000) {
+        return next(new ErrorHandler("Tracking number already exists, please try again", 400));
+      }
+
+      return next(new ErrorHandler(error.message || "Error creating package", 500));
+    }
+  }
+);
+
 
 
 //  UPDATE PACKAGE
