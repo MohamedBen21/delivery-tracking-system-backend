@@ -1498,7 +1498,6 @@ export const createSupervisor = catchAsyncError(
         );
       }
 
-      // ===== Create User =====
       const user = await userModel.create(
         [
           {
@@ -1506,7 +1505,7 @@ export const createSupervisor = catchAsyncError(
             lastName,
             email,
             phone,
-            password, // make sure pre-save hashes it
+            password, 
             role: "supervisor",
           },
         ],
