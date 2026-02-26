@@ -1,22 +1,25 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 import bcrypt from "bcryptjs";
-import { NextFunction } from "express";
 import jwt from "jsonwebtoken";
 require("dotenv").config();
 
 const emailRegex: RegExp = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const phoneRegex: RegExp = /^(\+213|0)(5|6|7)[0-9]{8}$/;
 
-
 export interface IUser extends Document {
   email: string;
   phone?: string;
-  username: string;
   passwordHash: string;
   firstName: string;
   lastName: string;
-  imageUrl? : string;
-  role: "admin" | "manager" | "client" | "deliverer" | "transporter" | "supervisor";
+  imageUrl?: string;
+  role:
+    | "admin"
+    | "manager"
+    | "client"
+    | "deliverer"
+    | "transporter"
+    | "supervisor";
   status: "active" | "pending" | "suspended" | "inactive";
 
   comparePassword: (password: string) => Promise<boolean>;
@@ -56,16 +59,6 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
       },
     },
 
-    username: {
-      type: String,
-      required: [true, "Please enter a username"],
-      unique: true,
-      trim: true,
-
-      minlength: [3, "Username must be at least 3 characters long"],
-      maxlength: [30, "Username must not exceed 30 characters"],
-    },
-
     passwordHash: {
       type: String,
       required: [true, "Please enter your password"],
@@ -77,19 +70,30 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
       type: String,
       required: [true, "Please enter your first name"],
       trim: true,
+      minlength: [3, "Username must be at least 3 characters long"],
+      maxlength: [30, "Username must not exceed 30 characters"],
     },
 
     lastName: {
       type: String,
       required: [true, "Please enter your last name"],
       trim: true,
+      minlength: [3, "Username must be at least 3 characters long"],
+      maxlength: [30, "Username must not exceed 30 characters"],
     },
 
     role: {
       type: String,
       enum: {
-        values: ["admin", "manager", "client", "deliverer", "transporter", "supervisor"],
-        message: "{VALUE} is not a valid role.", 
+        values: [
+          "admin",
+          "manager",
+          "client",
+          "deliverer",
+          "transporter",
+          "supervisor",
+        ],
+        message: "{VALUE} is not a valid role.",
       },
       default: "client",
     },
@@ -107,13 +111,12 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
       default: null,
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 userSchema.index({ username: 1 });
 userSchema.index({ phone: 1 });
 userSchema.index({ role: 1, status: 1 });
-
 
 userSchema.pre<IUser>("save", async function (next) {
   if (!this.isModified("passwordHash")) {
@@ -121,43 +124,33 @@ userSchema.pre<IUser>("save", async function (next) {
   }
 
   try {
-
     this.passwordHash = await bcrypt.hash(this.passwordHash, 10);
 
     next();
-
   } catch (error: any) {
-
     next(error);
   }
-
 });
-
 
 userSchema.methods.SignAccessToken = function () {
   return jwt.sign(
     { id: this._id, role: this.role },
     process.env.ACCESS_TOKEN || "",
-    { expiresIn: "15m" }
+    { expiresIn: "15m" },
   );
 };
-
 
 userSchema.methods.SignRefreshToken = function () {
-  return jwt.sign(
-    { id: this._id },
-    process.env.REFRESH_TOKEN || "",
-    { expiresIn: "7d" }
-  );
+  return jwt.sign({ id: this._id }, process.env.REFRESH_TOKEN || "", {
+    expiresIn: "7d",
+  });
 };
 
-
 userSchema.methods.comparePassword = async function (
-  enteredPassword: string
+  enteredPassword: string,
 ): Promise<boolean> {
   return await bcrypt.compare(enteredPassword, this.passwordHash);
 };
-
 
 const userModel: Model<IUser> = mongoose.model<IUser>("User", userSchema);
 
