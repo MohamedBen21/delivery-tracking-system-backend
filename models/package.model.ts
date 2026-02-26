@@ -27,6 +27,8 @@ export type PaymentMethod = 'cash' | 'card' | 'cod' | 'wallet' | 'bank_transfer'
 
 export type RefundStatus = 'pending' | 'processed' | 'rejected';
 
+export type SenderType = 'freelancer' | 'client';
+
 export interface IDimensions {
   length: number; 
   width: number;
@@ -81,7 +83,11 @@ export interface ITrackingEvent {
 export interface IPackage extends Document {
   trackingNumber: string;
   companyId: mongoose.Types.ObjectId;
-  clientId: mongoose.Types.ObjectId;
+  
+  senderId: mongoose.Types.ObjectId;
+  senderType: SenderType;
+
+  clientId?: mongoose.Types.ObjectId;
 
   weight: number; 
   volume?: number;
@@ -248,7 +254,7 @@ const issueSchema = new Schema<IIssue>({
     ref: 'User',
     required: true,
   },
-
+  
   reportedAt: {
     type: Date,
     default: Date.now,
@@ -363,11 +369,25 @@ const packageSchema = new Schema<IPackage>({
     ref: 'Company',
     required: [true, 'Company reference is required'],
   },
+  
+  senderId: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'Sender ID is required'],
+  },
+  
+  senderType: {
+    type: String,
+    enum: {
+      values: ['freelancer', 'client'],
+      message: 'Sender type must be freelancer or client',
+    },
+    required: [true, 'Sender type is required'],
+  },
 
   clientId: {
     type: Schema.Types.ObjectId,
     ref: 'User',
-    required: [true, 'Client reference is required'],
   },
   
   weight: {
@@ -448,7 +468,7 @@ const packageSchema = new Schema<IPackage>({
            'failed_delivery', 'rescheduled', 'returned', 'cancelled', 
            'lost', 'damaged', 'on_hold'],
     default: 'pending',
-
+    
   },
   
   deliveryType: {
@@ -456,6 +476,7 @@ const packageSchema = new Schema<IPackage>({
     enum: ['home', 'branch_pickup', 'locker'],
     default: 'home',
   },
+  
   deliveryPriority: {
     type: String,
     enum: ['standard', 'express', 'same_day'],
@@ -473,10 +494,12 @@ const packageSchema = new Schema<IPackage>({
     enum: ['pending', 'paid', 'partially_paid', 'refunded', 'failed'],
     default: 'pending',
   },
+  
   paymentMethod: {
     type: String,
     enum: ['cash', 'card', 'cod', 'wallet', 'bank_transfer'],
   },
+  
   paidAt: {
     type: Date,
   },
@@ -485,20 +508,22 @@ const packageSchema = new Schema<IPackage>({
     type: Schema.Types.ObjectId,
     ref: 'Transporter',
   },
+  
   assignedDelivererId: {
     type: Schema.Types.ObjectId,
     ref: 'Deliverer',
   },
+  
   assignedVehicleId: {
     type: Schema.Types.ObjectId,
     ref: 'Vehicle',
   },
+  
   currentRouteId: {
     type: Schema.Types.ObjectId,
     ref: 'Route',
   },
   
-
   attemptCount: {
     type: Number,
     default: 0,
@@ -508,6 +533,7 @@ const packageSchema = new Schema<IPackage>({
   lastAttemptDate: {
     type: Date,
   },
+  
   nextAttemptDate: {
     type: Date,
   },
@@ -518,8 +544,8 @@ const packageSchema = new Schema<IPackage>({
     min: 1,
     max: 10,
   },
-  
 
+  
   issues: {
     type: [issueSchema],
     default: [],
@@ -537,10 +563,10 @@ const packageSchema = new Schema<IPackage>({
     default: [],
   },
   
-
   estimatedDeliveryTime: {
     type: Date,
   },
+  
   deliveredAt: {
     type: Date,
   },
@@ -785,6 +811,7 @@ packageSchema.methods.canBeAccepted = function(): boolean {
   );
 };
 
+
 packageSchema.pre('save', function(next) {
   if (this.isNew && !this.trackingNumber) {
     const prefix = 'PKG';
@@ -796,7 +823,7 @@ packageSchema.pre('save', function(next) {
   if (this.deliveryType === 'branch_pickup' && !this.destinationBranchId) {
     return next(new Error('Destination branch is required for branch pickup'));
   }
-  
+
   
   if (!this.volume && this.dimensions) {
     const { length, width, height } = this.dimensions;
