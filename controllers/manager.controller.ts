@@ -3002,3 +3002,287 @@ export const updateVehicle = catchAsyncError(
   },
 );
 
+
+
+// ─────────────────────────────────────────────
+//  GET COMPANY VEHICLES
+// ─────────────────────────────────────────────
+
+export const getCompanyVehicles = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const managerId = req.user?._id;
+    const { companyId } = req.params;
+
+    // ── Auth ──────────────────────────────────────────────────────────────
+    if (!managerId) {
+      return next(
+        new ErrorHandler("Unauthorized, you are not authenticated.", 401),
+      );
+    }
+
+    // ── Param validation ──────────────────────────────────────────────────
+    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+      return next(new ErrorHandler("Invalid company ID", 400));
+    }
+
+    // ── Query params ──────────────────────────────────────────────────────
+    const {
+      type,
+      status,
+      branchId,
+      search,
+      page = "1",
+      limit = "20",
+      sortBy = "createdAt",
+      sortOrder = "desc",
+    } = req.query as IGetCompanyVehiclesQuery;
+
+    if (type && !VEHICLE_TYPES.includes(type as VehicleType)) {
+      return next(
+        new ErrorHandler(
+          `Invalid type filter. Must be one of: ${VEHICLE_TYPES.join(", ")}`,
+          400,
+        ),
+      );
+    }
+
+    if (status && !VEHICLE_STATUSES.includes(status as VehicleStatus)) {
+      return next(
+        new ErrorHandler(
+          `Invalid status filter. Must be one of: ${VEHICLE_STATUSES.join(", ")}`,
+          400,
+        ),
+      );
+    }
+
+    if (branchId && !mongoose.Types.ObjectId.isValid(branchId)) {
+      return next(new ErrorHandler("Invalid branchId filter", 400));
+    }
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+
+    if (isNaN(pageNum) || pageNum < 1) {
+      return next(new ErrorHandler("page must be a positive integer", 400));
+    }
+    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
+      return next(
+        new ErrorHandler("limit must be between 1 and 100", 400),
+      );
+    }
+
+    const ALLOWED_SORT_FIELDS = [
+      "createdAt",
+      "maxWeight",
+      "maxVolume",
+      "year",
+      "status",
+    ];
+    if (!ALLOWED_SORT_FIELDS.includes(sortBy)) {
+      return next(
+        new ErrorHandler(
+          `sortBy must be one of: ${ALLOWED_SORT_FIELDS.join(", ")}`,
+          400,
+        ),
+      );
+    }
+    if (!["asc", "desc"].includes(sortOrder)) {
+      return next(
+        new ErrorHandler("sortOrder must be 'asc' or 'desc'", 400),
+      );
+    }
+
+    // ── Authorization + company check (parallel) ──────────────────────────
+    const [company, manager, requestingUser] = await Promise.all([
+      CompanyModel.findById(companyId).lean(),
+      ManagerModel.findOne({ userId: managerId, companyId }).lean(),
+      userModel.findById(managerId).select("role").lean(),
+    ]);
+
+    if (!company) {
+      return next(new ErrorHandler("Company not found", 404));
+    }
+
+    const isAdmin = requestingUser?.role === "admin";
+    const isAuthorizedManager = manager && manager.isActive;
+
+    if (!isAdmin && !isAuthorizedManager) {
+      return next(
+        new ErrorHandler(
+          "Not authorized to view vehicles for this company",
+          403,
+        ),
+      );
+    }
+
+    // ── Build aggregation pipeline ────────────────────────────────────────
+    const matchStage: Record<string, any> = {
+      companyId: new mongoose.Types.ObjectId(companyId.toString()),
+    };
+
+    if (type) matchStage.type = type;
+    if (status) matchStage.status = status;
+
+    // Branch filter: respect manager's branch access scope
+    if (branchId) {
+      if (!isAdmin && manager && !manager.branchAccess.allBranches) {
+        const allowedIds = manager.branchAccess.specificBranches.map((id) =>
+          id.toString(),
+        );
+        if (!allowedIds.includes(branchId)) {
+          return next(
+            new ErrorHandler(
+              "You do not have access to this branch",
+              403,
+            ),
+          );
+        }
+      }
+      matchStage.currentBranchId = new mongoose.Types.ObjectId(branchId);
+    } else if (!isAdmin && manager && !manager.branchAccess.allBranches) {
+      matchStage.currentBranchId = {
+        $in: manager.branchAccess.specificBranches,
+      };
+    }
+
+    // ── Search filter (text match on registration, brand, modelName) ──────
+    if (search && typeof search === "string" && search.trim().length > 0) {
+      const searchRegex = { $regex: search.trim(), $options: "i" };
+      matchStage.$or = [
+        { registrationNumber: searchRegex },
+        { brand: searchRegex },
+        { modelName: searchRegex },
+      ];
+    }
+
+    const sortDirection = sortOrder === "asc" ? 1 : -1;
+    const skip = (pageNum - 1) * limitNum;
+
+    const pipeline: mongoose.PipelineStage[] = [
+      { $match: matchStage },
+      // ── Lookup company ────────────────────────────────────────────────
+      {
+        $lookup: {
+          from: "companies",
+          localField: "companyId",
+          foreignField: "_id",
+          as: "company",
+          pipeline: [{ $project: { name: 1, businessType: 1 } }],
+        },
+      },
+      { $unwind: { path: "$company", preserveNullAndEmptyArrays: true } },
+      // ── Lookup current branch ─────────────────────────────────────────
+      {
+        $lookup: {
+          from: "branches",
+          localField: "currentBranchId",
+          foreignField: "_id",
+          as: "currentBranch",
+          pipeline: [{ $project: { name: 1, code: 1, status: 1 } }],
+        },
+      },
+      { $unwind: { path: "$currentBranch", preserveNullAndEmptyArrays: true } },
+      // ── Lookup assigned user ──────────────────────────────────────────
+      {
+        $lookup: {
+          from: "users",
+          localField: "assignedUserId",
+          foreignField: "_id",
+          as: "assignedUser",
+          pipeline: [
+            {
+              $project: { firstName: 1, lastName: 1, email: 1, phone: 1 },
+            },
+          ],
+        },
+      },
+      { $unwind: { path: "$assignedUser", preserveNullAndEmptyArrays: true } },
+      // ── Computed fields (mirrors model virtuals) ───────────────────────
+      {
+        $addFields: {
+          isAssigned: {
+            $and: [
+              { $ifNull: ["$assignedUserId", false] },
+              { $ifNull: ["$currentBranchId", false] },
+            ],
+          },
+          isHeavy: {
+            $in: ["$type", ["large_truck", "small_truck"]],
+          },
+          isLight: {
+            $in: ["$type", ["motorcycle", "car"]],
+          },
+          category: {
+            $switch: {
+              branches: [
+                {
+                  case: { $in: ["$type", ["motorcycle", "car"]] },
+                  then: "Light",
+                },
+                { case: { $eq: ["$type", "van"] }, then: "Medium" },
+                {
+                  case: {
+                    $in: ["$type", ["small_truck", "large_truck"]],
+                  },
+                  then: "Heavy",
+                },
+              ],
+              default: "Unknown",
+            },
+          },
+        },
+      },
+      // ── Sort ──────────────────────────────────────────────────────────
+      { $sort: { [sortBy]: sortDirection } },
+      // ── Facet: paginated results + total count ────────────────────────
+      {
+        $facet: {
+          data: [{ $skip: skip }, { $limit: limitNum }],
+          totalCount: [{ $count: "count" }],
+          // Fleet summary stats (counts per status & type)
+          statusSummary: [
+            { $group: { _id: "$status", count: { $sum: 1 } } },
+          ],
+          typeSummary: [
+            { $group: { _id: "$type", count: { $sum: 1 } } },
+          ],
+        },
+      },
+    ];
+
+    const [result] = await VehicleModel.aggregate(pipeline);
+
+    const total: number = result.totalCount[0]?.count ?? 0;
+    const totalPages = Math.ceil(total / limitNum);
+
+    // Reshape summaries into plain objects
+    const statusSummary = Object.fromEntries(
+      (result.statusSummary as { _id: string; count: number }[]).map(
+        ({ _id, count }) => [_id, count],
+      ),
+    );
+
+    const typeSummary = Object.fromEntries(
+      (result.typeSummary as { _id: string; count: number }[]).map(
+        ({ _id, count }) => [_id, count],
+      ),
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result.data,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1,
+      },
+      summary: {
+        byStatus: statusSummary,
+        byType: typeSummary,
+      },
+    });
+  },
+);
