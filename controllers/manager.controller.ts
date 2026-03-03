@@ -9,6 +9,7 @@ import BranchModel, { WeekDay } from "../models/branch.model";
 import SupervisorModel, {
   SupervisorPermission,
 } from "../models/supervisor.model";
+import VehicleModel, { AssignedUserRole, IVehicleDocuments, VehicleStatus, VehicleType } from "../models/vehicle.model";
 
 type CompanyBusinessType = "solo" | "company";
 
@@ -1985,3 +1986,144 @@ export const getMySupervisors = catchAsyncError(
     });
   },
 );
+
+
+
+const VEHICLE_TYPES: VehicleType[] = [
+  "motorcycle",
+  "car",
+  "van",
+  "small_truck",
+  "large_truck",
+];
+
+const VEHICLE_STATUSES: VehicleStatus[] = [
+  "available",
+  "in_use",
+  "maintenance",
+  "out_of_service",
+  "retired",
+];
+
+const ASSIGNED_USER_ROLES: AssignedUserRole[] = [
+  "transporter",
+  "deliverer",
+  "driver",
+];
+
+
+const REGISTRATION_NUMBER_REGEX = /^[A-Z0-9\s\-]{5,20}$/;
+
+
+interface ICreateVehicleDocuments {
+  registrationCard?: string; 
+  insurance?: string;
+  insuranceExpiry?: string; 
+  technicalInspection?: string; 
+  inspectionExpiry?: string; 
+}
+
+interface ICreateVehicleBody {
+  type: VehicleType;
+  registrationNumber: string; 
+  brand?: string; 
+  modelName?: string; 
+  year?: number; 
+  color?: string;
+  maxWeight: number;
+  maxVolume: number;
+  supportsFragile?: boolean;
+  currentBranchId?: string; 
+  documents?: ICreateVehicleDocuments;
+  notes?: string;
+}
+
+interface IUpdateVehicleBody {
+
+  type?: VehicleType;
+  registrationNumber?: string;
+  brand?: string;
+  modelName?: string;
+  year?: number;
+  color?: string;
+  maxWeight?: number;
+  maxVolume?: number;
+  supportsFragile?: boolean;
+  currentBranchId?: string;
+  documents?: ICreateVehicleDocuments;
+  status?: VehicleStatus;
+  notes?: string;
+}
+
+interface IGetCompanyVehiclesQuery {
+  type?: VehicleType;
+  status?: VehicleStatus;
+  branchId?: string;
+  search?: string; 
+  page?: string;
+  limit?: string;
+  sortBy?: "createdAt" | "maxWeight" | "maxVolume" | "year" | "status";
+  sortOrder?: "asc" | "desc";
+}
+
+
+//  HELPER — validate document sub-object
+
+
+function validateDocuments(
+  docs: ICreateVehicleDocuments,
+  next: NextFunction,
+): boolean {
+  const urlFields: (keyof ICreateVehicleDocuments)[] = [
+    "registrationCard",
+    "insurance",
+    "technicalInspection",
+  ];
+
+  for (const field of urlFields) {
+    const val = docs[field];
+    if (val !== undefined) {
+      if (typeof val !== "string" || val.trim().length === 0) {
+        next(
+          new ErrorHandler(
+            `documents.${field} must be a non-empty string (URL)`,
+            400,
+          ),
+        );
+        return false;
+      }
+    }
+  }
+
+  const dateFields: Array<{
+    key: "insuranceExpiry" | "inspectionExpiry";
+    label: string;
+  }> = [
+    { key: "insuranceExpiry", label: "documents.insuranceExpiry" },
+    { key: "inspectionExpiry", label: "documents.inspectionExpiry" },
+  ];
+
+  for (const { key, label } of dateFields) {
+    const val = docs[key];
+    if (val !== undefined) {
+      if (typeof val !== "string") {
+        next(new ErrorHandler(`${label} must be an ISO date string`, 400));
+        return false;
+      }
+      const parsed = new Date(val);
+      if (isNaN(parsed.getTime())) {
+        next(new ErrorHandler(`${label} is not a valid date`, 400));
+        return false;
+      }
+      if (parsed <= new Date()) {
+        next(
+          new ErrorHandler(`${label} must be a future date`, 400),
+        );
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
