@@ -2538,3 +2538,467 @@ export const createVehicle = catchAsyncError(
   },
 );
 
+
+
+// ─────────────────────────────────────────────
+//  UPDATE VEHICLE  (info only — no assignment)
+// ─────────────────────────────────────────────
+
+export const updateVehicle = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const managerId = req.user?._id;
+      const { companyId, vehicleId } = req.params;
+
+      // ── Auth ──────────────────────────────────────────────────────────────
+      if (!managerId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Unauthorized, you are not authenticated.", 401),
+        );
+      }
+
+      // ── Param validation ──────────────────────────────────────────────────
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      if (!vehicleId || !mongoose.Types.ObjectId.isValid(vehicleId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid vehicle ID", 400));
+      }
+
+      // ── Body extraction ───────────────────────────────────────────────────
+      const {
+        type,
+        registrationNumber,
+        brand,
+        modelName,
+        year,
+        color,
+        maxWeight,
+        maxVolume,
+        supportsFragile,
+        currentBranchId,
+        documents,
+        status,
+        notes,
+      } = req.body as IUpdateVehicleBody;
+
+      // Reject attempts to assign vehicles via this endpoint
+      if (
+        (req.body as any).assignedUserId !== undefined ||
+        (req.body as any).assignedUserRole !== undefined
+      ) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "Use the dedicated assign/release endpoint to manage vehicle assignment",
+            400,
+          ),
+        );
+      }
+
+      // ── Field-level validation ────────────────────────────────────────────
+      if (type !== undefined && !VEHICLE_TYPES.includes(type)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            `Invalid vehicle type. Must be one of: ${VEHICLE_TYPES.join(", ")}`,
+            400,
+          ),
+        );
+      }
+
+      let normalizedRegNum: string | undefined;
+      if (registrationNumber !== undefined) {
+        if (typeof registrationNumber !== "string") {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("Registration number must be a string", 400),
+          );
+        }
+        normalizedRegNum = registrationNumber.trim().toUpperCase();
+        if (!REGISTRATION_NUMBER_REGEX.test(normalizedRegNum)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler(
+              "Registration number must be 5–20 characters and contain only letters, numbers, spaces, or hyphens",
+              400,
+            ),
+          );
+        }
+      }
+
+      if (maxWeight !== undefined) {
+        if (typeof maxWeight !== "number" || isNaN(maxWeight)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("maxWeight must be a number", 400));
+        }
+        if (maxWeight < 1 || maxWeight > 50000) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("maxWeight must be between 1 and 50 000 kg", 400),
+          );
+        }
+      }
+
+      if (maxVolume !== undefined) {
+        if (typeof maxVolume !== "number" || isNaN(maxVolume)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("maxVolume must be a number", 400));
+        }
+        if (maxVolume < 0.1 || maxVolume > 100) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler(
+              "maxVolume must be between 0.1 and 100 cubic meters",
+              400,
+            ),
+          );
+        }
+      }
+
+      if (brand !== undefined) {
+        if (typeof brand !== "string" || brand.trim().length === 0) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("brand must be a non-empty string", 400),
+          );
+        }
+        if (brand.trim().length > 50) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("brand cannot exceed 50 characters", 400),
+          );
+        }
+      }
+
+      if (modelName !== undefined) {
+        if (typeof modelName !== "string" || modelName.trim().length === 0) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("modelName must be a non-empty string", 400),
+          );
+        }
+        if (modelName.trim().length > 50) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("modelName cannot exceed 50 characters", 400),
+          );
+        }
+      }
+
+      if (year !== undefined) {
+        if (!Number.isInteger(year)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("year must be an integer", 400));
+        }
+        const maxYear = new Date().getFullYear() + 1;
+        if (year < 1900 || year > maxYear) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler(`year must be between 1900 and ${maxYear}`, 400),
+          );
+        }
+      }
+
+      if (color !== undefined && typeof color !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("color must be a string", 400));
+      }
+
+      if (supportsFragile !== undefined && typeof supportsFragile !== "boolean") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("supportsFragile must be a boolean", 400),
+        );
+      }
+
+      if (currentBranchId !== undefined) {
+        if (!mongoose.Types.ObjectId.isValid(currentBranchId)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Invalid currentBranchId", 400));
+        }
+      }
+
+      if (status !== undefined) {
+        if (status === "in_use") {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler(
+              "Cannot manually set status to 'in_use'. Use the assign endpoint instead.",
+              400,
+            ),
+          );
+        }
+        if (!VEHICLE_STATUSES.includes(status)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler(
+              `Invalid status. Must be one of: ${VEHICLE_STATUSES.filter((s) => s !== "in_use").join(", ")}`,
+              400,
+            ),
+          );
+        }
+      }
+
+      if (notes !== undefined) {
+        if (typeof notes !== "string") {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("notes must be a string", 400));
+        }
+        if (notes.trim().length > 500) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("notes cannot exceed 500 characters", 400),
+          );
+        }
+      }
+
+      if (documents !== undefined) {
+        if (typeof documents !== "object" || Array.isArray(documents)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("documents must be an object", 400));
+        }
+        const docsValid = validateDocuments(documents, next);
+        if (!docsValid) {
+          await session.abortTransaction();
+          session.endSession();
+          return;
+        }
+      }
+
+      // ── DB checks (parallel) ──────────────────────────────────────────────
+      const [vehicle, manager, requestingUser] = await Promise.all([
+        VehicleModel.findOne({ _id: vehicleId, companyId }).session(session),
+        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
+        userModel.findById(managerId).select("role").session(session).lean(),
+      ]);
+
+      if (!vehicle) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "Vehicle not found or does not belong to this company",
+            404,
+          ),
+        );
+      }
+
+      const isAdmin = requestingUser?.role === "admin";
+      const isAuthorizedManager =
+        manager &&
+        manager.isActive &&
+        manager.hasPermission("can_manage_vehicles");
+
+      if (!isAdmin && !isAuthorizedManager) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "Not authorized to manage vehicles for this company",
+            403,
+          ),
+        );
+      }
+
+      // Guard: cannot change status away from in_use without releasing first
+      if (vehicle.status === "in_use" && status) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "Cannot change status of a vehicle currently in use. Release the vehicle first.",
+            400,
+          ),
+        );
+      }
+
+      // Check registration number uniqueness only if it changed
+      if (
+        normalizedRegNum &&
+        normalizedRegNum !== vehicle.registrationNumber
+      ) {
+        const duplicate = await VehicleModel.findOne({
+          registrationNumber: normalizedRegNum,
+          _id: { $ne: vehicleId },
+        })
+          .session(session)
+          .lean();
+
+        if (duplicate) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler(
+              "A vehicle with this registration number already exists",
+              400,
+            ),
+          );
+        }
+      }
+
+      // ── Build update payload ──────────────────────────────────────────────
+      const updatePayload: Record<string, any> = {};
+
+      if (type !== undefined) updatePayload.type = type;
+      if (normalizedRegNum !== undefined)
+        updatePayload.registrationNumber = normalizedRegNum;
+      if (brand !== undefined) updatePayload.brand = brand.trim();
+      if (modelName !== undefined) updatePayload.modelName = modelName.trim();
+      if (year !== undefined) updatePayload.year = year;
+      if (color !== undefined) updatePayload.color = color.trim();
+      if (maxWeight !== undefined) updatePayload.maxWeight = maxWeight;
+      if (maxVolume !== undefined) updatePayload.maxVolume = maxVolume;
+      if (supportsFragile !== undefined)
+        updatePayload.supportsFragile = supportsFragile;
+      if (currentBranchId !== undefined)
+        updatePayload.currentBranchId = currentBranchId;
+      if (status !== undefined) updatePayload.status = status;
+      if (notes !== undefined) updatePayload.notes = notes.trim();
+
+      // Merge documents (partial update — only supplied keys are overwritten)
+      if (documents) {
+        if (documents.registrationCard !== undefined)
+          updatePayload["documents.registrationCard"] =
+            documents.registrationCard;
+        if (documents.insurance !== undefined)
+          updatePayload["documents.insurance"] = documents.insurance;
+        if (documents.insuranceExpiry !== undefined)
+          updatePayload["documents.insuranceExpiry"] = new Date(
+            documents.insuranceExpiry,
+          );
+        if (documents.technicalInspection !== undefined)
+          updatePayload["documents.technicalInspection"] =
+            documents.technicalInspection;
+        if (documents.inspectionExpiry !== undefined)
+          updatePayload["documents.inspectionExpiry"] = new Date(
+            documents.inspectionExpiry,
+          );
+      }
+
+      const updatedVehicle = await VehicleModel.findByIdAndUpdate(
+        vehicleId,
+        { $set: updatePayload },
+        { new: true, runValidators: true, session },
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      // ── Response (aggregation) ────────────────────────────────────────────
+      const [populatedVehicle] = await VehicleModel.aggregate([
+        { $match: { _id: updatedVehicle!._id } },
+        {
+          $lookup: {
+            from: "companies",
+            localField: "companyId",
+            foreignField: "_id",
+            as: "company",
+            pipeline: [{ $project: { name: 1, businessType: 1, status: 1 } }],
+          },
+        },
+        { $unwind: { path: "$company", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "branches",
+            localField: "currentBranchId",
+            foreignField: "_id",
+            as: "currentBranch",
+            pipeline: [{ $project: { name: 1, code: 1, status: 1 } }],
+          },
+        },
+        {
+          $unwind: {
+            path: "$currentBranch",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "users",
+            localField: "assignedUserId",
+            foreignField: "_id",
+            as: "assignedUser",
+            pipeline: [
+              {
+                $project: { firstName: 1, lastName: 1, email: 1, phone: 1 },
+              },
+            ],
+          },
+        },
+        {
+          $unwind: {
+            path: "$assignedUser",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+      ]);
+
+      return res.status(200).json({
+        success: true,
+        message: "Vehicle updated successfully",
+        data: populatedVehicle,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+
+      if (error.code === 11000) {
+        return next(
+          new ErrorHandler(
+            "A vehicle with this registration number already exists",
+            400,
+          ),
+        );
+      }
+
+      return next(
+        new ErrorHandler(error.message || "Error updating vehicle", 500),
+      );
+    }
+  },
+);
+
