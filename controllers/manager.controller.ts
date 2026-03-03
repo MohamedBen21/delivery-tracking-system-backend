@@ -2127,3 +2127,414 @@ function validateDocuments(
   return true;
 }
 
+
+
+// ─────────────────────────────────────────────
+//  CREATE VEHICLE
+// ─────────────────────────────────────────────
+
+export const createVehicle = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const managerId = req.user?._id;
+      const { companyId } = req.params;
+
+      // ── Auth ──────────────────────────────────────────────────────────────
+      if (!managerId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Unauthorized, you are not authenticated.", 401),
+        );
+      }
+
+      // ── Param validation ──────────────────────────────────────────────────
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      // ── Body extraction ───────────────────────────────────────────────────
+      const {
+        type,
+        registrationNumber,
+        brand,
+        modelName,
+        year,
+        color,
+        maxWeight,
+        maxVolume,
+        supportsFragile,
+        currentBranchId,
+        documents,
+        notes,
+      } = req.body as ICreateVehicleBody;
+
+      // ── Required fields ───────────────────────────────────────────────────
+      if (!type) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Vehicle type is required", 400));
+      }
+
+      if (!VEHICLE_TYPES.includes(type)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            `Invalid vehicle type. Must be one of: ${VEHICLE_TYPES.join(", ")}`,
+            400,
+          ),
+        );
+      }
+
+      if (!registrationNumber) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Registration number is required", 400),
+        );
+      }
+
+      if (typeof registrationNumber !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Registration number must be a string", 400),
+        );
+      }
+
+      const normalizedRegNum = registrationNumber.trim().toUpperCase();
+
+      if (!REGISTRATION_NUMBER_REGEX.test(normalizedRegNum)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "Registration number must be 5–20 characters and contain only letters, numbers, spaces, or hyphens",
+            400,
+          ),
+        );
+      }
+
+      if (maxWeight === undefined || maxWeight === null) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("maxWeight is required", 400));
+      }
+
+      if (typeof maxWeight !== "number" || isNaN(maxWeight)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("maxWeight must be a number", 400));
+      }
+
+      if (maxWeight < 1 || maxWeight > 50000) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("maxWeight must be between 1 and 50 000 kg", 400),
+        );
+      }
+
+      if (maxVolume === undefined || maxVolume === null) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("maxVolume is required", 400));
+      }
+
+      if (typeof maxVolume !== "number" || isNaN(maxVolume)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("maxVolume must be a number", 400));
+      }
+
+      if (maxVolume < 0.1 || maxVolume > 100) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "maxVolume must be between 0.1 and 100 cubic meters",
+            400,
+          ),
+        );
+      }
+
+      // ── Optional field validation ──────────────────────────────────────────
+      if (brand !== undefined) {
+        if (typeof brand !== "string" || brand.trim().length === 0) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("brand must be a non-empty string", 400),
+          );
+        }
+        if (brand.trim().length > 50) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("brand cannot exceed 50 characters", 400),
+          );
+        }
+      }
+
+      if (modelName !== undefined) {
+        if (typeof modelName !== "string" || modelName.trim().length === 0) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("modelName must be a non-empty string", 400),
+          );
+        }
+        if (modelName.trim().length > 50) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("modelName cannot exceed 50 characters", 400),
+          );
+        }
+      }
+
+      if (year !== undefined) {
+        if (!Number.isInteger(year)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("year must be an integer", 400));
+        }
+        const maxYear = new Date().getFullYear() + 1;
+        if (year < 1900 || year > maxYear) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler(
+              `year must be between 1900 and ${maxYear}`,
+              400,
+            ),
+          );
+        }
+      }
+
+      if (color !== undefined && typeof color !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("color must be a string", 400));
+      }
+
+      if (supportsFragile !== undefined && typeof supportsFragile !== "boolean") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("supportsFragile must be a boolean", 400),
+        );
+      }
+
+      if (currentBranchId !== undefined) {
+        if (!mongoose.Types.ObjectId.isValid(currentBranchId)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("Invalid currentBranchId", 400));
+        }
+      }
+
+      if (notes !== undefined) {
+        if (typeof notes !== "string") {
+          await session.abortTransaction();
+          session.endSession();
+          return next(new ErrorHandler("notes must be a string", 400));
+        }
+        if (notes.trim().length > 500) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("notes cannot exceed 500 characters", 400),
+          );
+        }
+      }
+
+      if (documents !== undefined) {
+        if (typeof documents !== "object" || Array.isArray(documents)) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("documents must be an object", 400),
+          );
+        }
+        const docsValid = validateDocuments(documents, next);
+        if (!docsValid) {
+          await session.abortTransaction();
+          session.endSession();
+          return;
+        }
+      }
+
+      // ── DB checks (parallel) ──────────────────────────────────────────────
+      const [company, manager, requestingUser, existingVehicle] =
+        await Promise.all([
+          CompanyModel.findById(companyId).session(session).lean(),
+          ManagerModel.findOne({ userId: managerId, companyId }).session(
+            session,
+          ),
+          userModel.findById(managerId).select("role").session(session).lean(),
+          VehicleModel.findOne({ registrationNumber: normalizedRegNum })
+            .session(session)
+            .lean(),
+        ]);
+
+      if (!company) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Company not found", 404));
+      }
+
+      if (company.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Cannot add vehicles to an inactive company", 400),
+        );
+      }
+
+      const isAdmin = requestingUser?.role === "admin";
+      const isAuthorizedManager =
+        manager &&
+        manager.isActive &&
+        manager.hasPermission("can_manage_vehicles");
+
+      if (!isAdmin && !isAuthorizedManager) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "Not authorized to manage vehicles for this company",
+            403,
+          ),
+        );
+      }
+
+      if (existingVehicle) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "A vehicle with this registration number already exists",
+            400,
+          ),
+        );
+      }
+
+      // ── Build documents payload ────────────────────────────────────────────
+      let docsPayload: Partial<IVehicleDocuments> | undefined;
+      if (documents) {
+        docsPayload = {
+          ...(documents.registrationCard && {
+            registrationCard: documents.registrationCard,
+          }),
+          ...(documents.insurance && { insurance: documents.insurance }),
+          ...(documents.insuranceExpiry && {
+            insuranceExpiry: new Date(documents.insuranceExpiry),
+          }),
+          ...(documents.technicalInspection && {
+            technicalInspection: documents.technicalInspection,
+          }),
+          ...(documents.inspectionExpiry && {
+            inspectionExpiry: new Date(documents.inspectionExpiry),
+          }),
+        };
+      }
+
+      // ── Create ────────────────────────────────────────────────────────────
+      const [vehicle] = await VehicleModel.create(
+        [
+          {
+            companyId,
+            type,
+            registrationNumber: normalizedRegNum,
+            ...(brand && { brand: brand.trim() }),
+            ...(modelName && { modelName: modelName.trim() }),
+            ...(year !== undefined && { year }),
+            ...(color && { color: color.trim() }),
+            maxWeight,
+            maxVolume,
+            supportsFragile: supportsFragile ?? true,
+            ...(currentBranchId && { currentBranchId }),
+            ...(docsPayload && { documents: docsPayload }),
+            ...(notes && { notes: notes.trim() }),
+            status: "available",
+          },
+        ],
+        { session },
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      // ── Response (aggregation for rich data) ──────────────────────────────
+      const [populatedVehicle] = await VehicleModel.aggregate([
+        { $match: { _id: vehicle._id } },
+        {
+          $lookup: {
+            from: "companies",
+            localField: "companyId",
+            foreignField: "_id",
+            as: "company",
+            pipeline: [{ $project: { name: 1, businessType: 1, status: 1 } }],
+          },
+        },
+        { $unwind: { path: "$company", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "branches",
+            localField: "currentBranchId",
+            foreignField: "_id",
+            as: "currentBranch",
+            pipeline: [{ $project: { name: 1, code: 1, status: 1 } }],
+          },
+        },
+        {
+          $unwind: {
+            path: "$currentBranch",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+      ]);
+
+      return res.status(201).json({
+        success: true,
+        message: "Vehicle created successfully",
+        data: populatedVehicle,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+
+      if (error.code === 11000) {
+        return next(
+          new ErrorHandler(
+            "A vehicle with this registration number already exists",
+            400,
+          ),
+        );
+      }
+
+      return next(
+        new ErrorHandler(error.message || "Error creating vehicle", 500),
+      );
+    }
+  },
+);
+
