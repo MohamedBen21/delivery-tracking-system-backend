@@ -3814,6 +3814,600 @@ export const assignFreelancer = catchAsyncError(
 
 
 
+// const PACKAGE_STATUSES: PackageStatus[] = [
+//   "pending",
+//   "accepted",
+//   "at_origin_branch",
+//   "in_transit_to_branch",
+//   "at_destination_branch",
+//   "out_for_delivery",
+//   "delivered",
+//   "failed_delivery",
+//   "rescheduled",
+//   "returned",
+//   "cancelled",
+//   "lost",
+//   "damaged",
+//   "on_hold",
+// ];
+
+// const DELIVERY_TYPES: DeliveryType[] = ["home", "branch_pickup"];
+
+// const PACKAGE_TYPES: PackageType[] = [
+//   "document",
+//   "parcel",
+//   "fragile",
+//   "heavy",
+//   "perishable",
+//   "electronic",
+//   "clothing",
+// ];
+
+// const PAYMENT_STATUSES: PaymentStatus[] = [
+//   "pending",
+//   "paid",
+//   "partially_paid",
+//   "refunded",
+//   "failed",
+// ];
+
+// const DELIVERY_PRIORITIES = ["standard", "express", "same_day"] as const;
+
+// const ALLOWED_SORT_FIELDS = [
+//   "createdAt",
+//   "updatedAt",
+//   "totalPrice",
+//   "weight",
+//   "estimatedDeliveryTime",
+//   "attemptCount",
+//   "status",
+// ] as const;
+
+// // ─────────────────────────────────────────────
+// //  QUERY INTERFACE
+// // ─────────────────────────────────────────────
+
+// /**
+//  * Packages whose `currentBranchId` matches the requested branch,
+//  * with optional filters that cover every caller scenario:
+//  *
+//  * Scenario A — branch_pickup at destination branch:
+//  *   deliveryType=branch_pickup  &  status=at_destination_branch
+//  *
+//  * Scenario B — home delivery, ready to dispatch:
+//  *   deliveryType=home  &  status=at_destination_branch
+//  *   (also works with status=out_for_delivery to see already-dispatched ones)
+//  *
+//  * Scenario C — returned / cancelled / problem packages:
+//  *   status=returned  (or  status=damaged,lost,on_hold  etc.)
+//  *
+//  * All scenarios support the full filter set below.
+//  */
+// interface IBranchPackagesQuery {
+//   // Core filters
+//   deliveryType?: string;
+//   status?: string;            // single value  OR  comma-separated list
+//   packageType?: string;       // single value  OR  comma-separated list
+//   paymentStatus?: string;
+//   deliveryPriority?: string;
+
+//   // Date range on createdAt
+//   fromDate?: string;          // ISO string
+//   toDate?: string;            // ISO string
+
+//   // Search
+//   search?: string;            // trackingNumber prefix OR recipient name (regex)
+
+//   // Flags
+//   needsAttention?: string;    // "true" → failed_delivery | damaged | lost | on_hold
+//   isOverdue?: string;         // "true" → estimatedDeliveryTime < now
+
+//   // Pagination & sorting
+//   page?: string;
+//   limit?: string;
+//   sortBy?: string;
+//   sortOrder?: "asc" | "desc";
+// }
+
+// // ─────────────────────────────────────────────
+// //  GET BRANCH PACKAGES
+// // ─────────────────────────────────────────────
+
+// /**
+//  * GET /branches/:branchId/packages          ← supervisor (auto-scoped to their branch)
+//  * GET /companies/:companyId/branches/:branchId/packages  ← manager (picks any branch)
+//  *
+//  * Both roles resolve to the same handler; authorization diverges inside.
+//  */
+// export const getBranchPackages = catchAsyncError(
+//   async (req: Request, res: Response, next: NextFunction) => {
+//     const callerId = req.user?._id;
+//     const { branchId, companyId } = req.params;
+
+//     // ── Auth ──────────────────────────────────────────────────────────────
+//     if (!callerId) {
+//       return next(
+//         new ErrorHandler("Unauthorized, you are not authenticated.", 401),
+//       );
+//     }
+
+//     // ── Param validation ──────────────────────────────────────────────────
+//     if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+//       return next(new ErrorHandler("Invalid branch ID", 400));
+//     }
+
+//     if (companyId && !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+//       return next(new ErrorHandler("Invalid company ID", 400));
+//     }
+
+//     // ── Query param extraction ────────────────────────────────────────────
+//     const {
+//       deliveryType,
+//       status,
+//       packageType,
+//       paymentStatus,
+//       deliveryPriority,
+//       fromDate,
+//       toDate,
+//       search,
+//       needsAttention,
+//       isOverdue,
+//       page = "1",
+//       limit = "20",
+//       sortBy = "createdAt",
+//       sortOrder = "desc",
+//     } = req.query as IBranchPackagesQuery;
+
+//     // ── Pagination & sort validation ──────────────────────────────────────
+//     const pageNum = parseInt(page, 10);
+//     const limitNum = parseInt(limit, 10);
+
+//     if (isNaN(pageNum) || pageNum < 1) {
+//       return next(new ErrorHandler("page must be a positive integer", 400));
+//     }
+//     if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
+//       return next(new ErrorHandler("limit must be between 1 and 100", 400));
+//     }
+//     if (!ALLOWED_SORT_FIELDS.includes(sortBy as any)) {
+//       return next(
+//         new ErrorHandler(
+//           `sortBy must be one of: ${ALLOWED_SORT_FIELDS.join(", ")}`,
+//           400,
+//         ),
+//       );
+//     }
+//     if (sortOrder && !["asc", "desc"].includes(sortOrder)) {
+//       return next(new ErrorHandler("sortOrder must be 'asc' or 'desc'", 400));
+//     }
+
+//     // ── Filter validation ─────────────────────────────────────────────────
+
+//     // deliveryType — single value
+//     if (deliveryType !== undefined && !DELIVERY_TYPES.includes(deliveryType as DeliveryType)) {
+//       return next(
+//         new ErrorHandler(
+//           `Invalid deliveryType. Must be one of: ${DELIVERY_TYPES.join(", ")}`,
+//           400,
+//         ),
+//       );
+//     }
+
+//     // status — accept a comma-separated list so callers can do status=returned,cancelled
+//     let statusFilter: PackageStatus[] | undefined;
+//     if (status !== undefined) {
+//       const raw = status.split(",").map((s) => s.trim());
+//       const invalid = raw.filter((s) => !PACKAGE_STATUSES.includes(s as PackageStatus));
+//       if (invalid.length) {
+//         return next(
+//           new ErrorHandler(
+//             `Invalid status value(s): ${invalid.join(", ")}. Allowed: ${PACKAGE_STATUSES.join(", ")}`,
+//             400,
+//           ),
+//         );
+//       }
+//       statusFilter = raw as PackageStatus[];
+//     }
+
+//     // packageType — comma-separated list
+//     let packageTypeFilter: PackageType[] | undefined;
+//     if (packageType !== undefined) {
+//       const raw = packageType.split(",").map((t) => t.trim());
+//       const invalid = raw.filter((t) => !PACKAGE_TYPES.includes(t as PackageType));
+//       if (invalid.length) {
+//         return next(
+//           new ErrorHandler(
+//             `Invalid packageType value(s): ${invalid.join(", ")}. Allowed: ${PACKAGE_TYPES.join(", ")}`,
+//             400,
+//           ),
+//         );
+//       }
+//       packageTypeFilter = raw as PackageType[];
+//     }
+
+//     if (paymentStatus !== undefined && !PAYMENT_STATUSES.includes(paymentStatus as PaymentStatus)) {
+//       return next(
+//         new ErrorHandler(
+//           `Invalid paymentStatus. Must be one of: ${PAYMENT_STATUSES.join(", ")}`,
+//           400,
+//         ),
+//       );
+//     }
+
+//     if (deliveryPriority !== undefined && !DELIVERY_PRIORITIES.includes(deliveryPriority as any)) {
+//       return next(
+//         new ErrorHandler(
+//           `Invalid deliveryPriority. Must be one of: ${DELIVERY_PRIORITIES.join(", ")}`,
+//           400,
+//         ),
+//       );
+//     }
+
+//     let fromDateParsed: Date | undefined;
+//     let toDateParsed: Date | undefined;
+
+//     if (fromDate !== undefined) {
+//       fromDateParsed = new Date(fromDate);
+//       if (isNaN(fromDateParsed.getTime())) {
+//         return next(new ErrorHandler("fromDate is not a valid date", 400));
+//       }
+//     }
+//     if (toDate !== undefined) {
+//       toDateParsed = new Date(toDate);
+//       if (isNaN(toDateParsed.getTime())) {
+//         return next(new ErrorHandler("toDate is not a valid date", 400));
+//       }
+//     }
+//     if (fromDateParsed && toDateParsed && fromDateParsed > toDateParsed) {
+//       return next(new ErrorHandler("fromDate must be before toDate", 400));
+//     }
+
+//     // ── Authorization — parallel DB checks ───────────────────────────────
+//     const [callerUser, branch, supervisor, manager] = await Promise.all([
+//       userModel.findById(callerId).select("role").lean(),
+//       BranchModel.findById(branchId).lean(),
+//       SupervisorModel.findOne({ userId: callerId, branchId }).lean(),
+//       companyId
+//         ? ManagerModel.findOne({ userId: callerId, companyId }).lean()
+//         : Promise.resolve(null),
+//     ]);
+
+//     if (!branch) {
+//       return next(new ErrorHandler("Branch not found", 404));
+//     }
+
+//     const isAdmin = callerUser?.role === "admin";
+
+//     // Supervisor: must be assigned to exactly this branch
+//     const isSupervisor =
+//       supervisor &&
+//       (supervisor as any).isActive;
+
+//     // Manager: must be active, belong to the company that owns the branch,
+//     // and have access to this specific branch
+//     const isManager =
+//       manager &&
+//       (manager as any).isActive &&
+//       (manager as any).canAccessBranch(new mongoose.Types.ObjectId(branchId.toString()));
+
+//     if (!isAdmin && !isSupervisor && !isManager) {
+//       return next(
+//         new ErrorHandler(
+//           "Not authorized to view packages for this branch",
+//           403,
+//         ),
+//       );
+//     }
+
+//     // ── Build $match ──────────────────────────────────────────────────────
+//     const matchStage: Record<string, any> = {
+//       currentBranchId: new mongoose.Types.ObjectId(branchId.toString()),
+//     };
+
+//     // deliveryType
+//     if (deliveryType) {
+//       matchStage.deliveryType = deliveryType;
+//     }
+
+//     // status — single or multi
+//     if (statusFilter) {
+//       matchStage.status = statusFilter.length === 1
+//         ? statusFilter[0]
+//         : { $in: statusFilter };
+//     }
+
+//     // packageType — single or multi
+//     if (packageTypeFilter) {
+//       matchStage.type = packageTypeFilter.length === 1
+//         ? packageTypeFilter[0]
+//         : { $in: packageTypeFilter };
+//     }
+
+//     if (paymentStatus) matchStage.paymentStatus = paymentStatus;
+//     if (deliveryPriority) matchStage.deliveryPriority = deliveryPriority;
+
+//     // Date range
+//     if (fromDateParsed || toDateParsed) {
+//       matchStage.createdAt = {
+//         ...(fromDateParsed && { $gte: fromDateParsed }),
+//         ...(toDateParsed && { $lte: toDateParsed }),
+//       };
+//     }
+
+//     // needsAttention flag: packages that need manual intervention
+//     if (needsAttention === "true") {
+//       matchStage.status = {
+//         $in: ["failed_delivery", "damaged", "lost", "on_hold"],
+//       };
+//     }
+
+//     // isOverdue flag: estimatedDeliveryTime has passed and not yet delivered
+//     if (isOverdue === "true") {
+//       matchStage.estimatedDeliveryTime = { $lt: new Date() };
+//       matchStage.status = { $nin: ["delivered", "cancelled", "returned"] };
+//     }
+
+//     // Full-text search: trackingNumber prefix OR recipient name
+//     if (search && search.trim().length > 0) {
+//       const searchRegex = { $regex: search.trim(), $options: "i" };
+//       matchStage.$or = [
+//         { trackingNumber: searchRegex },
+//         { "destination.recipientName": searchRegex },
+//         { "destination.recipientPhone": searchRegex },
+//       ];
+//     }
+
+//     // ── Aggregation pipeline ──────────────────────────────────────────────
+//     const sortDirection = sortOrder === "asc" ? 1 : -1;
+//     const skip = (pageNum - 1) * limitNum;
+
+//     const pipeline: mongoose.PipelineStage[] = [
+//       { $match: matchStage },
+
+//       // ── Computed fields (mirror model virtuals) ───────────────────────
+//       {
+//         $addFields: {
+//           isDelivered: { $eq: ["$status", "delivered"] },
+
+//           isAtBranch: {
+//             $in: ["$status", ["at_origin_branch", "at_destination_branch"]],
+//           },
+
+//           isInTransit: {
+//             $in: [
+//               "$status",
+//               ["in_transit_to_branch", "out_for_delivery", "at_destination_branch"],
+//             ],
+//           },
+
+//           needsAttentionFlag: {
+//             $or: [
+//               {
+//                 $in: [
+//                   "$status",
+//                   ["failed_delivery", "damaged", "lost", "on_hold"],
+//                 ],
+//               },
+//               {
+//                 $gt: [
+//                   {
+//                     $size: {
+//                       $filter: {
+//                         input: { $ifNull: ["$issues", []] },
+//                         as: "issue",
+//                         cond: { $eq: ["$$issue.resolved", false] },
+//                       },
+//                     },
+//                   },
+//                   0,
+//                 ],
+//               },
+//             ],
+//           },
+
+//           isOverdueFlag: {
+//             $and: [
+//               { $ifNull: ["$estimatedDeliveryTime", false] },
+//               { $lt: ["$estimatedDeliveryTime", new Date()] },
+//               { $not: { $in: ["$status", ["delivered", "cancelled", "returned"]] } },
+//             ],
+//           },
+
+//           // For branch_pickup: package is at its pickup branch and ready
+//           isReadyForPickup: {
+//             $and: [
+//               { $eq: ["$deliveryType", "branch_pickup"] },
+//               { $eq: ["$status", "at_destination_branch"] },
+//               { $eq: ["$paymentStatus", "paid"] },
+//               { $eq: ["$returnInfo.isReturn", false] },
+//             ],
+//           },
+
+//           // For home delivery: package is at the last branch before delivery
+//           isReadyForDispatch: {
+//             $and: [
+//               { $eq: ["$deliveryType", "home"] },
+//               { $eq: ["$status", "at_destination_branch"] },
+//               { $eq: ["$paymentStatus", "paid"] },
+//               { $eq: ["$returnInfo.isReturn", false] },
+//             ],
+//           },
+
+//           // Delivery progress score (mirrors model virtual)
+//           deliveryProgress: {
+//             $switch: {
+//               branches: [
+//                 { case: { $eq: ["$status", "pending"] },               then: 0   },
+//                 { case: { $eq: ["$status", "accepted"] },              then: 10  },
+//                 { case: { $eq: ["$status", "at_origin_branch"] },      then: 20  },
+//                 { case: { $eq: ["$status", "in_transit_to_branch"] },  then: 40  },
+//                 { case: { $eq: ["$status", "at_destination_branch"] }, then: 60  },
+//                 { case: { $eq: ["$status", "out_for_delivery"] },      then: 80  },
+//                 { case: { $eq: ["$status", "delivered"] },             then: 100 },
+//                 { case: { $eq: ["$status", "failed_delivery"] },       then: 80  },
+//                 { case: { $eq: ["$status", "rescheduled"] },           then: 70  },
+//                 { case: { $eq: ["$status", "returned"] },              then: 100 },
+//                 { case: { $eq: ["$status", "on_hold"] },               then: 50  },
+//               ],
+//               default: 0,
+//             },
+//           },
+//         },
+//       },
+
+//       // ── Lookups ───────────────────────────────────────────────────────
+//       {
+//         $lookup: {
+//           from: "branches",
+//           localField: "originBranchId",
+//           foreignField: "_id",
+//           as: "originBranch",
+//           pipeline: [{ $project: { name: 1, code: 1, address: 1 } }],
+//         },
+//       },
+//       { $unwind: { path: "$originBranch", preserveNullAndEmptyArrays: true } },
+
+//       {
+//         $lookup: {
+//           from: "branches",
+//           localField: "destinationBranchId",
+//           foreignField: "_id",
+//           as: "destinationBranch",
+//           pipeline: [{ $project: { name: 1, code: 1, address: 1 } }],
+//         },
+//       },
+//       { $unwind: { path: "$destinationBranch", preserveNullAndEmptyArrays: true } },
+
+//       {
+//         $lookup: {
+//           from: "users",
+//           localField: "senderId",
+//           foreignField: "_id",
+//           as: "sender",
+//           pipeline: [
+//             { $project: { firstName: 1, lastName: 1, email: 1, phone: 1 } },
+//           ],
+//         },
+//       },
+//       { $unwind: { path: "$sender", preserveNullAndEmptyArrays: true } },
+
+//       {
+//         $lookup: {
+//           from: "users",
+//           localField: "assignedDelivererId",
+//           foreignField: "_id",
+//           as: "assignedDeliverer",
+//           pipeline: [
+//             { $project: { firstName: 1, lastName: 1, phone: 1 } },
+//           ],
+//         },
+//       },
+//       { $unwind: { path: "$assignedDeliverer", preserveNullAndEmptyArrays: true } },
+
+//       // ── Sort ──────────────────────────────────────────────────────────
+//       { $sort: { [sortBy]: sortDirection } },
+
+//       // ── Facet: data + totals + breakdown ─────────────────────────────
+//       {
+//         $facet: {
+//           data: [
+//             { $skip: skip },
+//             { $limit: limitNum },
+//             // Strip large embedded arrays from the list view
+//             {
+//               $project: {
+//                 trackingHistory: 0,
+//               },
+//             },
+//           ],
+
+//           totalCount: [{ $count: "count" }],
+
+//           // Count per PackageStatus
+//           statusBreakdown: [
+//             { $group: { _id: "$status", count: { $sum: 1 } } },
+//           ],
+
+//           // Count per deliveryType
+//           deliveryTypeBreakdown: [
+//             { $group: { _id: "$deliveryType", count: { $sum: 1 } } },
+//           ],
+
+//           // Actionable counters for the supervisor dashboard
+//           actionableCounters: [
+//             {
+//               $group: {
+//                 _id: null,
+//                 readyForPickup:  { $sum: { $cond: ["$isReadyForPickup",  1, 0] } },
+//                 readyForDispatch:{ $sum: { $cond: ["$isReadyForDispatch",1, 0] } },
+//                 needsAttention:  { $sum: { $cond: ["$needsAttentionFlag",1, 0] } },
+//                 overdue:         { $sum: { $cond: ["$isOverdueFlag",     1, 0] } },
+//                 outForDelivery:  {
+//                   $sum: {
+//                     $cond: [{ $eq: ["$status", "out_for_delivery"] }, 1, 0],
+//                   },
+//                 },
+//               },
+//             },
+//           ],
+//         },
+//       },
+//     ];
+
+//     const [result] = await PackageModel.aggregate(pipeline);
+
+//     const total: number = result.totalCount[0]?.count ?? 0;
+//     const totalPages = Math.ceil(total / limitNum);
+
+//     // Reshape flat group arrays → plain objects
+//     const statusBreakdown = Object.fromEntries(
+//       (result.statusBreakdown as { _id: string; count: number }[]).map(
+//         ({ _id, count }) => [_id, count],
+//       ),
+//     );
+
+//     const deliveryTypeBreakdown = Object.fromEntries(
+//       (result.deliveryTypeBreakdown as { _id: string; count: number }[]).map(
+//         ({ _id, count }) => [_id, count],
+//       ),
+//     );
+
+//     const counters = result.actionableCounters[0] ?? {
+//       readyForPickup: 0,
+//       readyForDispatch: 0,
+//       needsAttention: 0,
+//       overdue: 0,
+//       outForDelivery: 0,
+//     };
+//     delete counters._id;
+
+//     return res.status(200).json({
+//       success: true,
+//       data: result.data,
+//       pagination: {
+//         total,
+//         page: pageNum,
+//         limit: limitNum,
+//         totalPages,
+//         hasNextPage: pageNum < totalPages,
+//         hasPrevPage: pageNum > 1,
+//       },
+//       summary: {
+//         byStatus: statusBreakdown,
+//         byDeliveryType: deliveryTypeBreakdown,
+//         actionable: counters,
+//       },
+//     });
+//   },
+// );
+
+
+
+
+
+
+//created another version just for the supervisor , with additional filters + show also the out_for_delivery packages separately (since they are still at the branch but already dispatched, so supervisors like to see them in a separate section)
+
+
 const PACKAGE_STATUSES: PackageStatus[] = [
   "pending",
   "accepted",
@@ -3868,41 +4462,33 @@ const ALLOWED_SORT_FIELDS = [
 // ─────────────────────────────────────────────
 
 /**
- * Packages whose `currentBranchId` matches the requested branch,
- * with optional filters that cover every caller scenario:
+ * All filters are optional and composable.
  *
- * Scenario A — branch_pickup at destination branch:
- *   deliveryType=branch_pickup  &  status=at_destination_branch
+ * Response shape depends on deliveryType:
  *
- * Scenario B — home delivery, ready to dispatch:
- *   deliveryType=home  &  status=at_destination_branch
- *   (also works with status=out_for_delivery to see already-dispatched ones)
+ *  deliveryType=home  (or no deliveryType filter)
+ *    → data: { atBranch: { packages, pagination }, outForDelivery: { packages, pagination } }
+ *      atBranch       — status: at_destination_branch  (physically waiting at branch)
+ *      outForDelivery — status: out_for_delivery        (already dispatched, shown separately)
  *
- * Scenario C — returned / cancelled / problem packages:
- *   status=returned  (or  status=damaged,lost,on_hold  etc.)
+ *  deliveryType=branch_pickup
+ *    → data: [...] flat paginated array
  *
- * All scenarios support the full filter set below.
+ * Passing status= alongside deliveryType=home still works:
+ *   status=at_destination_branch → only atBranch has results, outForDelivery is empty
+ *   status=out_for_delivery      → only outForDelivery has results
  */
 interface IBranchPackagesQuery {
-  // Core filters
   deliveryType?: string;
-  status?: string;            // single value  OR  comma-separated list
-  packageType?: string;       // single value  OR  comma-separated list
+  status?: string;          // single  OR  comma-separated: "returned,cancelled"
+  packageType?: string;     // single  OR  comma-separated: "fragile,heavy"
   paymentStatus?: string;
   deliveryPriority?: string;
-
-  // Date range on createdAt
-  fromDate?: string;          // ISO string
-  toDate?: string;            // ISO string
-
-  // Search
-  search?: string;            // trackingNumber prefix OR recipient name (regex)
-
-  // Flags
-  needsAttention?: string;    // "true" → failed_delivery | damaged | lost | on_hold
-  isOverdue?: string;         // "true" → estimatedDeliveryTime < now
-
-  // Pagination & sorting
+  fromDate?: string;        // ISO string
+  toDate?: string;          // ISO string
+  search?: string;          // trackingNumber prefix OR recipient name/phone
+  needsAttention?: string;  // "true" → status ∈ {failed_delivery, damaged, lost, on_hold}
+  isOverdue?: string;       // "true" → estimatedDeliveryTime < now AND not terminal
   page?: string;
   limit?: string;
   sortBy?: string;
@@ -3910,22 +4496,146 @@ interface IBranchPackagesQuery {
 }
 
 // ─────────────────────────────────────────────
+//  SHARED PIPELINE STAGES
+// ─────────────────────────────────────────────
+
+const COMPUTED_FIELDS_STAGE: mongoose.PipelineStage = {
+  $addFields: {
+    isAtBranch: {
+      $in: ["$status", ["at_origin_branch", "at_destination_branch"]],
+    },
+    isInTransit: {
+      $in: [
+        "$status",
+        ["in_transit_to_branch", "out_for_delivery", "at_destination_branch"],
+      ],
+    },
+    needsAttentionFlag: {
+      $or: [
+        { $in: ["$status", ["failed_delivery", "damaged", "lost", "on_hold"]] },
+        {
+          $gt: [
+            {
+              $size: {
+                $filter: {
+                  input: { $ifNull: ["$issues", []] },
+                  as: "issue",
+                  cond: { $eq: ["$$issue.resolved", false] },
+                },
+              },
+            },
+            0,
+          ],
+        },
+      ],
+    },
+    isOverdueFlag: {
+      $and: [
+        { $ifNull: ["$estimatedDeliveryTime", false] },
+        { $lt: ["$estimatedDeliveryTime", new Date()] },
+        { $not: { $in: ["$status", ["delivered", "cancelled", "returned"]] } },
+      ],
+    },
+    isReadyForPickup: {
+      $and: [
+        { $eq: ["$deliveryType", "branch_pickup"] },
+        { $eq: ["$status", "at_destination_branch"] },
+        { $eq: ["$paymentStatus", "paid"] },
+        { $eq: ["$returnInfo.isReturn", false] },
+      ],
+    },
+    isReadyForDispatch: {
+      $and: [
+        { $eq: ["$deliveryType", "home"] },
+        { $eq: ["$status", "at_destination_branch"] },
+        { $eq: ["$paymentStatus", "paid"] },
+        { $eq: ["$returnInfo.isReturn", false] },
+      ],
+    },
+    deliveryProgress: {
+      $switch: {
+        branches: [
+          { case: { $eq: ["$status", "pending"] },               then: 0   },
+          { case: { $eq: ["$status", "accepted"] },              then: 10  },
+          { case: { $eq: ["$status", "at_origin_branch"] },      then: 20  },
+          { case: { $eq: ["$status", "in_transit_to_branch"] },  then: 40  },
+          { case: { $eq: ["$status", "at_destination_branch"] }, then: 60  },
+          { case: { $eq: ["$status", "out_for_delivery"] },      then: 80  },
+          { case: { $eq: ["$status", "delivered"] },             then: 100 },
+          { case: { $eq: ["$status", "failed_delivery"] },       then: 80  },
+          { case: { $eq: ["$status", "rescheduled"] },           then: 70  },
+          { case: { $eq: ["$status", "returned"] },              then: 100 },
+          { case: { $eq: ["$status", "on_hold"] },               then: 50  },
+        ],
+        default: 0,
+      },
+    },
+  },
+};
+
+const LOOKUP_STAGES: mongoose.PipelineStage[] = [
+  {
+    $lookup: {
+      from: "branches",
+      localField: "originBranchId",
+      foreignField: "_id",
+      as: "originBranch",
+      pipeline: [{ $project: { name: 1, code: 1, address: 1 } }],
+    },
+  },
+  { $unwind: { path: "$originBranch", preserveNullAndEmptyArrays: true } },
+
+  {
+    $lookup: {
+      from: "branches",
+      localField: "destinationBranchId",
+      foreignField: "_id",
+      as: "destinationBranch",
+      pipeline: [{ $project: { name: 1, code: 1, address: 1 } }],
+    },
+  },
+  { $unwind: { path: "$destinationBranch", preserveNullAndEmptyArrays: true } },
+
+  {
+    $lookup: {
+      from: "users",
+      localField: "senderId",
+      foreignField: "_id",
+      as: "sender",
+      pipeline: [
+        { $project: { firstName: 1, lastName: 1, email: 1, phone: 1 } },
+      ],
+    },
+  },
+  { $unwind: { path: "$sender", preserveNullAndEmptyArrays: true } },
+
+  {
+    $lookup: {
+      from: "users",
+      localField: "assignedDelivererId",
+      foreignField: "_id",
+      as: "assignedDeliverer",
+      pipeline: [{ $project: { firstName: 1, lastName: 1, phone: 1 } }],
+    },
+  },
+  { $unwind: { path: "$assignedDeliverer", preserveNullAndEmptyArrays: true } },
+];
+
+const PROJECT_STRIP_HISTORY: mongoose.PipelineStage.Project = {
+  $project: { trackingHistory: 0 },
+};
+
+// ─────────────────────────────────────────────
 //  GET BRANCH PACKAGES
 // ─────────────────────────────────────────────
 
-/**
- * GET /branches/:branchId/packages          ← supervisor (auto-scoped to their branch)
- * GET /companies/:companyId/branches/:branchId/packages  ← manager (picks any branch)
- *
- * Both roles resolve to the same handler; authorization diverges inside.
- */
 export const getBranchPackages = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-    const callerId = req.user?._id;
-    const { branchId, companyId } = req.params;
+    const supervisorUserId = req.user?._id;
+    const { branchId } = req.params;
 
     // ── Auth ──────────────────────────────────────────────────────────────
-    if (!callerId) {
+    if (!supervisorUserId) {
       return next(
         new ErrorHandler("Unauthorized, you are not authenticated.", 401),
       );
@@ -3934,10 +4644,6 @@ export const getBranchPackages = catchAsyncError(
     // ── Param validation ──────────────────────────────────────────────────
     if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
       return next(new ErrorHandler("Invalid branch ID", 400));
-    }
-
-    if (companyId && !mongoose.Types.ObjectId.isValid(companyId.toString())) {
-      return next(new ErrorHandler("Invalid company ID", 400));
     }
 
     // ── Query param extraction ────────────────────────────────────────────
@@ -3981,9 +4687,10 @@ export const getBranchPackages = catchAsyncError(
     }
 
     // ── Filter validation ─────────────────────────────────────────────────
-
-    // deliveryType — single value
-    if (deliveryType !== undefined && !DELIVERY_TYPES.includes(deliveryType as DeliveryType)) {
+    if (
+      deliveryType !== undefined &&
+      !DELIVERY_TYPES.includes(deliveryType as DeliveryType)
+    ) {
       return next(
         new ErrorHandler(
           `Invalid deliveryType. Must be one of: ${DELIVERY_TYPES.join(", ")}`,
@@ -3992,11 +4699,12 @@ export const getBranchPackages = catchAsyncError(
       );
     }
 
-    // status — accept a comma-separated list so callers can do status=returned,cancelled
     let statusFilter: PackageStatus[] | undefined;
     if (status !== undefined) {
       const raw = status.split(",").map((s) => s.trim());
-      const invalid = raw.filter((s) => !PACKAGE_STATUSES.includes(s as PackageStatus));
+      const invalid = raw.filter(
+        (s) => !PACKAGE_STATUSES.includes(s as PackageStatus),
+      );
       if (invalid.length) {
         return next(
           new ErrorHandler(
@@ -4008,11 +4716,12 @@ export const getBranchPackages = catchAsyncError(
       statusFilter = raw as PackageStatus[];
     }
 
-    // packageType — comma-separated list
     let packageTypeFilter: PackageType[] | undefined;
     if (packageType !== undefined) {
       const raw = packageType.split(",").map((t) => t.trim());
-      const invalid = raw.filter((t) => !PACKAGE_TYPES.includes(t as PackageType));
+      const invalid = raw.filter(
+        (t) => !PACKAGE_TYPES.includes(t as PackageType),
+      );
       if (invalid.length) {
         return next(
           new ErrorHandler(
@@ -4024,7 +4733,10 @@ export const getBranchPackages = catchAsyncError(
       packageTypeFilter = raw as PackageType[];
     }
 
-    if (paymentStatus !== undefined && !PAYMENT_STATUSES.includes(paymentStatus as PaymentStatus)) {
+    if (
+      paymentStatus !== undefined &&
+      !PAYMENT_STATUSES.includes(paymentStatus as PaymentStatus)
+    ) {
       return next(
         new ErrorHandler(
           `Invalid paymentStatus. Must be one of: ${PAYMENT_STATUSES.join(", ")}`,
@@ -4033,7 +4745,10 @@ export const getBranchPackages = catchAsyncError(
       );
     }
 
-    if (deliveryPriority !== undefined && !DELIVERY_PRIORITIES.includes(deliveryPriority as any)) {
+    if (
+      deliveryPriority !== undefined &&
+      !DELIVERY_PRIORITIES.includes(deliveryPriority as any)
+    ) {
       return next(
         new ErrorHandler(
           `Invalid deliveryPriority. Must be one of: ${DELIVERY_PRIORITIES.join(", ")}`,
@@ -4061,291 +4776,257 @@ export const getBranchPackages = catchAsyncError(
       return next(new ErrorHandler("fromDate must be before toDate", 400));
     }
 
-    // ── Authorization — parallel DB checks ───────────────────────────────
-    const [callerUser, branch, supervisor, manager] = await Promise.all([
-      userModel.findById(callerId).select("role").lean(),
+    // ── Authorization ─────────────────────────────────────────────────────
+    const [branch, supervisor] = await Promise.all([
       BranchModel.findById(branchId).lean(),
-      SupervisorModel.findOne({ userId: callerId, branchId }).lean(),
-      companyId
-        ? ManagerModel.findOne({ userId: callerId, companyId }).lean()
-        : Promise.resolve(null),
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
     ]);
 
     if (!branch) {
       return next(new ErrorHandler("Branch not found", 404));
     }
 
-    const isAdmin = callerUser?.role === "admin";
-
-    // Supervisor: must be assigned to exactly this branch
-    const isSupervisor =
-      supervisor &&
-      (supervisor as any).isActive;
-
-    // Manager: must be active, belong to the company that owns the branch,
-    // and have access to this specific branch
-    const isManager =
-      manager &&
-      (manager as any).isActive &&
-      (manager as any).canAccessBranch(new mongoose.Types.ObjectId(branchId.toString()));
-
-    if (!isAdmin && !isSupervisor && !isManager) {
+    if (!supervisor || !(supervisor as any).isActive) {
       return next(
         new ErrorHandler(
-          "Not authorized to view packages for this branch",
+          "You are not an active supervisor of this branch",
           403,
         ),
       );
     }
 
-    // ── Build $match ──────────────────────────────────────────────────────
-    const matchStage: Record<string, any> = {
+    // ── Build base $match ─────────────────────────────────────────────────
+    const baseMatch: Record<string, any> = {
       currentBranchId: new mongoose.Types.ObjectId(branchId.toString()),
     };
 
-    // deliveryType
-    if (deliveryType) {
-      matchStage.deliveryType = deliveryType;
-    }
+    if (deliveryType) baseMatch.deliveryType = deliveryType;
 
-    // status — single or multi
     if (statusFilter) {
-      matchStage.status = statusFilter.length === 1
-        ? statusFilter[0]
-        : { $in: statusFilter };
+      baseMatch.status =
+        statusFilter.length === 1 ? statusFilter[0] : { $in: statusFilter };
     }
 
-    // packageType — single or multi
     if (packageTypeFilter) {
-      matchStage.type = packageTypeFilter.length === 1
-        ? packageTypeFilter[0]
-        : { $in: packageTypeFilter };
+      baseMatch.type =
+        packageTypeFilter.length === 1
+          ? packageTypeFilter[0]
+          : { $in: packageTypeFilter };
     }
 
-    if (paymentStatus) matchStage.paymentStatus = paymentStatus;
-    if (deliveryPriority) matchStage.deliveryPriority = deliveryPriority;
+    if (paymentStatus) baseMatch.paymentStatus = paymentStatus;
+    if (deliveryPriority) baseMatch.deliveryPriority = deliveryPriority;
 
-    // Date range
     if (fromDateParsed || toDateParsed) {
-      matchStage.createdAt = {
+      baseMatch.createdAt = {
         ...(fromDateParsed && { $gte: fromDateParsed }),
         ...(toDateParsed && { $lte: toDateParsed }),
       };
     }
 
-    // needsAttention flag: packages that need manual intervention
+    // needsAttention and isOverdue override any explicit status filter
     if (needsAttention === "true") {
-      matchStage.status = {
+      baseMatch.status = {
         $in: ["failed_delivery", "damaged", "lost", "on_hold"],
       };
     }
 
-    // isOverdue flag: estimatedDeliveryTime has passed and not yet delivered
     if (isOverdue === "true") {
-      matchStage.estimatedDeliveryTime = { $lt: new Date() };
-      matchStage.status = { $nin: ["delivered", "cancelled", "returned"] };
+      baseMatch.estimatedDeliveryTime = { $lt: new Date() };
+      baseMatch.status = { $nin: ["delivered", "cancelled", "returned"] };
     }
 
-    // Full-text search: trackingNumber prefix OR recipient name
     if (search && search.trim().length > 0) {
       const searchRegex = { $regex: search.trim(), $options: "i" };
-      matchStage.$or = [
+      baseMatch.$or = [
         { trackingNumber: searchRegex },
         { "destination.recipientName": searchRegex },
         { "destination.recipientPhone": searchRegex },
       ];
     }
 
-    // ── Aggregation pipeline ──────────────────────────────────────────────
     const sortDirection = sortOrder === "asc" ? 1 : -1;
     const skip = (pageNum - 1) * limitNum;
 
-    const pipeline: mongoose.PipelineStage[] = [
-      { $match: matchStage },
+    // ─────────────────────────────────────────────────────────────────────
+    //  PATH A — home delivery: split response
+    //
+    //  Runs when deliveryType=home OR no deliveryType filter is given,
+    //  because home packages need their own UI section ("already dispatched").
+    //
+    //  If the caller also passed a status filter we intersect it with each
+    //  branch's own status so one section is simply empty — no extra errors.
+    // ─────────────────────────────────────────────────────────────────────
+    const isHomePath =
+      deliveryType === "home" || deliveryType === undefined;
 
-      // ── Computed fields (mirror model virtuals) ───────────────────────
-      {
-        $addFields: {
-          isDelivered: { $eq: ["$status", "delivered"] },
+    if (isHomePath) {
+      // Pull the caller's explicit status constraint (if any) so we can
+      // intersect it per-branch, then remove it from the shared match so the
+      // $facet branches can each add their own status condition.
+      const callerStatuses: string[] | null = baseMatch.status
+        ? baseMatch.status.$in
+          ? baseMatch.status.$in
+          : [baseMatch.status]
+        : null;
 
-          isAtBranch: {
-            $in: ["$status", ["at_origin_branch", "at_destination_branch"]],
-          },
+      const sharedMatch: Record<string, any> = { ...baseMatch, deliveryType: "home" };
+      delete sharedMatch.status; // each facet branch applies its own
 
-          isInTransit: {
-            $in: [
-              "$status",
-              ["in_transit_to_branch", "out_for_delivery", "at_destination_branch"],
+      /**
+       * Returns a $match stage for a given target status.
+       * If the caller requested specific statuses and targetStatus is not among
+       * them, the stage forces an empty result via an impossible condition.
+       */
+      const branchStatusMatch = (
+        targetStatus: string,
+      ): mongoose.PipelineStage.Match => ({
+        $match:
+          callerStatuses === null || callerStatuses.includes(targetStatus)
+            ? { status: targetStatus }
+            : { status: "__no_match__" },
+      });
+
+      const splitPipeline: mongoose.PipelineStage[] = [
+        { $match: sharedMatch },
+        COMPUTED_FIELDS_STAGE,
+        ...LOOKUP_STAGES,
+        { $sort: { [sortBy]: sortDirection } },
+        {
+          $facet: {
+            // ── Group 1: waiting at the branch ──────────────────────────
+            atBranch: [
+              branchStatusMatch("at_destination_branch"),
+              { $skip: skip },
+              { $limit: limitNum },
+              PROJECT_STRIP_HISTORY,
             ],
-          },
+            atBranchCount: [
+              branchStatusMatch("at_destination_branch"),
+              { $count: "count" },
+            ],
 
-          needsAttentionFlag: {
-            $or: [
+            // ── Group 2: already dispatched ─────────────────────────────
+            outForDelivery: [
+              branchStatusMatch("out_for_delivery"),
+              { $skip: skip },
+              { $limit: limitNum },
+              PROJECT_STRIP_HISTORY,
+            ],
+            outForDeliveryCount: [
+              branchStatusMatch("out_for_delivery"),
+              { $count: "count" },
+            ],
+
+            // ── Summary across all matched home packages ─────────────────
+            statusBreakdown: [
+              { $group: { _id: "$status", count: { $sum: 1 } } },
+            ],
+            actionableCounters: [
               {
-                $in: [
-                  "$status",
-                  ["failed_delivery", "damaged", "lost", "on_hold"],
-                ],
-              },
-              {
-                $gt: [
-                  {
-                    $size: {
-                      $filter: {
-                        input: { $ifNull: ["$issues", []] },
-                        as: "issue",
-                        cond: { $eq: ["$$issue.resolved", false] },
-                      },
-                    },
+                $group: {
+                  _id: null,
+                  readyForDispatch: {
+                    $sum: { $cond: ["$isReadyForDispatch", 1, 0] },
                   },
-                  0,
-                ],
+                  needsAttention: {
+                    $sum: { $cond: ["$needsAttentionFlag", 1, 0] },
+                  },
+                  overdue: {
+                    $sum: { $cond: ["$isOverdueFlag", 1, 0] },
+                  },
+                },
               },
             ],
           },
+        },
+      ];
 
-          isOverdueFlag: {
-            $and: [
-              { $ifNull: ["$estimatedDeliveryTime", false] },
-              { $lt: ["$estimatedDeliveryTime", new Date()] },
-              { $not: { $in: ["$status", ["delivered", "cancelled", "returned"]] } },
-            ],
+      const [result] = await PackageModel.aggregate(splitPipeline);
+
+      const atBranchTotal: number = result.atBranchCount[0]?.count ?? 0;
+      const outForDeliveryTotal: number =
+        result.outForDeliveryCount[0]?.count ?? 0;
+
+      const statusBreakdown = Object.fromEntries(
+        (result.statusBreakdown as { _id: string; count: number }[]).map(
+          ({ _id, count }) => [_id, count],
+        ),
+      );
+
+      const counters = result.actionableCounters[0] ?? {
+        readyForDispatch: 0,
+        needsAttention: 0,
+        overdue: 0,
+      };
+      delete counters._id;
+
+      return res.status(200).json({
+        success: true,
+        deliveryType: "home",
+        data: {
+          atBranch: {
+            packages: result.atBranch,
+            pagination: {
+              total: atBranchTotal,
+              page: pageNum,
+              limit: limitNum,
+              totalPages: Math.ceil(atBranchTotal / limitNum),
+              hasNextPage: pageNum < Math.ceil(atBranchTotal / limitNum),
+              hasPrevPage: pageNum > 1,
+            },
           },
-
-          // For branch_pickup: package is at its pickup branch and ready
-          isReadyForPickup: {
-            $and: [
-              { $eq: ["$deliveryType", "branch_pickup"] },
-              { $eq: ["$status", "at_destination_branch"] },
-              { $eq: ["$paymentStatus", "paid"] },
-              { $eq: ["$returnInfo.isReturn", false] },
-            ],
-          },
-
-          // For home delivery: package is at the last branch before delivery
-          isReadyForDispatch: {
-            $and: [
-              { $eq: ["$deliveryType", "home"] },
-              { $eq: ["$status", "at_destination_branch"] },
-              { $eq: ["$paymentStatus", "paid"] },
-              { $eq: ["$returnInfo.isReturn", false] },
-            ],
-          },
-
-          // Delivery progress score (mirrors model virtual)
-          deliveryProgress: {
-            $switch: {
-              branches: [
-                { case: { $eq: ["$status", "pending"] },               then: 0   },
-                { case: { $eq: ["$status", "accepted"] },              then: 10  },
-                { case: { $eq: ["$status", "at_origin_branch"] },      then: 20  },
-                { case: { $eq: ["$status", "in_transit_to_branch"] },  then: 40  },
-                { case: { $eq: ["$status", "at_destination_branch"] }, then: 60  },
-                { case: { $eq: ["$status", "out_for_delivery"] },      then: 80  },
-                { case: { $eq: ["$status", "delivered"] },             then: 100 },
-                { case: { $eq: ["$status", "failed_delivery"] },       then: 80  },
-                { case: { $eq: ["$status", "rescheduled"] },           then: 70  },
-                { case: { $eq: ["$status", "returned"] },              then: 100 },
-                { case: { $eq: ["$status", "on_hold"] },               then: 50  },
-              ],
-              default: 0,
+          outForDelivery: {
+            packages: result.outForDelivery,
+            pagination: {
+              total: outForDeliveryTotal,
+              page: pageNum,
+              limit: limitNum,
+              totalPages: Math.ceil(outForDeliveryTotal / limitNum),
+              hasNextPage:
+                pageNum < Math.ceil(outForDeliveryTotal / limitNum),
+              hasPrevPage: pageNum > 1,
             },
           },
         },
-      },
-
-      // ── Lookups ───────────────────────────────────────────────────────
-      {
-        $lookup: {
-          from: "branches",
-          localField: "originBranchId",
-          foreignField: "_id",
-          as: "originBranch",
-          pipeline: [{ $project: { name: 1, code: 1, address: 1 } }],
+        summary: {
+          byStatus: statusBreakdown,
+          actionable: counters,
         },
-      },
-      { $unwind: { path: "$originBranch", preserveNullAndEmptyArrays: true } },
+      });
+    }
 
-      {
-        $lookup: {
-          from: "branches",
-          localField: "destinationBranchId",
-          foreignField: "_id",
-          as: "destinationBranch",
-          pipeline: [{ $project: { name: 1, code: 1, address: 1 } }],
-        },
-      },
-      { $unwind: { path: "$destinationBranch", preserveNullAndEmptyArrays: true } },
+    // ─────────────────────────────────────────────────────────────────────
+    //  PATH B — branch_pickup: flat paginated response
+    // ─────────────────────────────────────────────────────────────────────
 
-      {
-        $lookup: {
-          from: "users",
-          localField: "senderId",
-          foreignField: "_id",
-          as: "sender",
-          pipeline: [
-            { $project: { firstName: 1, lastName: 1, email: 1, phone: 1 } },
-          ],
-        },
-      },
-      { $unwind: { path: "$sender", preserveNullAndEmptyArrays: true } },
-
-      {
-        $lookup: {
-          from: "users",
-          localField: "assignedDelivererId",
-          foreignField: "_id",
-          as: "assignedDeliverer",
-          pipeline: [
-            { $project: { firstName: 1, lastName: 1, phone: 1 } },
-          ],
-        },
-      },
-      { $unwind: { path: "$assignedDeliverer", preserveNullAndEmptyArrays: true } },
-
-      // ── Sort ──────────────────────────────────────────────────────────
+    const flatPipeline: mongoose.PipelineStage[] = [
+      { $match: baseMatch },
+      COMPUTED_FIELDS_STAGE,
+      ...LOOKUP_STAGES,
       { $sort: { [sortBy]: sortDirection } },
-
-      // ── Facet: data + totals + breakdown ─────────────────────────────
       {
         $facet: {
           data: [
             { $skip: skip },
             { $limit: limitNum },
-            // Strip large embedded arrays from the list view
-            {
-              $project: {
-                trackingHistory: 0,
-              },
-            },
+            PROJECT_STRIP_HISTORY,
           ],
-
           totalCount: [{ $count: "count" }],
-
-          // Count per PackageStatus
           statusBreakdown: [
             { $group: { _id: "$status", count: { $sum: 1 } } },
           ],
-
-          // Count per deliveryType
-          deliveryTypeBreakdown: [
-            { $group: { _id: "$deliveryType", count: { $sum: 1 } } },
-          ],
-
-          // Actionable counters for the supervisor dashboard
           actionableCounters: [
             {
               $group: {
                 _id: null,
-                readyForPickup:  { $sum: { $cond: ["$isReadyForPickup",  1, 0] } },
-                readyForDispatch:{ $sum: { $cond: ["$isReadyForDispatch",1, 0] } },
-                needsAttention:  { $sum: { $cond: ["$needsAttentionFlag",1, 0] } },
-                overdue:         { $sum: { $cond: ["$isOverdueFlag",     1, 0] } },
-                outForDelivery:  {
-                  $sum: {
-                    $cond: [{ $eq: ["$status", "out_for_delivery"] }, 1, 0],
-                  },
+                readyForPickup: {
+                  $sum: { $cond: ["$isReadyForPickup", 1, 0] },
                 },
+                needsAttention: {
+                  $sum: { $cond: ["$needsAttentionFlag", 1, 0] },
+                },
+                overdue: { $sum: { $cond: ["$isOverdueFlag", 1, 0] } },
               },
             },
           ],
@@ -4353,35 +5034,27 @@ export const getBranchPackages = catchAsyncError(
       },
     ];
 
-    const [result] = await PackageModel.aggregate(pipeline);
+    const [result] = await PackageModel.aggregate(flatPipeline);
 
     const total: number = result.totalCount[0]?.count ?? 0;
     const totalPages = Math.ceil(total / limitNum);
 
-    // Reshape flat group arrays → plain objects
     const statusBreakdown = Object.fromEntries(
       (result.statusBreakdown as { _id: string; count: number }[]).map(
         ({ _id, count }) => [_id, count],
       ),
     );
 
-    const deliveryTypeBreakdown = Object.fromEntries(
-      (result.deliveryTypeBreakdown as { _id: string; count: number }[]).map(
-        ({ _id, count }) => [_id, count],
-      ),
-    );
-
     const counters = result.actionableCounters[0] ?? {
       readyForPickup: 0,
-      readyForDispatch: 0,
       needsAttention: 0,
       overdue: 0,
-      outForDelivery: 0,
     };
     delete counters._id;
 
     return res.status(200).json({
       success: true,
+      deliveryType: "branch_pickup",
       data: result.data,
       pagination: {
         total,
@@ -4393,7 +5066,6 @@ export const getBranchPackages = catchAsyncError(
       },
       summary: {
         byStatus: statusBreakdown,
-        byDeliveryType: deliveryTypeBreakdown,
         actionable: counters,
       },
     });
