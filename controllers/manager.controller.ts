@@ -2129,9 +2129,7 @@ function validateDocuments(
 
 
 
-// ─────────────────────────────────────────────
-//  CREATE VEHICLE
-// ─────────────────────────────────────────────
+
 
 export const createVehicle = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -2142,7 +2140,6 @@ export const createVehicle = catchAsyncError(
       const managerId = req.user?._id;
       const { companyId } = req.params;
 
-      // ── Auth ──────────────────────────────────────────────────────────────
       if (!managerId) {
         await session.abortTransaction();
         session.endSession();
@@ -2151,14 +2148,12 @@ export const createVehicle = catchAsyncError(
         );
       }
 
-      // ── Param validation ──────────────────────────────────────────────────
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         await session.abortTransaction();
         session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
-      // ── Body extraction ───────────────────────────────────────────────────
       const {
         type,
         registrationNumber,
@@ -2174,7 +2169,6 @@ export const createVehicle = catchAsyncError(
         notes,
       } = req.body as ICreateVehicleBody;
 
-      // ── Required fields ───────────────────────────────────────────────────
       if (!type) {
         await session.abortTransaction();
         session.endSession();
@@ -2264,7 +2258,6 @@ export const createVehicle = catchAsyncError(
         );
       }
 
-      // ── Optional field validation ──────────────────────────────────────────
       if (brand !== undefined) {
         if (typeof brand !== "string" || brand.trim().length === 0) {
           await session.abortTransaction();
@@ -2371,7 +2364,6 @@ export const createVehicle = catchAsyncError(
         }
       }
 
-      // ── DB checks (parallel) ──────────────────────────────────────────────
       const [company, manager, requestingUser, existingVehicle] =
         await Promise.all([
           CompanyModel.findById(companyId).session(session).lean(),
@@ -2426,7 +2418,6 @@ export const createVehicle = catchAsyncError(
         );
       }
 
-      // ── Build documents payload ────────────────────────────────────────────
       let docsPayload: Partial<IVehicleDocuments> | undefined;
       if (documents) {
         docsPayload = {
@@ -2446,7 +2437,6 @@ export const createVehicle = catchAsyncError(
         };
       }
 
-      // ── Create ────────────────────────────────────────────────────────────
       const [vehicle] = await VehicleModel.create(
         [
           {
@@ -2472,7 +2462,6 @@ export const createVehicle = catchAsyncError(
       await session.commitTransaction();
       session.endSession();
 
-      // ── Response (aggregation for rich data) ──────────────────────────────
       const [populatedVehicle] = await VehicleModel.aggregate([
         { $match: { _id: vehicle._id } },
         {
@@ -2540,9 +2529,9 @@ export const createVehicle = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────
+
 //  UPDATE VEHICLE  (info only — no assignment)
-// ─────────────────────────────────────────────
+
 
 export const updateVehicle = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -2553,7 +2542,7 @@ export const updateVehicle = catchAsyncError(
       const managerId = req.user?._id;
       const { companyId, vehicleId } = req.params;
 
-      // ── Auth ──────────────────────────────────────────────────────────────
+
       if (!managerId) {
         await session.abortTransaction();
         session.endSession();
@@ -2562,7 +2551,7 @@ export const updateVehicle = catchAsyncError(
         );
       }
 
-      // ── Param validation ──────────────────────────────────────────────────
+
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         await session.abortTransaction();
         session.endSession();
@@ -2575,7 +2564,7 @@ export const updateVehicle = catchAsyncError(
         return next(new ErrorHandler("Invalid vehicle ID", 400));
       }
 
-      // ── Body extraction ───────────────────────────────────────────────────
+
       const {
         type,
         registrationNumber,
@@ -2592,7 +2581,7 @@ export const updateVehicle = catchAsyncError(
         notes,
       } = req.body as IUpdateVehicleBody;
 
-      // Reject attempts to assign vehicles via this endpoint
+
       if (
         (req.body as any).assignedUserId !== undefined ||
         (req.body as any).assignedUserRole !== undefined
@@ -2607,7 +2596,6 @@ export const updateVehicle = catchAsyncError(
         );
       }
 
-      // ── Field-level validation ────────────────────────────────────────────
       if (type !== undefined && !VEHICLE_TYPES.includes(type)) {
         await session.abortTransaction();
         session.endSession();
@@ -2798,7 +2786,7 @@ export const updateVehicle = catchAsyncError(
         }
       }
 
-      // ── DB checks (parallel) ──────────────────────────────────────────────
+
       const [vehicle, manager, requestingUser] = await Promise.all([
         VehicleModel.findOne({ _id: vehicleId, companyId }).session(session),
         ManagerModel.findOne({ userId: managerId, companyId }).session(session),
@@ -2833,7 +2821,7 @@ export const updateVehicle = catchAsyncError(
         );
       }
 
-      // Guard: cannot change status away from in_use without releasing first
+
       if (vehicle.status === "in_use" && status) {
         await session.abortTransaction();
         session.endSession();
@@ -2845,7 +2833,7 @@ export const updateVehicle = catchAsyncError(
         );
       }
 
-      // Check registration number uniqueness only if it changed
+
       if (
         normalizedRegNum &&
         normalizedRegNum !== vehicle.registrationNumber
@@ -2869,7 +2857,7 @@ export const updateVehicle = catchAsyncError(
         }
       }
 
-      // ── Build update payload ──────────────────────────────────────────────
+
       const updatePayload: Record<string, any> = {};
 
       if (type !== undefined) updatePayload.type = type;
@@ -2888,7 +2876,7 @@ export const updateVehicle = catchAsyncError(
       if (status !== undefined) updatePayload.status = status;
       if (notes !== undefined) updatePayload.notes = notes.trim();
 
-      // Merge documents (partial update — only supplied keys are overwritten)
+
       if (documents) {
         if (documents.registrationCard !== undefined)
           updatePayload["documents.registrationCard"] =
@@ -2917,7 +2905,7 @@ export const updateVehicle = catchAsyncError(
       await session.commitTransaction();
       session.endSession();
 
-      // ── Response (aggregation) ────────────────────────────────────────────
+
       const [populatedVehicle] = await VehicleModel.aggregate([
         { $match: { _id: updatedVehicle!._id } },
         {
@@ -3004,28 +2992,30 @@ export const updateVehicle = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────
+
 //  GET COMPANY VEHICLES
-// ─────────────────────────────────────────────
+
 
 export const getCompanyVehicles = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-    const managerId = req.user?._id;
+    try {
+      
+      const managerId = req.user?._id;
     const { companyId } = req.params;
 
-    // ── Auth ──────────────────────────────────────────────────────────────
+
     if (!managerId) {
       return next(
         new ErrorHandler("Unauthorized, you are not authenticated.", 401),
       );
     }
 
-    // ── Param validation ──────────────────────────────────────────────────
+
     if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
       return next(new ErrorHandler("Invalid company ID", 400));
     }
 
-    // ── Query params ──────────────────────────────────────────────────────
+
     const {
       type,
       status,
@@ -3092,7 +3082,7 @@ export const getCompanyVehicles = catchAsyncError(
       );
     }
 
-    // ── Authorization + company check (parallel) ──────────────────────────
+
     const [company, manager, requestingUser] = await Promise.all([
       CompanyModel.findById(companyId).lean(),
       ManagerModel.findOne({ userId: managerId, companyId }).lean(),
@@ -3115,7 +3105,7 @@ export const getCompanyVehicles = catchAsyncError(
       );
     }
 
-    // ── Build aggregation pipeline ────────────────────────────────────────
+
     const matchStage: Record<string, any> = {
       companyId: new mongoose.Types.ObjectId(companyId.toString()),
     };
@@ -3123,7 +3113,7 @@ export const getCompanyVehicles = catchAsyncError(
     if (type) matchStage.type = type;
     if (status) matchStage.status = status;
 
-    // Branch filter: respect manager's branch access scope
+
     if (branchId) {
       if (!isAdmin && manager && !manager.branchAccess.allBranches) {
         const allowedIds = manager.branchAccess.specificBranches.map((id) =>
@@ -3145,7 +3135,7 @@ export const getCompanyVehicles = catchAsyncError(
       };
     }
 
-    // ── Search filter (text match on registration, brand, modelName) ──────
+
     if (search && typeof search === "string" && search.trim().length > 0) {
       const searchRegex = { $regex: search.trim(), $options: "i" };
       matchStage.$or = [
@@ -3160,7 +3150,7 @@ export const getCompanyVehicles = catchAsyncError(
 
     const pipeline: mongoose.PipelineStage[] = [
       { $match: matchStage },
-      // ── Lookup company ────────────────────────────────────────────────
+
       {
         $lookup: {
           from: "companies",
@@ -3171,7 +3161,7 @@ export const getCompanyVehicles = catchAsyncError(
         },
       },
       { $unwind: { path: "$company", preserveNullAndEmptyArrays: true } },
-      // ── Lookup current branch ─────────────────────────────────────────
+
       {
         $lookup: {
           from: "branches",
@@ -3182,7 +3172,7 @@ export const getCompanyVehicles = catchAsyncError(
         },
       },
       { $unwind: { path: "$currentBranch", preserveNullAndEmptyArrays: true } },
-      // ── Lookup assigned user ──────────────────────────────────────────
+
       {
         $lookup: {
           from: "users",
@@ -3197,7 +3187,7 @@ export const getCompanyVehicles = catchAsyncError(
         },
       },
       { $unwind: { path: "$assignedUser", preserveNullAndEmptyArrays: true } },
-      // ── Computed fields (mirrors model virtuals) ───────────────────────
+
       {
         $addFields: {
           isAssigned: {
@@ -3232,14 +3222,14 @@ export const getCompanyVehicles = catchAsyncError(
           },
         },
       },
-      // ── Sort ──────────────────────────────────────────────────────────
+
       { $sort: { [sortBy]: sortDirection } },
-      // ── Facet: paginated results + total count ────────────────────────
+
       {
         $facet: {
           data: [{ $skip: skip }, { $limit: limitNum }],
           totalCount: [{ $count: "count" }],
-          // Fleet summary stats (counts per status & type)
+
           statusSummary: [
             { $group: { _id: "$status", count: { $sum: 1 } } },
           ],
@@ -3255,7 +3245,7 @@ export const getCompanyVehicles = catchAsyncError(
     const total: number = result.totalCount[0]?.count ?? 0;
     const totalPages = Math.ceil(total / limitNum);
 
-    // Reshape summaries into plain objects
+
     const statusSummary = Object.fromEntries(
       (result.statusSummary as { _id: string; count: number }[]).map(
         ({ _id, count }) => [_id, count],
@@ -3284,5 +3274,22 @@ export const getCompanyVehicles = catchAsyncError(
         byType: typeSummary,
       },
     });
+
+    } catch (error:any) {
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler("Failed to fetch company vehicles.", 500));
+      
+    }
   },
 );

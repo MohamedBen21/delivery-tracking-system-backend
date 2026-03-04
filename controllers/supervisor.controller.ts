@@ -3863,9 +3863,9 @@ export const assignFreelancer = catchAsyncError(
 //   "status",
 // ] as const;
 
-// // ─────────────────────────────────────────────
+
 // //  QUERY INTERFACE
-// // ─────────────────────────────────────────────
+
 
 // /**
 //  * Packages whose `currentBranchId` matches the requested branch,
@@ -3892,8 +3892,8 @@ export const assignFreelancer = catchAsyncError(
 //   deliveryPriority?: string;
 
 //   // Date range on createdAt
-//   fromDate?: string;          // ISO string
-//   toDate?: string;            // ISO string
+//   fromDate?: string;          
+//   toDate?: string;            
 
 //   // Search
 //   search?: string;            // trackingNumber prefix OR recipient name (regex)
@@ -4457,9 +4457,8 @@ const ALLOWED_SORT_FIELDS = [
   "status",
 ] as const;
 
-// ─────────────────────────────────────────────
+
 //  QUERY INTERFACE
-// ─────────────────────────────────────────────
 
 /**
  * All filters are optional and composable.
@@ -4484,8 +4483,8 @@ interface IBranchPackagesQuery {
   packageType?: string;     // single  OR  comma-separated: "fragile,heavy"
   paymentStatus?: string;
   deliveryPriority?: string;
-  fromDate?: string;        // ISO string
-  toDate?: string;          // ISO string
+  fromDate?: string;       
+  toDate?: string;         
   search?: string;          // trackingNumber prefix OR recipient name/phone
   needsAttention?: string;  // "true" → status ∈ {failed_delivery, damaged, lost, on_hold}
   isOverdue?: string;       // "true" → estimatedDeliveryTime < now AND not terminal
@@ -4495,9 +4494,9 @@ interface IBranchPackagesQuery {
   sortOrder?: "asc" | "desc";
 }
 
-// ─────────────────────────────────────────────
+
 //  SHARED PIPELINE STAGES
-// ─────────────────────────────────────────────
+
 
 const COMPUTED_FIELDS_STAGE: mongoose.PipelineStage = {
   $addFields: {
@@ -4625,28 +4624,30 @@ const PROJECT_STRIP_HISTORY: mongoose.PipelineStage.Project = {
   $project: { trackingHistory: 0 },
 };
 
-// ─────────────────────────────────────────────
+
 //  GET BRANCH PACKAGES
-// ─────────────────────────────────────────────
+
 
 export const getBranchPackages = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-    const supervisorUserId = req.user?._id;
+    try {
+      
+      const supervisorUserId = req.user?._id;
     const { branchId } = req.params;
 
-    // ── Auth ──────────────────────────────────────────────────────────────
+
     if (!supervisorUserId) {
       return next(
         new ErrorHandler("Unauthorized, you are not authenticated.", 401),
       );
     }
 
-    // ── Param validation ──────────────────────────────────────────────────
+
     if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
       return next(new ErrorHandler("Invalid branch ID", 400));
     }
 
-    // ── Query param extraction ────────────────────────────────────────────
+
     const {
       deliveryType,
       status,
@@ -4664,7 +4665,7 @@ export const getBranchPackages = catchAsyncError(
       sortOrder = "desc",
     } = req.query as IBranchPackagesQuery;
 
-    // ── Pagination & sort validation ──────────────────────────────────────
+
     const pageNum = parseInt(page, 10);
     const limitNum = parseInt(limit, 10);
 
@@ -4686,7 +4687,7 @@ export const getBranchPackages = catchAsyncError(
       return next(new ErrorHandler("sortOrder must be 'asc' or 'desc'", 400));
     }
 
-    // ── Filter validation ─────────────────────────────────────────────────
+
     if (
       deliveryType !== undefined &&
       !DELIVERY_TYPES.includes(deliveryType as DeliveryType)
@@ -4795,7 +4796,7 @@ export const getBranchPackages = catchAsyncError(
       );
     }
 
-    // ── Build base $match ─────────────────────────────────────────────────
+
     const baseMatch: Record<string, any> = {
       currentBranchId: new mongoose.Types.ObjectId(branchId.toString()),
     };
@@ -5069,5 +5070,23 @@ export const getBranchPackages = catchAsyncError(
         actionable: counters,
       },
     });
-  },
-);
+  
+
+    } catch (error:any) {
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler("Failed to fetch branch packages", 500));
+      
+      
+    }
+});
