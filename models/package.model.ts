@@ -819,7 +819,12 @@ packageSchema.pre('save', function(next) {
     const random = Math.floor(1000 + Math.random() * 9000);
     this.trackingNumber = `${prefix}${timestamp}${random}`;
   }
-  
+
+
+  if (this.isNew && !this.currentBranchId && this.originBranchId) {
+    this.currentBranchId = this.originBranchId;
+  }
+
   if (this.deliveryType === 'branch_pickup' && !this.destinationBranchId) {
     return next(new Error('Destination branch is required for branch pickup'));
   }

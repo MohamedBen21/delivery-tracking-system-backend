@@ -5308,7 +5308,151 @@ export const cancelPackage = catchAsyncError(
     } catch (error: any) {
       await session.abortTransaction();
       session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
       return next(new ErrorHandler(error.message || "Error cancelling package", 500));
     }
   },
 );
+
+
+
+
+
+
+export const getPackagesByStatus = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+
+      const supervisorUserId = req.user?._id;
+    const { branchId } = req.params;
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    const { status, deliveryType, page, limit } = req.query as {
+      status?: string;
+      deliveryType?: string;
+      page?: string;
+      limit?: string;
+    };
+
+   
+    if (!status) {
+      return next(
+        new ErrorHandler(
+          `status is required. Allowed values: ${PACKAGE_STATUSES.join(", ")}`,
+          400,
+        ),
+      );
+    }
+
+    const rawStatuses = status.split(",").map((s) => s.trim());
+    const invalidStatuses = rawStatuses.filter(
+      (s) => !PACKAGE_STATUSES.includes(s as PackageStatus),
+    );
+
+    if (invalidStatuses.length) {
+      return next(
+        new ErrorHandler(
+          `Invalid status value(s): ${invalidStatuses.join(", ")}. Allowed: ${PACKAGE_STATUSES.join(", ")}`,
+          400,
+        ),
+      );
+    }
+
+    if (
+      deliveryType !== undefined &&
+      !["home", "branch_pickup"].includes(deliveryType)
+    ) {
+      return next(
+        new ErrorHandler(
+          "deliveryType must be 'home' or 'branch_pickup'",
+          400,
+        ),
+      );
+    }
+
+    const pagination = parsePagination(page, limit, next);
+    if (!pagination) return;
+    const { pageNum, limitNum, skip } = pagination;
+
+
+    const [branch, supervisor] = await Promise.all([
+      BranchModel.findById(branchId).lean(),
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+    ]);
+
+    if (!branch) return next(new ErrorHandler("Branch not found", 404));
+
+    if (!supervisor || !supervisor.isActive || supervisor.branchId.toString() !== branchId.toString()) {
+      return next(
+        new ErrorHandler("You are not an active supervisor of this branch", 403),
+      );
+    }
+
+
+    const matchStage: Record<string, any> = {
+      $or: [
+        { originBranchId: new mongoose.Types.ObjectId(branchId.toString()) },
+        { currentBranchId: new mongoose.Types.ObjectId(branchId.toString()) },
+      ],
+      status: rawStatuses.length === 1 ? rawStatuses[0] : { $in: rawStatuses },
+    };
+
+    if (deliveryType) matchStage.deliveryType = deliveryType;
+
+    const [result] = await PackageModel.aggregate([
+      { $match: matchStage },
+      ...PACKAGE_LOOKUP_STAGES,
+      { $sort: { createdAt: -1 } },
+      {
+        $facet: {
+          data: [{ $skip: skip }, { $limit: limitNum }],
+          totalCount: [{ $count: "count" }],
+        },
+      },
+    ]);
+
+    const total: number = result.totalCount[0]?.count ?? 0;
+
+    return res.status(200).json({
+      success: true,
+      data: result.data,
+      pagination: paginationMeta(total, pageNum, limitNum),
+    });
+ 
+      
+    } catch (error:any) {
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler("Failed to fetch packages by status", 500));
+
+    }
+ });
+
