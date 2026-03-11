@@ -5090,3 +5090,225 @@ export const getBranchPackages = catchAsyncError(
       
     }
 });
+
+
+
+
+
+const NON_CANCELLABLE_STATUSES: PackageStatus[] = [
+  "delivered", "returned", "lost",
+];
+
+
+const CANCELLABLE_STATUSES: PackageStatus[] = PACKAGE_STATUSES.filter(
+  (s) => !NON_CANCELLABLE_STATUSES.includes(s) && s !== "cancelled",
+);
+
+
+const PACKAGE_LOOKUP_STAGES: mongoose.PipelineStage[] = [
+  {
+    $lookup: {
+      from: "users",
+      localField: "senderId",
+      foreignField: "_id",
+      as: "sender",
+      pipeline: [
+        { $project: { firstName: 1, lastName: 1, email: 1, phone: 1, role: 1 } },
+      ],
+    },
+  },
+  { $unwind: { path: "$sender", preserveNullAndEmptyArrays: true } },
+  {
+    $lookup: {
+      from: "branches",
+      localField: "originBranchId",
+      foreignField: "_id",
+      as: "originBranch",
+      pipeline: [{ $project: { name: 1, code: 1, address: 1 } }],
+    },
+  },
+  { $unwind: { path: "$originBranch", preserveNullAndEmptyArrays: true } },
+  {
+    $lookup: {
+      from: "branches",
+      localField: "currentBranchId",
+      foreignField: "_id",
+      as: "currentBranch",
+      pipeline: [{ $project: { name: 1, code: 1, address: 1 } }],
+    },
+  },
+  { $unwind: { path: "$currentBranch", preserveNullAndEmptyArrays: true } },
+  {
+    $lookup: {
+      from: "branches",
+      localField: "destinationBranchId",
+      foreignField: "_id",
+      as: "destinationBranch",
+      pipeline: [{ $project: { name: 1, code: 1, address: 1 } }],
+    },
+  },
+  { $unwind: { path: "$destinationBranch", preserveNullAndEmptyArrays: true } },
+  { $project: { trackingHistory: 0 } },
+];
+
+
+
+function paginationMeta(total: number, page: number, limit: number) {
+  const totalPages = Math.ceil(total / limit);
+  return { total, page, limit, totalPages, hasNextPage: page < totalPages, hasPrevPage: page > 1 };
+}
+
+
+interface IParsedPagination {
+  pageNum: number;
+  limitNum: number;
+  skip: number;
+}
+
+function parsePagination(
+  page: string | undefined,
+  limit: string | undefined,
+  next: NextFunction,
+): IParsedPagination | null {
+  const pageNum = parseInt(page ?? "1", 10);
+  const limitNum = parseInt(limit ?? "20", 10);
+
+  if (isNaN(pageNum) || pageNum < 1) {
+    next(new ErrorHandler("page must be a positive integer", 400));
+    return null;
+  }
+  if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
+    next(new ErrorHandler("limit must be between 1 and 100", 400));
+    return null;
+  }
+  return { pageNum, limitNum, skip: (pageNum - 1) * limitNum };
+}
+
+
+
+export const cancelPackage = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const supervisorUserId = req.user?._id;
+      const { branchId, packageId } = req.params;
+
+      if (!supervisorUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid package ID", 400));
+      }
+
+      const { reason } = req.body as { reason?: string };
+
+      if ((reason !== undefined && typeof reason !== "string") || (reason && reason.trim().length > 200)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("reason must be a string and must not exceed 200 characters.", 400));
+      }
+
+      const [packageDoc, supervisor] = await Promise.all([
+        PackageModel.findOne({
+          _id: packageId,
+          $or: [{ originBranchId: branchId }, { currentBranchId: branchId }],
+        }).session(session),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+      ]);
+
+      if (!packageDoc) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Package not found in this branch", 404));
+      }
+
+      if (!supervisor || !supervisor.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+
+      if (!supervisor.hasPermission("can_manage_packages")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage packages", 403));
+      }
+
+      if (packageDoc.status === "cancelled") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Package is already cancelled", 400));
+      }
+
+      if (NON_CANCELLABLE_STATUSES.includes(packageDoc.status)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            `Cannot cancel a package with status '${packageDoc.status}'`,
+            400,
+          ),
+        );
+      }
+
+      await Promise.all([
+        PackageModel.findByIdAndUpdate(
+          packageId,
+          {
+            $set: { status: "cancelled" },
+            $push: {
+              trackingHistory: {
+                status: "cancelled",
+                branchId,
+                userId: supervisorUserId,
+                notes: reason
+                  ? `Package cancelled by supervisor. Reason: ${reason}`
+                  : "Package cancelled by supervisor",
+                timestamp: new Date(),
+              },
+            },
+          },
+          { session },
+        ),
+        BranchModel.findByIdAndUpdate(
+          branchId,
+          { $inc: { currentLoad: -1 } },
+          { session },
+        ),
+      ]);
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const updatedPackage = await PackageModel.findById(packageId)
+        .populate("senderId", "firstName lastName email phone role")
+        .populate("originBranchId", "name code address")
+        .populate("currentBranchId", "name code address")
+        .populate("destinationBranchId", "name code address")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: "Package cancelled successfully",
+        data: updatedPackage,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler(error.message || "Error cancelling package", 500));
+    }
+  },
+);
