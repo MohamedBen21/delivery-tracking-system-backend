@@ -5575,9 +5575,302 @@ export const getPackagesByBranch = catchAsyncError(
         );
       }
 
-      return next(new ErrorHandler("Failed to fetch packages by status", 500));
+      return next(new ErrorHandler("Failed to fetch packages by branch", 500));
       
     }
   }
 );
 
+
+
+export const getPackagesBySender = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+
+    const supervisorUserId = req.user?._id;
+    const { branchId } = req.params;
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    const { senderId, senderType, status, page, limit } = req.query as {
+      senderId?: string;
+      senderType?: string;
+      status?: string;
+      page?: string;
+      limit?: string;
+    };
+
+    if (!senderId) {
+      return next(new ErrorHandler("senderId is required", 400));
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(senderId)) {
+      return next(new ErrorHandler("Invalid senderId", 400));
+    }
+
+    const senderUser = await userModel.findById(senderId).select("firstName lastName email phone role").lean();
+
+    if (
+     !senderUser || senderUser.role !== "freelancer"
+    ) {
+      return next(
+        new ErrorHandler("sender not found or is not a freelancer", 400),
+      );
+    }
+
+    let statusFilter: string[] | undefined;
+    if (status !== undefined) {
+      const raw = status.split(",").map((s) => s.trim());
+      const invalid = raw.filter((s) => !PACKAGE_STATUSES.includes(s as PackageStatus));
+      if (invalid.length) {
+        return next(
+          new ErrorHandler(`Invalid status value(s): ${invalid.join(", ")}`, 400),
+        );
+      }
+      statusFilter = raw;
+    }
+
+    const pagination = parsePagination(page, limit, next);
+    if (!pagination) return;
+    const { pageNum, limitNum, skip } = pagination;
+
+
+    const senderOid = new mongoose.Types.ObjectId(senderId);
+    const branchOid = new mongoose.Types.ObjectId(branchId.toString());
+
+    const [branch, supervisor] = await Promise.all([
+      BranchModel.findById(branchId).lean(),
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+    ]);
+
+    if (!branch) return next(new ErrorHandler("Branch not found", 404));
+
+    if (!supervisor || !supervisor.isActive) {
+      return next(
+        new ErrorHandler("You are not an active supervisor of this branch", 403),
+      );
+    }
+
+
+    const matchStage: Record<string, any> = {
+      senderId: senderOid,
+      $or: [{ originBranchId: branchOid }, { currentBranchId: branchOid }],
+    };
+
+    if (senderType) matchStage.senderType = senderType;
+
+    if (statusFilter) {
+      matchStage.status =
+        statusFilter.length === 1 ? statusFilter[0] : { $in: statusFilter };
+    }
+
+    const [result] = await PackageModel.aggregate([
+      { $match: matchStage },
+      ...PACKAGE_LOOKUP_STAGES,
+      { $sort: { createdAt: -1 } },
+      {
+        $facet: {
+          data: [{ $skip: skip }, { $limit: limitNum }],
+          totalCount: [{ $count: "count" }],
+          statusBreakdown: [
+            { $group: { _id: "$status", count: { $sum: 1 } } },
+          ],
+        },
+      },
+    ]);
+
+    const total: number = result.totalCount[0]?.count ?? 0;
+
+    const statusBreakdown = Object.fromEntries(
+      (result.statusBreakdown as { _id: string; count: number }[]).map(
+        ({ _id, count }) => [_id, count],
+      ),
+    );
+
+    return res.status(200).json({
+      success: true,
+      sender: senderUser,
+      data: result.data,
+      pagination: paginationMeta(total, pageNum, limitNum),
+      summary: { byStatus: statusBreakdown },
+    });
+
+      
+    } catch (error:any) {
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler("Failed to fetch packages by sender", 500));
+
+      
+    }
+  }
+);
+
+
+const phoneRegex: RegExp = /^(\+213|0)(5|6|7)[0-9]{8}$/;
+
+
+export const getPackagesByReceiver = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      
+    const supervisorUserId = req.user?._id;
+    const { branchId } = req.params;
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    const { recipientPhone, recipientName, status, page, limit } = req.query as {
+      recipientPhone?: string;
+      recipientName?: string;
+      status?: string;
+      page?: string;
+      limit?: string;
+    };
+
+    if (!recipientPhone && !recipientName) {
+      return next(
+        new ErrorHandler(
+          "At least one of recipientPhone or recipientName is required",
+          400,
+        ),
+      );
+    }
+
+    if (recipientPhone !== undefined && (typeof recipientPhone !== "string" ||  recipientPhone.trim().length === 0 || !phoneRegex.test(recipientPhone.trim()))) {
+      return next(new ErrorHandler("recipientPhone is not valid", 400));
+    }
+
+    if ((recipientName !== undefined && ( typeof recipientName !== "string" || recipientName.trim().length === 0 || recipientName.trim().length > 50))) {
+      return next(new ErrorHandler("recipientName is not valid", 400));
+    }
+
+    let statusFilter: string[] | undefined;
+    if (status !== undefined) {
+      const raw = status.split(",").map((s) => s.trim());
+      const invalid = raw.filter((s) => !PACKAGE_STATUSES.includes(s as PackageStatus));
+      if (invalid.length) {
+        return next(
+          new ErrorHandler(`Invalid status value(s): ${invalid.join(", ")}`, 400),
+        );
+      }
+      statusFilter = raw;
+    }
+
+    const pagination = parsePagination(page, limit, next);
+    if (!pagination) return;
+    const { pageNum, limitNum, skip } = pagination;
+
+
+    const [branch, supervisor] = await Promise.all([
+      BranchModel.findById(branchId).lean(),
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+    ]);
+
+    if (!branch) return next(new ErrorHandler("Branch not found", 404));
+
+    if (!supervisor || !supervisor.isActive) {
+      return next(
+        new ErrorHandler("You are not an active supervisor of this branch", 403),
+      );
+    }
+
+
+    const branchOid = new mongoose.Types.ObjectId(branchId.toString());
+
+    const matchStage: Record<string, any> = {
+      $or: [{ originBranchId: branchOid }, { currentBranchId: branchOid }],
+    };
+
+    if (recipientPhone && recipientName) {
+      matchStage.$and = [
+        { "destination.recipientPhone": recipientPhone.trim() },
+        {
+          "destination.recipientName": {
+            $regex: recipientName.trim(),
+            $options: "i",
+          },
+        },
+      ];
+    } else if (recipientPhone) {
+      matchStage["destination.recipientPhone"] = recipientPhone.trim();
+    } else if (recipientName) {
+      matchStage["destination.recipientName"] = {
+        $regex: recipientName.trim(),
+        $options: "i",
+      };
+    }
+
+    if (statusFilter) {
+      matchStage.status =
+        statusFilter.length === 1 ? statusFilter[0] : { $in: statusFilter };
+    }
+
+    const [result] = await PackageModel.aggregate([
+      { $match: matchStage },
+      ...PACKAGE_LOOKUP_STAGES,
+      { $sort: { createdAt: -1 } },
+      {
+        $facet: {
+          data: [{ $skip: skip }, { $limit: limitNum }],
+          totalCount: [{ $count: "count" }],
+          statusBreakdown: [
+            { $group: { _id: "$status", count: { $sum: 1 } } },
+          ],
+        },
+      },
+    ]);
+
+    const total: number = result.totalCount[0]?.count ?? 0;
+
+    const statusBreakdown = Object.fromEntries(
+      (result.statusBreakdown as { _id: string; count: number }[]).map(
+        ({ _id, count }) => [_id, count],
+      ),
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result.data,
+      pagination: paginationMeta(total, pageNum, limitNum),
+      summary: { byStatus: statusBreakdown },
+    });
+
+    } catch (error:any) {
+      
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+
+      return next(new ErrorHandler("Failed to fetch packages by reciever", 500));
+    }
+  }
+);
