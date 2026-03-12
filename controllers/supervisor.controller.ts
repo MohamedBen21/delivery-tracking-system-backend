@@ -6040,3 +6040,157 @@ export const getPackageHistory = catchAsyncError(
   },
 );
 
+
+
+
+
+export const getPackageTracking = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const supervisorUserId = req.user?._id;
+    const { branchId, packageId } = req.params;
+
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
+      return next(new ErrorHandler("Invalid package ID", 400));
+    }
+
+    const branchOid  = new mongoose.Types.ObjectId(branchId.toString());
+    const packageOid = new mongoose.Types.ObjectId(packageId.toString());
+
+
+    const [packageDoc, supervisor] = await Promise.all([
+      PackageModel.findOne({ _id: packageOid, currentBranchId: branchOid })
+        .select(
+          "trackingNumber status deliveryType deliveryPriority " +
+          "destination originBranchId currentBranchId destinationBranchId " +
+          "estimatedDeliveryTime deliveredAt attemptCount maxAttempts " +
+          "returnInfo trackingHistory createdAt"
+        )
+        .populate("originBranchId",      "name code")
+        .populate("currentBranchId",     "name code")
+        .populate("destinationBranchId", "name code")
+        .lean(),
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+    ]);
+
+    if (!packageDoc) {
+      return next(new ErrorHandler("Package not found in this branch", 404));
+    }
+
+    if (!supervisor || !supervisor.isActive) {
+      return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+    }
+
+
+    // ── Shape the embedded trackingHistory into a timeline ────────────────
+    //
+    // Each entry in trackingHistory already has { status, notes, timestamp, branchId, userId }.
+    // We sort oldest → newest and attach:
+    //   • readableStatus  — human label
+    //   • stepState       — "completed" | "active" | "pending"
+    //   • isException     — true for failure/problem statuses
+    //
+    const EXCEPTION_STATUSES = new Set<PackageStatus>([
+      "failed_delivery", "rescheduled", "returned",
+      "cancelled", "lost", "damaged", "on_hold",
+    ]);
+
+    const history: any[] = (packageDoc.trackingHistory ?? [])
+      .slice()                                  
+      .sort((a: any, b: any) =>
+        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      );
+
+    const currentStatus = packageDoc.status as PackageStatus;
+
+    const timeline = history.map((event: any, idx: number) => {
+      const status = event.status as PackageStatus;
+      const isLast  = idx === history.length - 1;
+
+      return {
+        status,
+        readableStatus: READABLE_STATUS[status] ?? status,
+        isException:    EXCEPTION_STATUSES.has(status),
+
+        stepState: isLast ? "active" : "completed",
+        timestamp: event.timestamp,
+        notes:     event.notes   ?? null,
+        location:  event.location ?? null,
+        branchId:  event.branchId ?? null,
+        handledBy: event.userId   ?? null,
+      };
+    });
+
+
+    const expectedSteps = HAPPY_PATH.map((status) => {
+      const reached = history.find((e: any) => e.status === status);
+      const isCurrent = status === currentStatus;
+
+      return {
+        status,
+        readableStatus: READABLE_STATUS[status],
+        stepState: reached
+          ? isCurrent ? "active" : "completed"
+          : "pending",
+        timestamp: reached?.timestamp ?? null,
+      };
+    });
+
+
+    const latestEvent = history[history.length - 1];
+    let lastUpdatedAgo: string | null = null;
+
+    if (latestEvent) {
+      const seconds = Math.floor(
+        (Date.now() - new Date(latestEvent.timestamp).getTime()) / 1000,
+      );
+      if      (seconds < 60)   lastUpdatedAgo = "just now";
+      else if (seconds < 3600) lastUpdatedAgo = `${Math.floor(seconds / 60)}m ago`;
+      else if (seconds < 86400)lastUpdatedAgo = `${Math.floor(seconds / 3600)}h ago`;
+      else                     lastUpdatedAgo = `${Math.floor(seconds / 86400)}d ago`;
+    }
+
+    return res.status(200).json({
+      success: true,
+
+      currentState: {
+        status:           currentStatus,
+        readableStatus:   READABLE_STATUS[currentStatus] ?? currentStatus,
+        isException:      EXCEPTION_STATUSES.has(currentStatus),
+        progress:         deliveryProgress(currentStatus),   // 0–100
+        lastUpdatedAgo,
+      },
+
+      // ── Package summary ────────────────────────────────────────────────
+      package: {
+        trackingNumber:        packageDoc.trackingNumber,
+        deliveryType:          packageDoc.deliveryType,
+        deliveryPriority:      packageDoc.deliveryPriority,
+        estimatedDeliveryTime: packageDoc.estimatedDeliveryTime ?? null,
+        deliveredAt:           packageDoc.deliveredAt           ?? null,
+        attemptCount:          packageDoc.attemptCount,
+        maxAttempts:           packageDoc.maxAttempts,
+        isReturn:              packageDoc.returnInfo?.isReturn  ?? false,
+        recipient: {
+          name:  packageDoc.destination.recipientName,
+          phone: packageDoc.destination.recipientPhone,
+          city:  packageDoc.destination.city,
+          state: packageDoc.destination.state,
+        },
+        originBranch:      packageDoc.originBranchId,
+        currentBranch:     packageDoc.currentBranchId,
+        destinationBranch: packageDoc.destinationBranchId ?? null,
+      },
+      timeline,
+      expectedSteps,
+    });
+  },
+);
