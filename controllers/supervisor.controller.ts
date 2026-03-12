@@ -12,6 +12,7 @@ import TransporterModel from "../models/transporter.model";
 import PackageModel, { DeliveryType, PackageStatus, PackageType, PaymentStatus } from "../models/package.model";
 import FreelancerModel from "../models/freelancer.model";
 import clientModel from "../models/client.model";
+import PackageHistoryModel from "../models/package-history.model";
 
 
 interface ILocationBody {
@@ -5874,3 +5875,168 @@ export const getPackagesByReceiver = catchAsyncError(
     }
   }
 );
+
+
+
+
+const READABLE_STATUS: Record<PackageStatus, string> = {
+  pending:                "Created",
+  accepted:               "Accepted",
+  at_origin_branch:       "Arrived at Origin Branch",
+  in_transit_to_branch:   "In Transit",
+  at_destination_branch:  "Arrived at Destination Branch",
+  out_for_delivery:       "Out for Delivery",
+  delivered:              "Delivered",
+  failed_delivery:        "Delivery Failed",
+  rescheduled:            "Rescheduled",
+  returned:               "Returned",
+  cancelled:              "Cancelled",
+  lost:                   "Lost",
+  damaged:                "Damaged",
+  on_hold:                "On Hold",
+};
+
+
+const HAPPY_PATH: PackageStatus[] = [
+  "pending",
+  "accepted",
+  "at_origin_branch",
+  "in_transit_to_branch",
+  "at_destination_branch",
+  "out_for_delivery",
+  "delivered",
+];
+
+function deliveryProgress(status: PackageStatus): number {
+  const idx = HAPPY_PATH.indexOf(status);
+  if (idx !== -1) return Math.round((idx / (HAPPY_PATH.length - 1)) * 100);
+
+  const exceptionMap: Partial<Record<PackageStatus, number>> = {
+    failed_delivery: 80,
+    rescheduled:     70,
+    on_hold:         50,
+    returned:        100,
+    damaged:         100,
+    lost:            0,
+    cancelled:       0,
+  };
+  return exceptionMap[status] ?? 0;
+}
+
+
+
+export const getPackageHistory = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const supervisorUserId = req.user?._id;
+    const { branchId, packageId } = req.params;
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
+      return next(new ErrorHandler("Invalid package ID", 400));
+    }
+
+
+    const { page, limit, fromDate, toDate } = req.query as {
+      page?: string;
+      limit?: string;
+      fromDate?: string;
+      toDate?: string;
+    };
+
+    const pageNum  = parseInt(page  ?? "1",  10);
+    const limitNum = parseInt(limit ?? "20", 10);
+
+    if (isNaN(pageNum)  || pageNum  < 1)          return next(new ErrorHandler("page must be a positive integer", 400));
+    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
+
+    let fromDateParsed: Date | undefined;
+    let toDateParsed:   Date | undefined;
+
+    if (fromDate !== undefined) {
+      fromDateParsed = new Date(fromDate);
+      if (isNaN(fromDateParsed.getTime())) return next(new ErrorHandler("fromDate is not a valid date", 400));
+    }
+    if (toDate !== undefined) {
+      toDateParsed = new Date(toDate);
+      if (isNaN(toDateParsed.getTime())) return next(new ErrorHandler("toDate is not a valid date", 400));
+    }
+    if (fromDateParsed && toDateParsed && fromDateParsed > toDateParsed) {
+      return next(new ErrorHandler("fromDate must be before toDate", 400));
+    }
+
+
+    const packageOid = new mongoose.Types.ObjectId(packageId.toString());
+    const branchOid  = new mongoose.Types.ObjectId(branchId.toString());
+
+    const [packageDoc, supervisor] = await Promise.all([
+      PackageModel.findOne({
+        _id: packageOid,
+        currentBranchId: branchOid,
+      })
+        .select("trackingNumber status deliveryType destination companyId")
+        .lean(),
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+    ]);
+
+    if (!packageDoc) {
+      return next(new ErrorHandler("Package not found in this branch", 404));
+    }
+
+    if (!supervisor || !supervisor.isActive || supervisor.branchId.toString() !== branchId.toString()) {
+      return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+    }
+
+
+    const historyMatch: Record<string, any> = { packageId: packageOid };
+
+    if (fromDateParsed || toDateParsed) {
+      historyMatch.timestamp = {
+        ...(fromDateParsed && { $gte: fromDateParsed }),
+        ...(toDateParsed   && { $lte: toDateParsed   }),
+      };
+    }
+
+    const skip = (pageNum - 1) * limitNum;
+
+    const [entries, total] = await Promise.all([
+      PackageHistoryModel.find(historyMatch)
+        .sort({ timestamp: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .populate("handledBy", "firstName lastName role")
+        .populate("branchId",  "name code"),
+      PackageHistoryModel.countDocuments(historyMatch),
+    ]);
+
+    const totalPages = Math.ceil(total / limitNum);
+
+    return res.status(200).json({
+      success: true,
+      package: {
+        id:             packageDoc._id,
+        trackingNumber: packageDoc.trackingNumber,
+        status:         packageDoc.status,
+        readableStatus: READABLE_STATUS[packageDoc.status] ?? packageDoc.status,
+        deliveryType:   packageDoc.deliveryType,
+        recipient:      packageDoc.destination.recipientName,
+      },
+      data: entries,
+      pagination: {
+        total,
+        page:        pageNum,
+        limit:       limitNum,
+        totalPages,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1,
+      },
+    });
+  },
+);
+
