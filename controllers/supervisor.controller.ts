@@ -6697,3 +6697,215 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
   },
 );
 
+
+
+
+
+// DELIVERER — MARK PACKAGES OUT FOR DELIVERY
+//
+//  Called when a deliverer picks up one or more packages from the branch to
+//  deliver to clients. Accepts a single packageId or an array (bulk).
+//  Package must be at_destination_branch and deliveryType must be 'home'.
+
+export const arrivedAtBranchOutForDelivery = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const delivererUserId = req.user?._id;
+      const { branchId } = req.params;
+
+      if (!delivererUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      const { packageIds: rawIds, notes } = req.body as {
+        packageIds?: string | string[];
+        notes?: string;
+      };
+
+      if (!rawIds || (Array.isArray(rawIds) && rawIds.length === 0)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("packageIds is required", 400));
+      }
+
+
+      const idList: string[] = Array.isArray(rawIds) ? rawIds : [rawIds];
+
+      const invalidIds = idList.filter(
+        (id) => !mongoose.Types.ObjectId.isValid(id),
+      );
+      if (invalidIds.length) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            `Invalid package ID(s): ${invalidIds.join(", ")}`,
+            400,
+          ),
+        );
+      }
+
+      const packageOids = idList.map((id) => new mongoose.Types.ObjectId(id));
+      const branchOid = new mongoose.Types.ObjectId(branchId.toString());
+
+
+      const [deliverer, packages] = await Promise.all([
+        DelivererModel.findOne({ userId: delivererUserId, branchId }).session(
+          session,
+        ),
+        PackageModel.find({ _id: { $in: packageOids } })
+          .select("_id status deliveryType currentBranchId assignedDelivererId")
+          .session(session)
+          .lean(),
+      ]);
+
+      if (!deliverer || !deliverer.isActive || deliverer.isSuspended) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Deliverer account is not active in this branch", 403),
+        );
+      }
+
+      if (deliverer.verificationStatus !== "verified") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Deliverer is not verified", 403));
+      }
+
+      if (deliverer.availabilityStatus === "off_duty") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Deliverer is off duty", 403));
+      }
+
+
+      if (packages.length !== packageOids.length) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            "One or more packages not found",
+            404,
+          ),
+        );
+      }
+
+      const invalidPackages: string[] = [];
+
+      for (const pkg of packages) {
+        if (pkg.status !== "at_destination_branch") {
+          invalidPackages.push(
+            `${pkg._id}: status must be 'at_destination_branch' (is '${pkg.status}')`,
+          );
+        } else if (pkg.deliveryType !== "home") {
+          invalidPackages.push(
+            `${pkg._id}: deliveryType must be 'home' (is '${pkg.deliveryType}') — branch_pickup packages are self-collected`,
+          );
+        } else if (
+          !pkg.currentBranchId ||
+          !new mongoose.Types.ObjectId(pkg.currentBranchId.toString()).equals(
+            branchOid,
+          )
+        ) {
+          invalidPackages.push(
+            `${pkg._id}: package is not currently at this branch`,
+          );
+        }
+      }
+
+      if (invalidPackages.length) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            `Invalid package(s):\n${invalidPackages.join("\n")}`,
+            400,
+          ),
+        );
+      }
+
+      const now = new Date();
+
+
+      await PackageModel.updateMany(
+        { _id: { $in: packageOids } },
+        {
+          $set: {
+            status: "out_for_delivery",
+            assignedDelivererId: deliverer._id,
+            lastAttemptDate: now,
+          },
+          $push: {
+            trackingHistory: {
+              status: "out_for_delivery",
+              branchId: branchOid,
+              userId: delivererUserId,
+              notes: notes || "Package picked up by deliverer — out for delivery",
+              timestamp: now,
+            },
+          },
+        },
+        { session },
+      );
+
+
+      await writeHistory(
+        packageOids.map((pid) => ({
+          packageId: pid,
+          status: "out_for_delivery" as PackageStatus,
+          handledBy: new mongoose.Types.ObjectId(delivererUserId.toString()),
+          handlerRole: "deliverer" as const,
+          branchId: branchOid,
+          notes: notes || "Package picked up by deliverer — out for delivery",
+        })),
+        session,
+      );
+
+
+      await DelivererModel.findByIdAndUpdate(
+        deliverer._id,
+        {
+          $set: {
+            availabilityStatus: "on_route",
+            lastActiveAt: now,
+          },
+        },
+        { session },
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(200).json({
+        success: true,
+        message: `${packageOids.length} package(s) marked out for delivery`,
+        data: {
+          packageIds: packageOids,
+          delivererId: deliverer._id,
+          branchId: branchOid,
+          status: "out_for_delivery",
+          dispatchedAt: now,
+        },
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(
+        new ErrorHandler(error.message || "Error marking packages out for delivery", 500),
+      );
+    }
+  },
+);
+
