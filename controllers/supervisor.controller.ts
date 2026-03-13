@@ -6909,3 +6909,370 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
   },
 );
 
+
+
+
+// DELIVERER — MARK DELIVERY FAILED
+//  Called when the deliverer could not deliver the package.
+//  Increments attemptCount. If attemptCount >= maxAttempts the package
+//  model's pre-save hook will automatically flip it to 'returned'.
+//  Otherwise it stays 'failed_delivery' and nextAttemptDate is set (+1 day).
+
+
+export const deliverPackageFail = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const delivererUserId = req.user?._id;
+      const { branchId, packageId } = req.params;
+
+      if (!delivererUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid package ID", 400));
+      }
+
+      const { reason, notes } = req.body as { reason?: string; notes?: string };
+
+      if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("reason is required — explain why delivery failed", 400),
+        );
+      }
+
+      const branchOid = new mongoose.Types.ObjectId(branchId.toString());
+
+ 
+      const [deliverer, packageDoc] = await Promise.all([
+        DelivererModel.findOne({ userId: delivererUserId, branchId }).session(session),
+        PackageModel.findOne({
+          _id: packageId,
+          assignedDelivererId: { $exists: true },
+          currentBranchId: branchOid,
+        }).session(session),
+      ]);
+
+      if (!deliverer || !deliverer.isActive || deliverer.isSuspended) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Deliverer account is not active in this branch", 403),
+        );
+      }
+
+      if (!packageDoc) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Package not found or not assigned to this branch", 404));
+      }
+
+
+      if (!packageDoc.assignedDelivererId?.equals(deliverer._id)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("This package is not assigned to you", 403),
+        );
+      }
+
+      if (packageDoc.status !== "out_for_delivery") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            `Package must be 'out_for_delivery' to mark as failed (is '${packageDoc.status}')`,
+            400,
+          ),
+        );
+      }
+
+      const now = new Date();
+      const newAttemptCount = packageDoc.attemptCount + 1;
+      const maxReached = newAttemptCount >= packageDoc.maxAttempts;
+
+      // When max attempts are reached the pre-save hook flips status to 'returned'
+      // and sets returnInfo i match that behaviour explicitly here so i can
+      // write the correct history status and include it in the response.
+
+      const newStatus: PackageStatus = maxReached
+        ? "returned"
+        : "failed_delivery";
+
+      const nextAttemptDate = !maxReached
+        ? new Date(now.getTime() + 24 * 60 * 60 * 1000)
+        : undefined;
+
+      const packageUpdate: Record<string, any> = {
+        $set: {
+          status: newStatus,
+          attemptCount: newAttemptCount,
+          lastAttemptDate: now,
+          ...(nextAttemptDate && { nextAttemptDate }),
+          ...(maxReached && {
+            "returnInfo.isReturn": true,
+            "returnInfo.reason": "Maximum delivery attempts exceeded",
+            "returnInfo.returnDate": now,
+          }),
+        },
+        $push: {
+          trackingHistory: {
+            status: newStatus,
+            branchId: branchOid,
+            userId: delivererUserId,
+            notes: `Failed delivery — Reason: ${reason.trim()}${notes ? ` | ${notes}` : ""}`,
+            timestamp: now,
+          },
+        },
+      };
+
+      await PackageModel.findByIdAndUpdate(packageId, packageUpdate, { session });
+
+      await writeHistory(
+        [
+          {
+            packageId: new mongoose.Types.ObjectId(packageId.toString()),
+            status: newStatus,
+            handledBy: new mongoose.Types.ObjectId(delivererUserId.toString()),
+            handlerRole: "deliverer",
+            branchId: branchOid,
+            notes: `Failed delivery — Reason: ${reason.trim()}${notes ? ` | ${notes}` : ""}`,
+          },
+        ],
+        session,
+      );
+
+
+      await DelivererModel.findByIdAndUpdate(
+        deliverer._id,
+        {
+          $set: {
+            availabilityStatus: "available",
+            lastActiveAt: now,
+          },
+          $inc: {
+            totalDeliveries: 1,
+            failedDeliveries: 1,
+          },
+        },
+        { session },
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(200).json({
+        success: true,
+        message: maxReached
+          ? `Package marked as returned — maximum attempts (${packageDoc.maxAttempts}) reached`
+          : `Delivery failed — attempt ${newAttemptCount} of ${packageDoc.maxAttempts}`,
+        data: {
+          packageId,
+          status: newStatus,
+          attemptCount: newAttemptCount,
+          maxAttempts: packageDoc.maxAttempts,
+          maxAttemptsReached: maxReached,
+          nextAttemptDate: nextAttemptDate ?? null,
+          reason: reason.trim(),
+        },
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(
+        new ErrorHandler(error.message || "Error marking delivery as failed", 500),
+      );
+    }
+  },
+);
+
+
+// DELIVERER — RETURN PACKAGE TO BRANCH
+//  Called when the deliverer physically brings the package back to the branch
+//  after a failed delivery (or explicit return). Status → 'returned'.
+//  currentBranchId stays the same (it's already this branch).
+
+export const deliveryReturnPackage = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const delivererUserId = req.user?._id;
+      const { branchId, packageId } = req.params;
+
+      if (!delivererUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid package ID", 400));
+      }
+
+      const { reason, notes } = req.body as {
+        reason?: string;
+        notes?: string;
+      };
+
+      const branchOid = new mongoose.Types.ObjectId(branchId.toString());
+
+
+      const [deliverer, packageDoc] = await Promise.all([
+        DelivererModel.findOne({ userId: delivererUserId, branchId }).session(session),
+        PackageModel.findOne({
+          _id: packageId,
+          currentBranchId: branchOid,
+        }).session(session),
+      ]);
+
+      if (!deliverer || !deliverer.isActive || deliverer.isSuspended) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Deliverer account is not active in this branch", 403),
+        );
+      }
+
+      if (!packageDoc) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Package not found at this branch", 404),
+        );
+      }
+
+      const returnableStatuses: PackageStatus[] = [
+        "out_for_delivery",
+        "failed_delivery",
+      ];
+
+      if (!returnableStatuses.includes(packageDoc.status)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            `Cannot return a package with status '${packageDoc.status}'. ` +
+              `Only packages that are 'out_for_delivery' or 'failed_delivery' can be returned.`,
+            400,
+          ),
+        );
+      }
+
+
+      if (
+        packageDoc.assignedDelivererId &&
+        !packageDoc.assignedDelivererId.equals(deliverer._id)
+      ) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("This package is not assigned to you", 403),
+        );
+      }
+
+      const now = new Date();
+      const returnReason =
+        reason?.trim() ||
+        (packageDoc.status === "failed_delivery"
+          ? "Returned after failed delivery"
+          : "Package returned to branch by deliverer");
+
+      const noteText = [returnReason, notes?.trim()].filter(Boolean).join(" | ");
+
+      await PackageModel.findByIdAndUpdate(
+        packageId,
+        {
+          $set: {
+            status: "returned",
+            "returnInfo.isReturn": true,
+            "returnInfo.reason": returnReason,
+            "returnInfo.returnDate": now,
+
+          },
+          $push: {
+            trackingHistory: {
+              status: "returned",
+              branchId: branchOid,
+              userId: delivererUserId,
+              notes: noteText,
+              timestamp: now,
+            },
+          },
+        },
+        { session },
+      );
+
+      await writeHistory(
+        [
+          {
+            packageId: new mongoose.Types.ObjectId(packageId.toString()),
+            status: "returned",
+            handledBy: new mongoose.Types.ObjectId(delivererUserId.toString()),
+            handlerRole: "deliverer",
+            branchId: branchOid,
+            notes: noteText,
+          },
+        ],
+        session,
+      );
+
+
+      await DelivererModel.findByIdAndUpdate(
+        deliverer._id,
+        {
+          $set: {
+            availabilityStatus: "available",
+            lastActiveAt: now,
+          },
+        },
+        { session },
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(200).json({
+        success: true,
+        message: "Package returned to branch successfully",
+        data: {
+          packageId,
+          status: "returned",
+          currentBranchId: branchOid,
+          returnedAt: now,
+          reason: returnReason,
+        },
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(
+        new ErrorHandler(error.message || "Error returning package", 500),
+      );
+    }
+  },
+);
