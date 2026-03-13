@@ -6394,3 +6394,306 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
   },
 );
 
+
+
+
+
+// TRANSPORTER — MARK PACKAGES ARRIVED AT BRANCH
+//  Called when the transporter physically arrives at a stop (branch).
+//  For each package assigned to this stop:
+//    • If package.destinationBranchId === this stop's branchId
+//      → status: at_destination_branch  (final branch, ready for delivery)
+//    • Otherwise
+//      → status: in_transit_to_branch   (intermediate branch, will re-transit)
+//  currentBranchId is updated to this stop's branchId for every package.
+
+
+export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const transporterUserId = req.user?._id;
+      const { routeId, stopId } = req.params;
+      const { notes } = req.body as { notes?: string };
+
+      if (!transporterUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!routeId || !mongoose.Types.ObjectId.isValid(routeId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid route ID", 400));
+      }
+
+      if (!stopId || !mongoose.Types.ObjectId.isValid(stopId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid stop ID", 400));
+      }
+
+
+      const [transporter, route] = await Promise.all([
+        TransporterModel.findOne({ userId: transporterUserId }).session(session),
+        RouteModel.findById(routeId).session(session),
+      ]);
+
+      if (!transporter || !transporter.isActive || transporter.isSuspended) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Transporter account is not active", 403));
+      }
+
+      if (!route) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Route not found", 404));
+      }
+
+      if (!route.assignedTransporterId?.equals(transporter._id)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("You are not assigned to this route", 403));
+      }
+
+      if (route.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            `Route must be active to mark arrivals (current: ${route.status})`,
+            400,
+          ),
+        );
+      }
+
+
+      const stopIndex = route.stops.findIndex(
+        (s) => s._id?.toString() === stopId,
+      );
+
+      if (stopIndex === -1) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Stop not found in this route", 404));
+      }
+
+      const stop = route.stops[stopIndex];
+
+      if (!stop.branchId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Stop has no branch associated", 400));
+      }
+
+      if (stop.status === "completed") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("This stop is already completed", 400));
+      }
+
+      if (stop.packageIds.length === 0) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("No packages assigned to this stop", 400));
+      }
+
+      const stopBranchOid = new mongoose.Types.ObjectId(stop.branchId.toString());
+      const packageIds = stop.packageIds.map(
+        (id) => new mongoose.Types.ObjectId(id.toString()),
+      );
+      const now = new Date();
+
+
+      const packages = await PackageModel.find(
+        { _id: { $in: packageIds } },
+        { _id: 1, destinationBranchId: 1 },
+      )
+        .session(session)
+        .lean();
+
+
+      const finalPackageIds: mongoose.Types.ObjectId[] = [];
+      const intermediatePackageIds: mongoose.Types.ObjectId[] = [];
+
+      for (const pkg of packages) {
+        const isFinal =
+          pkg.destinationBranchId &&
+          new mongoose.Types.ObjectId(pkg.destinationBranchId.toString()).equals(
+            stopBranchOid,
+          );
+
+        if (isFinal) {
+          finalPackageIds.push(pkg._id as mongoose.Types.ObjectId);
+        } else {
+          intermediatePackageIds.push(pkg._id as mongoose.Types.ObjectId);
+        }
+      }
+
+      const historyEntries: Parameters<typeof writeHistory>[0] = [];
+
+
+      if (finalPackageIds.length > 0) {
+        await PackageModel.updateMany(
+          { _id: { $in: finalPackageIds } },
+          {
+            $set: {
+              status: "at_destination_branch",
+              currentBranchId: stopBranchOid,
+            },
+            $push: {
+              trackingHistory: {
+                status: "at_destination_branch",
+                branchId: stopBranchOid,
+                userId: transporterUserId,
+                notes:
+                  notes ||
+                  "Package arrived at destination branch — ready for delivery",
+                timestamp: now,
+              },
+            },
+          },
+          { session },
+        );
+
+        finalPackageIds.forEach((pid) =>
+          historyEntries.push({
+            packageId: pid,
+            status: "at_destination_branch",
+            handledBy: new mongoose.Types.ObjectId(transporterUserId.toString()),
+            handlerRole: "transporter",
+            branchId: stopBranchOid,
+            notes:
+              notes || "Package arrived at destination branch — ready for delivery",
+          }),
+        );
+      }
+
+
+      if (intermediatePackageIds.length > 0) {
+        await PackageModel.updateMany(
+          { _id: { $in: intermediatePackageIds } },
+          {
+            $set: {
+              status: "in_transit_to_branch",
+              currentBranchId: stopBranchOid,
+            },
+            $push: {
+              trackingHistory: {
+                status: "in_transit_to_branch",
+                branchId: stopBranchOid,
+                userId: transporterUserId,
+                notes:
+                  notes ||
+                  "Package arrived at intermediate branch — will continue to destination",
+                timestamp: now,
+              },
+            },
+          },
+          { session },
+        );
+
+        intermediatePackageIds.forEach((pid) =>
+          historyEntries.push({
+            packageId: pid,
+            status: "in_transit_to_branch",
+            handledBy: new mongoose.Types.ObjectId(transporterUserId.toString()),
+            handlerRole: "transporter",
+            branchId: stopBranchOid,
+            notes:
+              notes ||
+              "Package arrived at intermediate branch — will continue to destination",
+          }),
+        );
+      }
+
+      await writeHistory(historyEntries, session);
+
+
+      const isLastStop = stopIndex === route.stops.length - 1;
+
+      await RouteModel.findByIdAndUpdate(
+        routeId,
+        {
+          $set: {
+            [`stops.${stopIndex}.status`]: "completed",
+            [`stops.${stopIndex}.actualArrival`]: now,
+            [`stops.${stopIndex}.actualDeparture`]: now,
+            currentStopIndex: stopIndex + 1,
+            completedStops: route.completedStops + 1,
+
+            ...(isLastStop && {
+              status: "completed",
+              actualEnd: now,
+              actualTime:
+                route.actualStart
+                  ? Math.round(
+                      (now.getTime() - new Date(route.actualStart).getTime()) /
+                        60000,
+                    )
+                  : undefined,
+            }),
+          },
+        },
+        { session },
+      );
+
+
+      if (isLastStop) {
+        await TransporterModel.findByIdAndUpdate(
+          transporter._id,
+          {
+            $set: {
+              availabilityStatus: "available",
+              currentRouteId: undefined,
+              lastActiveAt: now,
+            },
+            $inc: {
+              totalTrips: 1,
+              completedTrips: 1,
+            },
+          },
+          { session },
+        );
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(200).json({
+        success: true,
+        message: `Arrived at branch — ${finalPackageIds.length} package(s) at destination, ${intermediatePackageIds.length} intermediate`,
+        data: {
+          routeId: route._id,
+          stopId: stop._id,
+          branchId: stopBranchOid,
+          arrivedAt: now,
+          packages: {
+            atDestination: {
+              count: finalPackageIds.length,
+              status: "at_destination_branch",
+              ids: finalPackageIds,
+            },
+            intermediate: {
+              count: intermediatePackageIds.length,
+              status: "in_transit_to_branch",
+              ids: intermediatePackageIds,
+            },
+          },
+          routeCompleted: isLastStop,
+        },
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(
+        new ErrorHandler(error.message || "Error marking packages arrived", 500),
+      );
+    }
+  },
+);
+
