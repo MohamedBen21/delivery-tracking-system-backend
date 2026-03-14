@@ -651,3 +651,188 @@ export const cancelPackage = catchAsyncError(
   },
 );
 
+
+
+
+
+//  TRACK PACKAGE
+//  Returns the full tracking timeline from the embedded trackingHistory array
+const READABLE_STATUS: Record<PackageStatus, string> = {
+  pending:               "Created",
+  accepted:              "Accepted",
+  at_origin_branch:      "At Origin Branch",
+  in_transit_to_branch:  "In Transit",
+  at_destination_branch: "Arrived at Destination Branch",
+  out_for_delivery:      "Out for Delivery",
+  delivered:             "Delivered",
+  failed_delivery:       "Delivery Failed",
+  rescheduled:           "Rescheduled",
+  returned:              "Returned",
+  cancelled:             "Cancelled",
+  lost:                  "Lost",
+  damaged:               "Damaged",
+  on_hold:               "On Hold",
+};
+
+const HAPPY_PATH: PackageStatus[] = [
+  "pending",
+  "accepted",
+  "at_origin_branch",
+  "in_transit_to_branch",
+  "at_destination_branch",
+  "out_for_delivery",
+  "delivered",
+];
+
+const EXCEPTION_STATUSES = new Set<PackageStatus>([
+  "failed_delivery", "rescheduled", "returned",
+  "cancelled", "lost", "damaged", "on_hold",
+]);
+
+function deliveryProgress(status: PackageStatus): number {
+  const idx = HAPPY_PATH.indexOf(status);
+  if (idx !== -1) return Math.round((idx / (HAPPY_PATH.length - 1)) * 100);
+  const exceptionMap: Partial<Record<PackageStatus, number>> = {
+    failed_delivery: 80,
+    rescheduled:     70,
+    on_hold:         50,
+    returned:        100,
+    damaged:         100,
+    lost:            0,
+    cancelled:       0,
+  };
+  return exceptionMap[status] ?? 0;
+}
+
+export const trackPackage = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const freelancerUserId = req.user?._id;
+    const { packageId } = req.params;
+
+    if (!freelancerUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
+      return next(new ErrorHandler("Invalid package ID", 400));
+    }
+
+
+    const [freelancer, packageDoc] = await Promise.all([
+      FreelancerModel.findOne({ userId: freelancerUserId }).lean(),
+      PackageModel.findOne({
+        _id:        packageId,
+        senderId:   freelancerUserId,
+        senderType: "freelancer",
+      })
+        .select(
+          "trackingNumber status deliveryType deliveryPriority " +
+          "destination originBranchId currentBranchId destinationBranchId " +
+          "totalPrice paymentStatus estimatedDeliveryTime deliveredAt " +
+          "attemptCount maxAttempts returnInfo trackingHistory createdAt weight type isFragile",
+        )
+        .populate("originBranchId",      "name code address")
+        .populate("currentBranchId",     "name code address")
+        .populate("destinationBranchId", "name code address")
+        .lean(),
+    ]);
+
+    if (!freelancer || freelancer.status !== "active") {
+      return next(new ErrorHandler("Freelancer account is not active", 403));
+    }
+
+    if (!packageDoc) {
+      return next(
+        new ErrorHandler("Package not found or does not belong to you", 404),
+      );
+    }
+
+
+    const history: any[] = ((packageDoc as any).trackingHistory ?? [])
+      .slice()
+      .sort(
+        (a: any, b: any) =>
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+      );
+
+    const currentStatus = packageDoc.status as PackageStatus;
+
+    const timeline = history.map((event: any, idx: number) => {
+      const status = event.status as PackageStatus;
+      return {
+        status,
+        readableStatus: READABLE_STATUS[status] ?? status,
+        isException:    EXCEPTION_STATUSES.has(status),
+        stepState:      idx === history.length - 1 ? "active" : "completed",
+        timestamp:      event.timestamp,
+        notes:          event.notes   ?? null,
+        location:       event.location ?? null,
+      };
+    });
+
+
+    const expectedSteps = HAPPY_PATH.map((status) => {
+      const reached   = history.find((e: any) => e.status === status);
+      const isCurrent = status === currentStatus;
+      return {
+        status,
+        readableStatus: READABLE_STATUS[status],
+        stepState:  reached ? (isCurrent ? "active" : "completed") : "pending",
+        timestamp:  reached?.timestamp ?? null,
+      };
+    });
+
+
+    const latestEvent = history[history.length - 1];
+    let lastUpdatedAgo: string | null = null;
+    if (latestEvent) {
+      const seconds = Math.floor(
+        (Date.now() - new Date(latestEvent.timestamp).getTime()) / 1000,
+      );
+      if      (seconds < 60)    lastUpdatedAgo = "just now";
+      else if (seconds < 3600)  lastUpdatedAgo = `${Math.floor(seconds / 60)}m ago`;
+      else if (seconds < 86400) lastUpdatedAgo = `${Math.floor(seconds / 3600)}h ago`;
+      else                      lastUpdatedAgo = `${Math.floor(seconds / 86400)}d ago`;
+    }
+
+    return res.status(200).json({
+      success: true,
+
+      currentState: {
+        status:         currentStatus,
+        readableStatus: READABLE_STATUS[currentStatus] ?? currentStatus,
+        isException:    EXCEPTION_STATUSES.has(currentStatus),
+        progress:       deliveryProgress(currentStatus),
+        lastUpdatedAgo,
+      },
+
+      package: {
+        trackingNumber:        packageDoc.trackingNumber,
+        type:                  (packageDoc as any).type,
+        isFragile:             (packageDoc as any).isFragile,
+        weight:                (packageDoc as any).weight,
+        deliveryType:          packageDoc.deliveryType,
+        deliveryPriority:      (packageDoc as any).deliveryPriority,
+        totalPrice:            (packageDoc as any).totalPrice,
+        paymentStatus:         (packageDoc as any).paymentStatus,
+        estimatedDeliveryTime: (packageDoc as any).estimatedDeliveryTime ?? null,
+        deliveredAt:           (packageDoc as any).deliveredAt           ?? null,
+        attemptCount:          (packageDoc as any).attemptCount,
+        maxAttempts:           (packageDoc as any).maxAttempts,
+        isReturn:              (packageDoc as any).returnInfo?.isReturn   ?? false,
+        recipient: {
+          name:  packageDoc.destination.recipientName,
+          phone: packageDoc.destination.recipientPhone,
+          city:  packageDoc.destination.city,
+          state: packageDoc.destination.state,
+        },
+        originBranch:      packageDoc.originBranchId,
+        currentBranch:     packageDoc.currentBranchId,
+        destinationBranch: packageDoc.destinationBranchId ?? null,
+      },
+
+      timeline,
+      expectedSteps,
+    });
+  },
+);
