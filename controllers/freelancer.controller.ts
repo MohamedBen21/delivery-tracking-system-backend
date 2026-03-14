@@ -108,8 +108,7 @@ async function resolveFreelancer(
 
 
 
-//  1. GET MY PACKAGES
-//
+//  GET MY PACKAGES
 //  Returns ALL packages sent by this freelancer, grouped by status in the
 //  summary and paginated in the data array.
 export const getMyPackages = catchAsyncError(
@@ -261,7 +260,7 @@ export const getMyPackages = catchAsyncError(
 
 
 
-//  2. GET MY ACTIVE PACKAGES
+//  GET MY ACTIVE PACKAGES
 //
 //  Active = package is still moving through the system (not terminal).
 //  Returns the same structure as getMyPackages but pre-filtered + sorted by
@@ -354,7 +353,7 @@ export const getMyActivePackages = catchAsyncError(
 
 
 
-//  3. GET MY DELIVERED PACKAGES
+//  GET MY DELIVERED PACKAGES
 //  Terminal successful deliveries only (status = delivered).
 export const getMyDeliveredPackages = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -485,6 +484,170 @@ export const getMyDeliveredPackages = catchAsyncError(
         monthlyBreakdown: result.monthlyBreakdown,
       },
     });
+  },
+);
+
+
+
+
+
+//  CANCEL PACKAGE
+//  Freelancer may only cancel while the package is still at the origin branch
+//  or hasn't been accepted yet. Once it's in transit the shipment is already
+//  moving and must be returned the same old way.
+export const cancelPackage = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const freelancerUserId = req.user?._id;
+      const { packageId } = req.params;
+
+      if (!freelancerUserId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid package ID", 400));
+      }
+
+      const { reason } = req.body as { reason?: string };
+
+      if (reason !== undefined && typeof reason !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("reason must be a string", 400));
+      }
+
+      // ── Auth + package (parallel) ────────────────────────────────────────
+      const [freelancer, packageDoc] = await Promise.all([
+        FreelancerModel.findOne({ userId: freelancerUserId }).session(session),
+        PackageModel.findOne({
+          _id: packageId,
+          senderId:   freelancerUserId,
+          senderType: "freelancer",
+        }).session(session),
+      ]);
+
+      if (!freelancer || freelancer.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Freelancer account is not active", 403));
+      }
+
+      if (!packageDoc) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Package not found or does not belong to you", 404));
+      }
+
+      if (packageDoc.status === "cancelled") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Package is already cancelled", 400));
+      }
+
+      if (!FREELANCER_CANCELLABLE_STATUSES.includes(packageDoc.status)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(
+            `Cannot cancel a package with status '${packageDoc.status}'. ` +
+              `Cancellation is only allowed while the package is: ${FREELANCER_CANCELLABLE_STATUSES.join(", ")}. ` +
+              `Contact your branch supervisor to cancel a shipment that is already in transit.`,
+            400,
+          ),
+        );
+      }
+
+      const now = new Date();
+      const noteText = reason?.trim()
+        ? `Cancelled by freelancer. Reason: ${reason.trim()}`
+        : "Cancelled by freelancer";
+
+      await Promise.all([
+        // Update package
+        PackageModel.findByIdAndUpdate(
+          packageId,
+          {
+            $set: { status: "cancelled" },
+            $push: {
+              trackingHistory: {
+                status:    "cancelled",
+                branchId:  packageDoc.currentBranchId,
+                userId:    freelancerUserId,
+                notes:     noteText,
+                timestamp: now,
+              },
+            },
+          },
+          { session },
+        ),
+
+
+        PackageHistoryModel.create(
+          [
+            {
+              packageId:   new mongoose.Types.ObjectId(packageId.toString()),
+              status:      "cancelled" as PackageStatus,
+              handledBy:   new mongoose.Types.ObjectId(freelancerUserId.toString()),
+              handlerRole: "client", 
+              branchId:    packageDoc.currentBranchId,
+              notes:       noteText,
+              timestamp:   now,
+            },
+          ],
+          { session },
+        ),
+
+        // Decrement branch currentLoad
+        BranchModel.findByIdAndUpdate(
+          packageDoc.currentBranchId,
+          { $inc: { currentLoad: -1 } },
+          { session },
+        ),
+
+        // Update freelancer statistics
+        FreelancerModel.findByIdAndUpdate(
+          freelancer._id,
+          {
+            $inc: {
+              "statistics.packagesCancelled": 1,
+              // Subtract from inTransit only if it was already counted there
+              ...(["at_origin_branch", "accepted"].includes(packageDoc.status) && {
+                "statistics.packagesInTransit": -1,
+              }),
+            },
+            $set: { lastActiveAt: now },
+          },
+          { session },
+        ),
+      ]);
+
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(200).json({
+        success: true,
+        message: "Package cancelled successfully",
+        data: {
+          packageId,
+          trackingNumber: packageDoc.trackingNumber,
+          status:         "cancelled",
+          cancelledAt:    now,
+          previousStatus: packageDoc.status,
+        },
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler(error.message || "Error cancelling package", 500));
+    }
   },
 );
 
