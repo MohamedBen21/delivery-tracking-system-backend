@@ -258,3 +258,233 @@ export const getMyPackages = catchAsyncError(
   },
 );
 
+
+
+
+//  2. GET MY ACTIVE PACKAGES
+//
+//  Active = package is still moving through the system (not terminal).
+//  Returns the same structure as getMyPackages but pre-filtered + sorted by
+//  most recently updated so the freelancer always sees urgent packages first.
+
+export const getMyActivePackages = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const freelancerUserId = req.user?._id;
+
+    const freelancer = await resolveFreelancer(freelancerUserId, next);
+    if (!freelancer) return;
+
+    const { deliveryType, search, page, limit } = req.query as Record<string, string | undefined>;
+
+    if (deliveryType && !["home", "branch_pickup"].includes(deliveryType)) {
+      return next(new ErrorHandler("deliveryType must be 'home' or 'branch_pickup'", 400));
+    }
+
+    const pageNum  = parseInt(page  ?? "1",  10);
+    const limitNum = parseInt(limit ?? "20", 10);
+    if (isNaN(pageNum)  || pageNum  < 1)               return next(new ErrorHandler("page must be a positive integer", 400));
+    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
+    const skip = (pageNum - 1) * limitNum;
+
+    const matchStage: Record<string, any> = {
+      senderId:   new mongoose.Types.ObjectId((freelancerUserId as mongoose.Types.ObjectId).toString()),
+      senderType: "freelancer",
+      status:     { $in: ACTIVE_STATUSES },
+    };
+
+    if (deliveryType) matchStage.deliveryType = deliveryType;
+    if (search) {
+      const regex = { $regex: search.trim(), $options: "i" };
+      matchStage.$or = [
+        { trackingNumber: regex },
+        { "destination.recipientName":  regex },
+        { "destination.recipientPhone": regex },
+      ];
+    }
+
+    const [result] = await PackageModel.aggregate([
+      { $match: matchStage },
+      ...LIST_LOOKUP_STAGES,
+      { $sort: { updatedAt: -1 } },
+      {
+        $facet: {
+          data:          [{ $skip: skip }, { $limit: limitNum }],
+          totalCount:    [{ $count: "count" }],
+          statusBreakdown: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
+
+          needsAttention: [
+            {
+              $match: {
+                $or: [
+                  { status: { $in: ["failed_delivery", "on_hold", "damaged"] } },
+                  {
+                    estimatedDeliveryTime: { $lt: new Date() },
+                    status: { $nin: ["delivered", "cancelled", "returned"] },
+                  },
+                ],
+              },
+            },
+            { $count: "count" },
+          ],
+        },
+      },
+    ]);
+
+    const total = result.totalCount[0]?.count ?? 0;
+
+    const statusBreakdown = Object.fromEntries(
+      (result.statusBreakdown as { _id: string; count: number }[]).map(
+        ({ _id, count }) => [_id, count],
+      ),
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result.data,
+      pagination: paginationMeta(total, pageNum, limitNum),
+      summary: {
+        total,
+        byStatus:      statusBreakdown,
+        needsAttention: result.needsAttention[0]?.count ?? 0,
+      },
+    });
+  },
+);
+
+
+
+
+//  3. GET MY DELIVERED PACKAGES
+//  Terminal successful deliveries only (status = delivered).
+export const getMyDeliveredPackages = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const freelancerUserId = req.user?._id;
+
+    const freelancer = await resolveFreelancer(freelancerUserId, next);
+    if (!freelancer) return;
+
+    const {
+      fromDate,
+      toDate,
+      deliveryType,
+      paymentStatus,
+      search,
+      sortOrder = "desc",
+      page,
+      limit,
+    } = req.query as Record<string, string | undefined>;
+
+    const VALID_PAYMENT_STATUSES = ["pending", "paid", "partially_paid", "refunded", "failed"];
+
+    if (deliveryType && !["home", "branch_pickup"].includes(deliveryType)) {
+      return next(new ErrorHandler("deliveryType must be 'home' or 'branch_pickup'", 400));
+    }
+
+    if (paymentStatus && !VALID_PAYMENT_STATUSES.includes(paymentStatus)) {
+      return next(new ErrorHandler(`paymentStatus must be one of: ${VALID_PAYMENT_STATUSES.join(", ")}`, 400));
+    }
+
+    if (!["asc", "desc"].includes(sortOrder)) {
+      return next(new ErrorHandler("sortOrder must be 'asc' or 'desc'", 400));
+    }
+
+    let fromDateParsed: Date | undefined;
+    let toDateParsed:   Date | undefined;
+
+    if (fromDate) {
+      fromDateParsed = new Date(fromDate);
+      if (isNaN(fromDateParsed.getTime())) return next(new ErrorHandler("fromDate is not a valid date", 400));
+    }
+    if (toDate) {
+      toDateParsed = new Date(toDate);
+      if (isNaN(toDateParsed.getTime())) return next(new ErrorHandler("toDate is not a valid date", 400));
+    }
+    if (fromDateParsed && toDateParsed && fromDateParsed > toDateParsed) {
+      return next(new ErrorHandler("fromDate must be before toDate", 400));
+    }
+
+    const pageNum  = parseInt(page  ?? "1",  10);
+    const limitNum = parseInt(limit ?? "20", 10);
+    if (isNaN(pageNum)  || pageNum  < 1)               return next(new ErrorHandler("page must be a positive integer", 400));
+    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
+    const skip = (pageNum - 1) * limitNum;
+
+    const matchStage: Record<string, any> = {
+      senderId:   new mongoose.Types.ObjectId((freelancerUserId as mongoose.Types.ObjectId).toString()),
+      senderType: "freelancer",
+      status:     "delivered",
+    };
+
+    if (fromDateParsed || toDateParsed) {
+      matchStage.deliveredAt = {
+        ...(fromDateParsed && { $gte: fromDateParsed }),
+        ...(toDateParsed   && { $lte: toDateParsed   }),
+      };
+    }
+
+    if (deliveryType)  matchStage.deliveryType  = deliveryType;
+    if (paymentStatus) matchStage.paymentStatus = paymentStatus;
+    if (search) {
+      const regex = { $regex: search.trim(), $options: "i" };
+      matchStage.$or = [
+        { trackingNumber: regex },
+        { "destination.recipientName":  regex },
+        { "destination.recipientPhone": regex },
+      ];
+    }
+
+    const [result] = await PackageModel.aggregate([
+      { $match: matchStage },
+      ...LIST_LOOKUP_STAGES,
+      { $sort: { deliveredAt: sortOrder === "asc" ? 1 : -1 } },
+      {
+        $facet: {
+          data:         [{ $skip: skip }, { $limit: limitNum }],
+          totalCount:   [{ $count: "count" }],
+          revenueStats: [
+            {
+              $group: {
+                _id:           null,
+                totalRevenue:  { $sum: "$totalPrice" },
+                avgOrderValue: { $avg: "$totalPrice" },
+                paidCount:     { $sum: { $cond: [{ $eq: ["$paymentStatus", "paid"] }, 1, 0] } },
+              },
+            },
+          ],
+
+          monthlyBreakdown: [
+            {
+              $group: {
+                _id: {
+                  year:  { $year:  "$deliveredAt" },
+                  month: { $month: "$deliveredAt" },
+                },
+                count:   { $sum: 1 },
+                revenue: { $sum: "$totalPrice" },
+              },
+            },
+            { $sort: { "_id.year": -1, "_id.month": -1 } },
+            { $limit: 12 },
+          ],
+        },
+      },
+    ]);
+
+    const total   = result.totalCount[0]?.count ?? 0;
+    const revenue = result.revenueStats[0] ?? { totalRevenue: 0, avgOrderValue: 0, paidCount: 0 };
+
+    return res.status(200).json({
+      success: true,
+      data: result.data,
+      pagination: paginationMeta(total, pageNum, limitNum),
+      summary: {
+        total,
+        totalRevenue:   revenue.totalRevenue,
+        avgOrderValue:  revenue.avgOrderValue,
+        paidCount:      revenue.paidCount,
+        monthlyBreakdown: result.monthlyBreakdown,
+      },
+    });
+  },
+);
+
