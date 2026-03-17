@@ -18,7 +18,7 @@
 //    that may run across dozens of branches simultaneously.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { Coords, StopPoint, TSPResult } from "./types.util";
+import { Coords, StopPoint, TSPResult } from "../types.util";
 import { haversineKm, estimatedDriveMinutes, buildDistanceMatrix } from "./haversine.util";
 
 // ─────────────────────────────────────────────────────────────────────────────

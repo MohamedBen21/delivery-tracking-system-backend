@@ -8,8 +8,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import mongoose from "mongoose";
-import PackageModel from "../models/package.model";
-import { PackageCandidate, Coords } from "../utils/types.util";
+import PackageModel from "../../models/package.model";
+import { PackageCandidate, Coords } from "../types.util";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  TRANSPORTER CANDIDATES

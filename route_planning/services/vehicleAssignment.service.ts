@@ -4,8 +4,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import mongoose from "mongoose";
-import VehicleModel from "../models/vehicle.model";
-import { VehicleCandidate, VehicleType, VEHICLE_TYPE_ORDER } from "../utils/types.util";
+import VehicleModel from "../../models/vehicle.model";
+import { VehicleCandidate, VehicleType, VEHICLE_TYPE_ORDER } from "../types.util";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  FETCH
