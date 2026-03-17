@@ -17,7 +17,7 @@ import {
   VehicleCandidate,
   VEHICLE_TYPE_ORDER,
   DeliveryPriority,
-} from "./types.util";
+} from "../types.util";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 

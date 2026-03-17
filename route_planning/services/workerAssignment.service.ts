@@ -5,10 +5,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import mongoose from "mongoose";
-import DelivererModel  from "../models/deliverer.model";
-import TransporterModel from "../models/transporter.model";
-import RouteModel from "../models/route.model";
-import { WorkerCandidate } from "../utils/types.util";
+import DelivererModel  from "../../models/deliverer.model";
+import TransporterModel from "../../models/transporter.model";
+import RouteModel from "../../models/route.model";
+import { WorkerCandidate } from "../types.util";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  HELPERS
