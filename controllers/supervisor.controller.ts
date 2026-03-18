@@ -7520,3 +7520,277 @@ export const updateRoute = catchAsyncError(
   },
 );
 
+
+
+
+//  GET ROUTE BY ID
+
+export const getRoute = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const supervisorUserId = req.user?._id;
+    const { branchId, routeId } = req.params;
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+    if (!routeId || !mongoose.Types.ObjectId.isValid(routeId.toString())) {
+      return next(new ErrorHandler("Invalid route ID", 400));
+    }
+
+    const branchOid = new mongoose.Types.ObjectId(branchId.toString());
+
+    const [supervisor, route] = await Promise.all([
+      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+      RouteModel.findOne({
+        _id: routeId,
+        $or: [{ originBranchId: branchOid }, { destinationBranchId: branchOid }],
+      }).populate(ROUTE_POPULATE as any).lean(),
+    ]);
+
+    if (!supervisor || !supervisor.isActive || supervisor.branchId.toString() !== branchOid.toString()) {
+      return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+    }
+    if (!route) {
+      return next(new ErrorHandler("Route not found in this branch", 404));
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: route,
+    });
+  },
+);
+
+
+//  GET ROUTES (list for this branch)
+
+export const getRoutes = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const supervisorUserId = req.user?._id;
+    const { branchId } = req.params;
+
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    // Query params validation
+    const VALID_STATUSES:  RouteStatus[] = ["planned", "assigned", "active", "paused", "completed", "cancelled"];
+    const VALID_TYPES:     RouteType[]   = ["inter_branch", "local_delivery", "pickup_route", "return_route"];
+    const VALID_SORT_BY    = ["scheduledStart", "createdAt", "status"];
+
+    const {
+      status,
+      type,
+      workerId,
+      fromDate,
+      toDate,
+      search,
+      sortBy    = "scheduledStart",
+      sortOrder = "desc",
+      page,
+      limit,
+    } = req.query as Record<string, string | undefined>;
+
+
+    let statusFilter: RouteStatus[] | undefined;
+    if (status) {
+      const raw = status.split(",").map((s) => s.trim());
+      const invalid = raw.filter((s) => !VALID_STATUSES.includes(s as RouteStatus));
+      if (invalid.length) {
+        return next(new ErrorHandler(`Invalid status value(s): ${invalid.join(", ")}`, 400));
+      }
+      statusFilter = raw as RouteStatus[];
+    }
+
+    if (type && !VALID_TYPES.includes(type as RouteType)) {
+      return next(new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400));
+    }
+
+    if (workerId && !mongoose.Types.ObjectId.isValid(workerId)) {
+      return next(new ErrorHandler("Invalid workerId", 400));
+    }
+
+    let fromDateParsed: Date | undefined;
+    let toDateParsed:   Date | undefined;
+    if (fromDate) {
+      fromDateParsed = new Date(fromDate);
+      if (isNaN(fromDateParsed.getTime()))
+        return next(new ErrorHandler("fromDate is not a valid date", 400));
+    }
+    if (toDate) {
+      toDateParsed = new Date(toDate);
+      if (isNaN(toDateParsed.getTime()))
+        return next(new ErrorHandler("toDate is not a valid date", 400));
+    }
+    if (fromDateParsed && toDateParsed && fromDateParsed > toDateParsed) {
+      return next(new ErrorHandler("fromDate must be before toDate", 400));
+    }
+
+    if (!VALID_SORT_BY.includes(sortBy)) {
+      return next(new ErrorHandler(`sortBy must be one of: ${VALID_SORT_BY.join(", ")}`, 400));
+    }
+    if (!["asc", "desc"].includes(sortOrder)) {
+      return next(new ErrorHandler("sortOrder must be 'asc' or 'desc'", 400));
+    }
+
+    const pageNum  = parseInt(page  ?? "1",  10);
+    const limitNum = parseInt(limit ?? "20", 10);
+    if (isNaN(pageNum)  || pageNum  < 1)               return next(new ErrorHandler("page must be a positive integer", 400));
+    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
+
+
+    const supervisor = await SupervisorModel.findOne({
+      userId: supervisorUserId,
+      branchId,
+    }).lean();
+
+    if (!supervisor || !supervisor.isActive) {
+      return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+    }
+
+
+    const branchOid = new mongoose.Types.ObjectId(branchId.toString());
+
+    const matchStage: Record<string, any> = {
+      $or: [
+        { originBranchId:      branchOid },
+        { destinationBranchId: branchOid },
+      ],
+    };
+
+    if (statusFilter) {
+      matchStage.status = statusFilter.length === 1
+        ? statusFilter[0]
+        : { $in: statusFilter };
+    }
+    if (type) matchStage.type = type;
+
+    if (workerId) {
+      const workerOid = new mongoose.Types.ObjectId(workerId);
+      matchStage.$and = [
+        {
+          $or: [
+            { assignedTransporterId: workerOid },
+            { assignedDelivererId:   workerOid },
+          ],
+        },
+      ];
+    }
+
+    if (fromDateParsed || toDateParsed) {
+      matchStage.scheduledStart = {
+        ...(fromDateParsed && { $gte: fromDateParsed }),
+        ...(toDateParsed   && { $lte: toDateParsed   }),
+      };
+    }
+
+    if (search) {
+      const regex = { $regex: search.trim(), $options: "i" };
+      const searchOr = [{ routeNumber: regex }, { name: regex }];
+      // Merge with any existing $or without clobbering the branch filter
+      matchStage.$and = [
+        ...(matchStage.$and ?? []),
+        { $or: searchOr },
+      ];
+    }
+
+    const sortStage: Record<string, 1 | -1> = {
+      [sortBy]: sortOrder === "asc" ? 1 : -1,
+    };
+
+    const skip = (pageNum - 1) * limitNum;
+
+
+    const [result] = await RouteModel.aggregate([
+      { $match: matchStage },
+      {
+        $facet: {
+          data: [
+            { $sort: sortStage },
+            { $skip: skip },
+            { $limit: limitNum },
+
+            {
+              $lookup: {
+                from:         "branches",
+                localField:   "originBranchId",
+                foreignField: "_id",
+                as:           "originBranch",
+                pipeline:     [{ $project: { name: 1, code: 1, wilaya: 1 } }],
+              },
+            },
+            { $unwind: { path: "$originBranch", preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from:         "branches",
+                localField:   "destinationBranchId",
+                foreignField: "_id",
+                as:           "destinationBranch",
+                pipeline:     [{ $project: { name: 1, code: 1, wilaya: 1 } }],
+              },
+            },
+            { $unwind: { path: "$destinationBranch", preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from:         "vehicles",
+                localField:   "assignedVehicleId",
+                foreignField: "_id",
+                as:           "assignedVehicle",
+                pipeline:     [{ $project: { type: 1, registrationNumber: 1 } }],
+              },
+            },
+            { $unwind: { path: "$assignedVehicle", preserveNullAndEmptyArrays: true } },
+
+            { $project: { "stops.completedPackages": 0, "stops.failedPackages": 0, "stops.skippedPackages": 0, "stops.issues": 0, optimizedPath: 0 } },
+          ],
+          totalCount: [{ $count: "count" }],
+
+          statusSummary: [
+            { $group: { _id: "$status", count: { $sum: 1 } } },
+          ],
+
+          typeSummary: [
+            { $group: { _id: "$type", count: { $sum: 1 } } },
+          ],
+        },
+      },
+    ]);
+
+    const total = result.totalCount[0]?.count ?? 0;
+    const totalPages = Math.ceil(total / limitNum);
+
+    const statusSummary = Object.fromEntries(
+      (result.statusSummary as { _id: string; count: number }[]).map(
+        ({ _id, count }) => [_id, count],
+      ),
+    );
+    const typeSummary = Object.fromEntries(
+      (result.typeSummary as { _id: string; count: number }[]).map(
+        ({ _id, count }) => [_id, count],
+      ),
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result.data,
+      pagination: {
+        total,
+        page:        pageNum,
+        limit:       limitNum,
+        totalPages,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1,
+      },
+      summary: {
+        byStatus: statusSummary,
+        byType:   typeSummary,
+      },
+    });
+  },
+);
