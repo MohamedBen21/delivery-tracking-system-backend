@@ -13,7 +13,8 @@ import PackageModel, { DeliveryType, PackageStatus, PackageType, PaymentStatus }
 import FreelancerModel from "../models/freelancer.model";
 import clientModel from "../models/client.model";
 import PackageHistoryModel from "../models/package-history.model";
-import RouteModel from "../models/route.model";
+import RouteModel, { RouteStatus, RouteType } from "../models/route.model";
+import VehicleModel from "../models/vehicle.model";
 
 
 interface ILocationBody {
@@ -7276,3 +7277,246 @@ export const deliveryReturnPackage = catchAsyncError(
     }
   },
 );
+
+
+
+
+
+const LOCKED_STATUSES: RouteStatus[] = ["active", "paused", "completed", "cancelled"];
+
+
+const ROUTE_POPULATE = [
+  { path: "originBranchId",      select: "name code address wilaya" },
+  { path: "destinationBranchId", select: "name code address wilaya" },
+  { path: "assignedVehicleId",   select: "type registrationNumber brand modelName maxWeight maxVolume" },
+  {
+    path: "assignedTransporterId",
+    populate: { path: "userId", select: "firstName lastName phone" },
+  },
+  {
+    path: "assignedDelivererId",
+    populate: { path: "userId", select: "firstName lastName phone" },
+  },
+] as const;
+
+
+//  UPDATE ROUTE
+//
+//  What can be updated and when:
+//    • name, scheduledStart, scheduledEnd, notes → any non-locked status
+//    • cancellationReason                        → only when cancelling
+//    • stops[].notes, stops[].contactPerson,
+//      stops[].contactPhone, stops[].expectedArrival → planned / assigned only
+//
+//  What can NEVER be updated here:
+//    • status  → use the dedicated deactivate endpoint (toggles to cancelled)
+//    • assignedTransporterId / assignedDelivererId / assignedVehicleId
+//      → use dedicated assign/release endpoints (not yet built — blocked here)
+//    • stops[].packageIds → packages are added/removed via package controllers
+//    • distance, estimatedTime, currentStopIndex → computed / runtime fields
+//
+//  Route must belong to this branch (originBranchId OR destinationBranchId).
+//  Supervisor must be active and have can_manage_schedules permission.
+
+
+export const updateRoute = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const supervisorUserId = req.user?._id;
+      const { branchId, routeId } = req.params;
+
+
+      if (!supervisorUserId) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+      if (!routeId || !mongoose.Types.ObjectId.isValid(routeId.toString())) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("Invalid route ID", 400));
+      }
+
+
+      const body = req.body as {
+        name?:          string;
+        scheduledStart?: string;
+        scheduledEnd?:   string;
+        completionNotes?: string;
+        stops?: {
+          stopId:           string;
+          notes?:           string;
+          contactPerson?:   string;
+          contactPhone?:    string;
+          expectedArrival?: string;
+        }[];
+      };
+
+      if (Object.keys(body).length === 0) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("No update data provided", 400));
+      }
+
+
+      const blocked = [
+        "status", "assignedTransporterId", "assignedDelivererId",
+        "assignedVehicleId", "distance", "estimatedTime",
+        "currentStopIndex", "completedStops", "failedStops",
+      ];
+      const blockedFound = blocked.filter((f) => f in body);
+      if (blockedFound.length) {
+        await session.abortTransaction(); session.endSession();
+        return next(
+          new ErrorHandler(
+            `Field(s) cannot be updated here: ${blockedFound.join(", ")}. ` +
+            "Use the dedicated endpoint for each.",
+            400,
+          ),
+        );
+      }
+
+      if (body.name !== undefined && typeof body.name !== "string") {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("name must be a string", 400));
+      }
+
+      let parsedStart: Date | undefined;
+      let parsedEnd:   Date | undefined;
+
+      if (body.scheduledStart !== undefined) {
+        parsedStart = new Date(body.scheduledStart);
+        if (isNaN(parsedStart.getTime())) {
+          await session.abortTransaction(); session.endSession();
+          return next(new ErrorHandler("scheduledStart is not a valid date", 400));
+        }
+      }
+      if (body.scheduledEnd !== undefined) {
+        parsedEnd = new Date(body.scheduledEnd);
+        if (isNaN(parsedEnd.getTime())) {
+          await session.abortTransaction(); session.endSession();
+          return next(new ErrorHandler("scheduledEnd is not a valid date", 400));
+        }
+      }
+      if (parsedStart && parsedEnd && parsedStart >= parsedEnd) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("scheduledStart must be before scheduledEnd", 400));
+      }
+
+
+      const branchOid = new mongoose.Types.ObjectId(branchId.toString());
+
+      const [supervisor, route] = await Promise.all([
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+        RouteModel.findOne({
+          _id: routeId,
+          $or: [{ originBranchId: branchOid }, { destinationBranchId: branchOid }],
+        }).session(session),
+      ]);
+
+      if (!supervisor || !supervisor.isActive || supervisor.branchId.toString() !== branchOid.toString()) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+      if (!supervisor.hasPermission("can_manage_schedules")) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage schedules", 403));
+      }
+      if (!route) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("Route not found in this branch", 404));
+      }
+      if (LOCKED_STATUSES.includes(route.status)) {
+        await session.abortTransaction(); session.endSession();
+        return next(
+          new ErrorHandler(
+            `Cannot edit a route with status '${route.status}'. ` +
+            "Only planned and assigned routes can be modified.",
+            400,
+          ),
+        );
+      }
+
+
+      const $set: Record<string, any> = {};
+
+      if (body.name?.trim())        $set.name           = body.name.trim();
+      if (parsedStart)              $set.scheduledStart = parsedStart;
+      if (parsedEnd)                $set.scheduledEnd   = parsedEnd;
+      if (body.completionNotes !== undefined) {
+        $set.completionNotes = body.completionNotes?.trim() ?? null;
+      }
+
+
+      const effectiveStart = parsedStart ?? route.scheduledStart;
+      const effectiveEnd   = parsedEnd   ?? route.scheduledEnd;
+      if (effectiveStart >= effectiveEnd) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("scheduledStart must be before scheduledEnd", 400));
+      }
+
+      // ── Per-stop updates (dot-notation positional by _id) 
+      if (body.stops && body.stops.length > 0) {
+        for (const stopUpdate of body.stops) {
+          if (!stopUpdate.stopId || !mongoose.Types.ObjectId.isValid(stopUpdate.stopId)) {
+            await session.abortTransaction(); session.endSession();
+            return next(new ErrorHandler(`Invalid stopId: ${stopUpdate.stopId}`, 400));
+          }
+
+          const stopOid = new mongoose.Types.ObjectId(stopUpdate.stopId);
+          const stopIdx = route.stops.findIndex(
+            (s) => s._id?.toString() === stopOid.toString(),
+          );
+          if (stopIdx === -1) {
+            await session.abortTransaction(); session.endSession();
+            return next(new ErrorHandler(`Stop ${stopUpdate.stopId} not found in this route`, 404));
+          }
+
+          if (stopUpdate.notes !== undefined)
+            $set[`stops.${stopIdx}.notes`] = stopUpdate.notes?.trim() ?? null;
+          if (stopUpdate.contactPerson !== undefined)
+            $set[`stops.${stopIdx}.contactPerson`] = stopUpdate.contactPerson?.trim() ?? null;
+          if (stopUpdate.contactPhone !== undefined)
+            $set[`stops.${stopIdx}.contactPhone`] = stopUpdate.contactPhone?.trim() ?? null;
+          if (stopUpdate.expectedArrival !== undefined) {
+            const d = new Date(stopUpdate.expectedArrival);
+            if (isNaN(d.getTime())) {
+              await session.abortTransaction(); session.endSession();
+              return next(new ErrorHandler(`Stop ${stopUpdate.stopId}: expectedArrival is not a valid date`, 400));
+            }
+            $set[`stops.${stopIdx}.expectedArrival`] = d;
+          }
+        }
+      }
+
+      if (Object.keys($set).length === 0) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("No valid fields to update", 400));
+      }
+
+      await RouteModel.findByIdAndUpdate(routeId, { $set }, { session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const updated = await RouteModel.findById(routeId)
+        .populate(ROUTE_POPULATE as any)
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: "Route updated successfully",
+        data: updated,
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler(error.message || "Error updating route", 500));
+    }
+  },
+);
+

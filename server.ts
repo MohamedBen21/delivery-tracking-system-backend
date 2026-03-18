@@ -1,25 +1,35 @@
+require("dotenv").config(); 
+
 import { app } from "./app";
 import { connectMongo } from "./databases/Mongo.database";
 import { connectRedis } from "./databases/Redis.database";
-require("dotenv").config();
+import { startScheduler } from "./route_planning/scheduler";
+
 
 const port = process.env.PORT || 8080;
-const server = app.listen(port, () => {
-  console.log(`app is running on port ${port}`);
-  connectMongo();
+
+async function bootstrap() {
+  await connectMongo();
   connectRedis();
-});
 
-process.on("SIGINT", () => {
-  server.close(() => {
-    console.log("Server closed correctly.");
-    process.exit(0);
+  const server = app.listen(port, () => {
+    console.log(`App is running on port ${port}`);
+    startScheduler();
   });
-});
 
-process.on("SIGTERM", () => {
-  server.close(() => {
-    console.log("Server closed correctly.");
-    process.exit(0);
-  });
+  function shutdown(signal: string) {
+    console.log(`\n${signal} received — shutting down gracefully...`);
+    server.close(() => {
+      console.log("Server closed correctly.");
+      process.exit(0);
+    });
+  }
+
+  process.on("SIGINT",  () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+}
+
+bootstrap().catch((err) => {
+  console.error("Failed to start server:", err);
+  process.exit(1);
 });
