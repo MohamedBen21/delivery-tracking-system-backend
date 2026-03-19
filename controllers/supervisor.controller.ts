@@ -7794,3 +7794,200 @@ export const getRoutes = catchAsyncError(
     });
   },
 );
+
+
+
+//  TOGGLE DEACTIVATE ROUTE
+//  PATCH /branches/:branchId/routes/:routeId/toggle-cancel
+//  Soft-cancel: planned / assigned → cancelled  (and releases worker + vehicle)
+//  Re-activate: cancelled          → planned    (worker + vehicle must still exist)
+//  Hard delete is intentionally not provided — routes are audit trail.
+//  Body: { reason?: string }
+
+
+export const toggleCancelRoute = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const supervisorUserId = req.user?._id;
+      const { branchId, routeId } = req.params;
+      const { reason } = req.body as { reason?: string };
+
+      if (!supervisorUserId) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+      if (!routeId || !mongoose.Types.ObjectId.isValid(routeId.toString())) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("Invalid route ID", 400));
+      }
+
+      const branchOid = new mongoose.Types.ObjectId(branchId.toString());
+
+      const [supervisor, route] = await Promise.all([
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
+        RouteModel.findOne({
+          _id: routeId,
+          $or: [{ originBranchId: branchOid }, { destinationBranchId: branchOid }],
+        }).session(session),
+      ]);
+
+      if (!supervisor || !supervisor.isActive || supervisor.branchId.toString() !== branchOid.toString()) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+      if (!supervisor.hasPermission("can_manage_schedules")) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("You don't have permission to manage schedules", 403));
+      }
+      if (!route) {
+        await session.abortTransaction(); session.endSession();
+        return next(new ErrorHandler("Route not found in this branch", 404));
+      }
+
+
+      if (["active", "paused", "completed"].includes(route.status)) {
+        await session.abortTransaction(); session.endSession();
+        return next(
+          new ErrorHandler(
+            `Cannot toggle a route with status '${route.status}'. ` +
+            "Active routes must be managed through the driver's interface.",
+            400,
+          ),
+        );
+      }
+
+      const isCancelling = route.status !== "cancelled";
+      const newStatus: RouteStatus = isCancelling ? "cancelled" : "planned";
+
+
+      const sideEffects: Promise<any>[] = [
+        RouteModel.findByIdAndUpdate(
+          routeId,
+          {
+            $set: {
+              status: newStatus,
+              ...(isCancelling && reason?.trim() && {
+                cancellationReason: reason.trim(),
+              }),
+
+              ...(!isCancelling && { cancellationReason: undefined }),
+            },
+          },
+          { session },
+        ),
+      ];
+
+      if (isCancelling) {
+
+        sideEffects.push(
+          PackageModel.updateMany(
+            { currentRouteId: routeId },
+            { $set: { currentRouteId: null } },
+            { session },
+          ),
+        );
+
+
+        if (route.assignedTransporterId) {
+          sideEffects.push(
+            TransporterModel.findByIdAndUpdate(
+              route.assignedTransporterId,
+              { $set: { currentRouteId: null, availabilityStatus: "available" } },
+              { session },
+            ),
+          );
+        }
+
+        if (route.assignedDelivererId) {
+          sideEffects.push(
+            DelivererModel.findByIdAndUpdate(
+              route.assignedDelivererId,
+              { $set: { currentRouteId: null, availabilityStatus: "available" } },
+              { session },
+            ),
+          );
+        }
+
+
+        if (route.assignedVehicleId) {
+          sideEffects.push(
+            VehicleModel.findByIdAndUpdate(
+              route.assignedVehicleId,
+              { $set: { status: "available", assignedUserId: null, assignedUserRole: null } },
+              { session },
+            ),
+          );
+        }
+      } else {
+        // Re activating: re stamp packages with this routeId
+        // Collect all packageIds from stops
+        const allPackageIds = route.stops.flatMap((s) => s.packageIds);
+        if (allPackageIds.length > 0) {
+          sideEffects.push(
+            PackageModel.updateMany(
+              { _id: { $in: allPackageIds } },
+              { $set: { currentRouteId: route._id } },
+              { session },
+            ),
+          );
+        }
+
+        // Re mark transporter/deliverer with the route
+        if (route.assignedTransporterId) {
+          sideEffects.push(
+            TransporterModel.findByIdAndUpdate(
+              route.assignedTransporterId,
+              { $set: { currentRouteId: route._id } },
+              { session },
+            ),
+          );
+        }
+        if (route.assignedDelivererId) {
+          sideEffects.push(
+            DelivererModel.findByIdAndUpdate(
+              route.assignedDelivererId,
+              { $set: { currentRouteId: route._id } },
+              { session },
+            ),
+          );
+        }
+        if (route.assignedVehicleId) {
+          sideEffects.push(
+            VehicleModel.findByIdAndUpdate(
+              route.assignedVehicleId,
+              { $set: { status: "in_use" } },
+              { session },
+            ),
+          );
+        }
+      }
+
+      await Promise.all(sideEffects);
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(200).json({
+        success: true,
+        message: isCancelling
+          ? "Route cancelled successfully"
+          : "Route reactivated successfully",
+        data: {
+          routeId,
+          previousStatus: route.status,
+          newStatus,
+        },
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorHandler(error.message || "Error toggling route status", 500));
+    }
+  },
+);
