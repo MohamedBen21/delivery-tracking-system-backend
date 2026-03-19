@@ -8202,3 +8202,196 @@ export const getActiveRoutes = catchAsyncError(
   },
 );
  
+
+
+
+
+
+// GET ROUTES BY BRANCH  (manager / admin scope — across all branches)
+// GET /routes/by-branch
+//  this function lets a supervisor (or admin) query
+//  routes for a specific branch they choose 
+//  useful when a supervisor manages multiple branches or for a manager-level dashboard.
+// query params:
+// branchId    required  — ObjectId of the branch to query
+// status      optional  — comma-separated RouteStatus values
+// type        optional  — inter_branch | local_delivery | pickup_route | return_route
+// fromDate    optional  — ISO date string, defaults to 30 days ago
+// toDate      optional  — ISO date string, defaults to end of tomorrow
+// capped at end of tomorrow (no routes exist beyond that bcz they are generated at midnight by a cron job)
+// page, limit optional  — default 1 / 20, max 100
+
+ 
+export const getRoutesByBranch = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const supervisorUserId = req.user?._id;
+ 
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+ 
+    const {
+      branchId,
+      status,
+      type,
+      fromDate,
+      toDate,
+      page,
+      limit,
+    } = req.query as Record<string, string | undefined>;
+ 
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("branchId query param is required and must be a valid ID", 400));
+    }
+ 
+    const VALID_STATUSES: RouteStatus[] = ["planned", "assigned", "active", "paused", "completed", "cancelled"];
+    const VALID_TYPES:    RouteType[]   = ["inter_branch", "local_delivery", "pickup_route", "return_route"];
+ 
+    let statusFilter: RouteStatus[] | undefined;
+    if (status) {
+      const raw = status.split(",").map((s) => s.trim());
+      const invalid = raw.filter((s) => !VALID_STATUSES.includes(s as RouteStatus));
+      if (invalid.length) {
+        return next(new ErrorHandler(`Invalid status value(s): ${invalid.join(", ")}`, 400));
+      }
+      statusFilter = raw as RouteStatus[];
+    }
+ 
+    if (type && !VALID_TYPES.includes(type as RouteType)) {
+      return next(new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400));
+    }
+ 
+
+    // Routes only exist up to tomorrow (scheduler generates one day ahead).
+    // Cap toDate at end-of-tomorrow so querying future dates never returns
+    // a confusing empty result when the user forgets this constraint.
+    const now = new Date();
+ 
+    const endOfTomorrow = new Date(now);
+    endOfTomorrow.setDate(endOfTomorrow.getDate() + 1);
+    endOfTomorrow.setUTCHours(23, 59, 59, 999);
+ 
+    const defaultFromDate = new Date(now);
+    defaultFromDate.setDate(defaultFromDate.getDate() - 30);
+    defaultFromDate.setUTCHours(0, 0, 0, 0);
+ 
+    let fromDateParsed: Date;
+    let toDateParsed:   Date;
+ 
+    if (fromDate) {
+      fromDateParsed = new Date(fromDate);
+      if (isNaN(fromDateParsed.getTime())) {
+        return next(new ErrorHandler("fromDate is not a valid date", 400));
+      }
+      fromDateParsed.setUTCHours(0, 0, 0, 0);
+    } else {
+      fromDateParsed = defaultFromDate;
+    }
+ 
+    if (toDate) {
+      toDateParsed = new Date(toDate);
+      if (isNaN(toDateParsed.getTime())) {
+        return next(new ErrorHandler("toDate is not a valid date", 400));
+      }
+      toDateParsed.setUTCHours(23, 59, 59, 999);
+ 
+      // rmake it to end-of-tomorrow if the user enters the toDate in the far future
+      // no error printing (not needed)
+      
+      if (toDateParsed > endOfTomorrow) {
+        toDateParsed = endOfTomorrow;
+      }
+    } else {
+      toDateParsed = endOfTomorrow;
+    }
+ 
+    if (fromDateParsed > toDateParsed) {
+      return next(new ErrorHandler("fromDate must be before toDate", 400));
+    }
+ 
+    const pageNum  = parseInt(page  ?? "1",  10);
+    const limitNum = parseInt(limit ?? "20", 10);
+    if (isNaN(pageNum)  || pageNum  < 1)                   return next(new ErrorHandler("page must be a positive integer", 400));
+    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
+ 
+
+    const supervisor = await SupervisorModel.findOne({
+      userId:   supervisorUserId,
+      isActive: true,
+    }).lean();
+ 
+    if (!supervisor) {
+      return next(new ErrorHandler("You are not an active supervisor", 403));
+    }
+
+    const branchOid = new mongoose.Types.ObjectId(branchId.toString());
+ 
+    const matchStage: Record<string, any> = {
+      $or: [
+        { originBranchId:      branchOid },
+        { destinationBranchId: branchOid },
+      ],
+      companyId:      supervisor.companyId,
+      scheduledStart: { $gte: fromDateParsed, $lte: toDateParsed },
+    };
+ 
+    if (statusFilter) {
+      matchStage.status = statusFilter.length === 1
+        ? statusFilter[0]
+        : { $in: statusFilter };
+    }
+    if (type) matchStage.type = type;
+ 
+    const skip = (pageNum - 1) * limitNum;
+ 
+
+    const [result] = await RouteModel.aggregate([
+      { $match: matchStage },
+      {
+        $facet: {
+          data: [
+            { $sort: { scheduledStart: -1 } },
+            { $skip: skip },
+            { $limit: limitNum },
+            ...LIST_LOOKUP_STAGES,
+          ],
+          totalCount:    [{ $count: "count" }],
+          statusSummary: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
+          typeSummary:   [{ $group: { _id: "$type",   count: { $sum: 1 } } }],
+        },
+      },
+    ]);
+ 
+    const total      = result.totalCount[0]?.count ?? 0;
+    const totalPages = Math.ceil(total / limitNum);
+ 
+    const statusSummary = Object.fromEntries(
+      (result.statusSummary as { _id: string; count: number }[]).map(
+        ({ _id, count }) => [_id, count],
+      ),
+    );
+    const typeSummary = Object.fromEntries(
+      (result.typeSummary as { _id: string; count: number }[]).map(
+        ({ _id, count }) => [_id, count],
+      ),
+    );
+ 
+    return res.status(200).json({
+      success: true,
+      data:    result.data,
+      pagination: {
+        total,
+        page:        pageNum,
+        limit:       limitNum,
+        totalPages,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1,
+      },
+      summary: {
+        byStatus: statusSummary,
+        byType:   typeSummary,
+      },
+    });
+  },
+);
