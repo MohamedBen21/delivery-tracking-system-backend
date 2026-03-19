@@ -7991,3 +7991,214 @@ export const toggleCancelRoute = catchAsyncError(
     }
   },
 );
+
+
+
+
+const LIST_LOOKUP_STAGES: (
+  | mongoose.PipelineStage.Lookup
+  | mongoose.PipelineStage.Unwind
+  | mongoose.PipelineStage.Project
+)[] = [
+  {
+    $lookup: {
+      from: "branches", localField: "originBranchId", foreignField: "_id",
+      as: "originBranch", pipeline: [{ $project: { name: 1, code: 1, wilaya: 1 } }],
+    },
+  },
+  { $unwind: { path: "$originBranch", preserveNullAndEmptyArrays: true } },
+  {
+    $lookup: {
+      from: "branches", localField: "destinationBranchId", foreignField: "_id",
+      as: "destinationBranch", pipeline: [{ $project: { name: 1, code: 1, wilaya: 1 } }],
+    },
+  },
+  { $unwind: { path: "$destinationBranch", preserveNullAndEmptyArrays: true } },
+  {
+    $lookup: {
+      from: "vehicles", localField: "assignedVehicleId", foreignField: "_id",
+      as: "assignedVehicle", pipeline: [{ $project: { type: 1, registrationNumber: 1 } }],
+    },
+  },
+  { $unwind: { path: "$assignedVehicle", preserveNullAndEmptyArrays: true } },
+  {
+    $project: {
+      "stops.completedPackages": 0,
+      "stops.failedPackages":    0,
+      "stops.skippedPackages":   0,
+      "stops.issues":            0,
+      optimizedPath:             0,
+    },
+  },
+];
+
+
+
+
+
+//  GET ACTIVE ROUTES  (for this branch)
+//  GET /branches/:branchId/routes/active
+//  Returns all routes currently in motion  status: active or paused.
+//  Sorted by scheduledStart ascending so the most urgent shows first.
+//  Includes real-time progress fields: currentStop, nextStop, delayMinutes,
+//  progressPercentage — computed in the aggregation, no extra queries.
+//  Query params:
+//    type          optional — inter_branch | local_delivery | pickup_route | return_route
+//    workerId      optional — filter to one specific driver
+//    branchSearch  optional — partial match on origin/destination branch name or code
+//                             e.g. "Constantine" shows all active routes going there
+ 
+export const getActiveRoutes = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const supervisorUserId = req.user?._id;
+    const { branchId } = req.params;
+ 
+    if (!supervisorUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+ 
+    //query params
+    // type to filter by route type
+    // workerId  to filter to one specific driver (transporter or deliverer doc _id)
+    // branchSearch to filter by origin/destination branch name or code (partial, case-insensitive)
+    // and useful when a supervisor wants to see "all active routes going to Constantine"
+    const { type, workerId, branchSearch } = req.query as {
+      type?:         string;
+      workerId?:     string;
+      branchSearch?: string;
+    };
+ 
+    const VALID_TYPES: RouteType[] = ["inter_branch", "local_delivery", "pickup_route", "return_route"];
+ 
+    if (type && !VALID_TYPES.includes(type as RouteType)) {
+      return next(new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400));
+    }
+    if (workerId && !mongoose.Types.ObjectId.isValid(workerId)) {
+      return next(new ErrorHandler("Invalid workerId", 400));
+    }
+ 
+
+    const supervisor = await SupervisorModel.findOne({
+      userId: supervisorUserId,
+      branchId,
+    }).lean();
+ 
+    if (!supervisor || !supervisor.isActive || supervisor.branchId.toString() !== branchId.toString()) {
+      return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+    }
+ 
+
+    const branchOid = new mongoose.Types.ObjectId(branchId.toString());
+ 
+    const matchStage: Record<string, any> = {
+      status: { $in: ["active", "paused"] },
+      $or: [
+        { originBranchId:      branchOid },
+        { destinationBranchId: branchOid },
+      ],
+    };
+ 
+    if (type) matchStage.type = type;
+ 
+    if (workerId) {
+      const workerOid = new mongoose.Types.ObjectId(workerId);
+      matchStage.$and = [
+        {
+          $or: [
+            { assignedTransporterId: workerOid },
+            { assignedDelivererId:   workerOid },
+          ],
+        },
+      ];
+    }
+
+    if (branchSearch?.trim()) {
+      const query = mongoose.Types.ObjectId.isValid(branchSearch.trim())
+        ? { _id: new mongoose.Types.ObjectId(branchSearch.trim()) }
+        : { $or: [
+              { name: { $regex: branchSearch.trim(), $options: "i" } },
+              { code: { $regex: branchSearch.trim(), $options: "i" } },
+          ] };
+ 
+      const matchedBranch = await BranchModel.findOne(query).select("_id").lean();
+ 
+      if (!matchedBranch) {
+        return next(new ErrorHandler("No branch found matching the provided branchSearch", 404));
+      }
+ 
+      const searchOid = matchedBranch._id as mongoose.Types.ObjectId;
+      matchStage.$and = [
+        ...(matchStage.$and ?? []),
+        {
+          $or: [
+            { originBranchId:      searchOid },
+            { destinationBranchId: searchOid },
+          ],
+        },
+      ];
+    }
+ 
+
+    const routes = await RouteModel.aggregate([
+      { $match: matchStage },
+      { $sort: { scheduledStart: 1 } },
+      ...LIST_LOOKUP_STAGES,
+      {
+        $addFields: {
+
+          currentStop: {
+            $cond: {
+              if:   { $lt: ["$currentStopIndex", { $size: "$stops" }] },
+              then: { $arrayElemAt: ["$stops", "$currentStopIndex"] },
+              else: null,
+            },
+          },
+
+          nextStop: {
+            $cond: {
+              if:   { $lt: [{ $add: ["$currentStopIndex", 1] }, { $size: "$stops" }] },
+              then: { $arrayElemAt: ["$stops", { $add: ["$currentStopIndex", 1] }] },
+              else: null,
+            },
+          },
+          // Minutes behind schedule ( — ) negative means ahead of schedule
+          delayMinutes: {
+            $cond: {
+              if: "$scheduledEnd",
+              then: {
+                $round: [
+                  { $divide: [{ $subtract: [new Date(), "$scheduledEnd"] }, 60000] },
+                  0,
+                ],
+              },
+              else: null,
+            },
+          },
+          // 0-100 progress based on stops completed
+          progressPercentage: {
+            $cond: {
+              if:   { $gt: [{ $size: "$stops" }, 0] },
+              then: {
+                $multiply: [
+                  { $divide: ["$currentStopIndex", { $size: "$stops" }] },
+                  100,
+                ],
+              },
+              else: 0,
+            },
+          },
+        },
+      },
+    ]);
+ 
+    return res.status(200).json({
+      success: true,
+      count: routes.length,
+      data:  routes,
+    });
+  },
+);
+ 
