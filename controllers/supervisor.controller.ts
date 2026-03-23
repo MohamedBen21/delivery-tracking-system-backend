@@ -15,6 +15,7 @@ import clientModel from "../models/client.model";
 import PackageHistoryModel from "../models/package-history.model";
 import RouteModel, { RouteStatus, RouteType } from "../models/route.model";
 import VehicleModel from "../models/vehicle.model";
+import { deleteImage } from "../utils/Multer.util";
 
 
 interface ILocationBody {
@@ -8446,3 +8447,5 @@ export const getMeSupervisor = catchAsyncError(
     });
   },
 );
+
+

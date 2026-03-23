@@ -11,6 +11,7 @@ import SupervisorModel, {
 } from "../models/supervisor.model";
 import VehicleModel, { AssignedUserRole, IVehicleDocuments, VehicleStatus, VehicleType } from "../models/vehicle.model";
 
+
 type CompanyBusinessType = "solo" | "company";
 
 interface IHeadquarters {
@@ -3336,6 +3337,94 @@ export const getMeManager = catchAsyncError(
         branchAccess: manager.branchAccess,
         company:      manager.companyId, 
       },
+    });
+  },
+);
+
+
+
+function buildUserFieldUpdates(
+  body: { firstName?: string; lastName?: string },
+  next: NextFunction
+): Record<string, any> | null {
+  const $set: Record<string, any> = {};
+
+  if (body.firstName !== undefined) {
+    if (typeof body.firstName !== "string" || body.firstName.trim().length < 3) {
+      next(new ErrorHandler("firstName must be at least 3 characters", 400));
+      return null;
+    }
+    if (body.firstName.trim().length > 30) {
+      next(new ErrorHandler("firstName cannot exceed 30 characters", 400));
+      return null;
+    }
+    $set.firstName = body.firstName.trim();
+  }
+
+  if (body.lastName !== undefined) {
+    if (typeof body.lastName !== "string" || body.lastName.trim().length < 3) {
+      next(new ErrorHandler("lastName must be at least 3 characters", 400));
+      return null;
+    }
+    if (body.lastName.trim().length > 30) {
+      next(new ErrorHandler("lastName cannot exceed 30 characters", 400));
+      return null;
+    }
+    $set.lastName = body.lastName.trim();
+  }
+
+  return $set;
+}
+
+
+
+//  UPDATE ME — MANAGER
+//  PATCH /manager/me
+//  Updatable: firstName, lastName
+//  Everything on ManagerModel is blocked — only an admin can change that.
+
+ 
+export const updateMeManager = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+ 
+    if (!userId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+ 
+    // Block any attempt to touch manager-level fields
+    const blocked = ["accessLevel", "permissions", "branchAccess", "companyId", "isActive"];
+    const blockedFound = blocked.filter((f) => f in req.body);
+    if (blockedFound.length) {
+      return next(
+        new ErrorHandler(
+          `Field(s) cannot be self-updated: ${blockedFound.join(", ")}`,
+          400,
+        ),
+      );
+    }
+ 
+    const user = await userModel.findById(userId).lean();
+    if (!user) return next(new ErrorHandler("User not found.", 404));
+ 
+    const userUpdates = buildUserFieldUpdates(req.body, next);
+
+    if (!userUpdates) return; 
+ 
+    if (Object.keys(userUpdates).length === 0) {
+      return next(new ErrorHandler("No valid fields to update.", 400));
+    }
+ 
+    const updatedUser = await userModel.findByIdAndUpdate(
+      userId,
+      { $set: userUpdates },
+      { new: true, runValidators: true },
+    ).select("firstName lastName email phone imageUrl role status");
+ 
+    return res.status(200).json({
+      success: true,
+      message: "Profile updated successfully",
+      data: updatedUser,
     });
   },
 );
