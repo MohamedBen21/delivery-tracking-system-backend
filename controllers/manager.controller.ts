@@ -3343,32 +3343,32 @@ export const getMeManager = catchAsyncError(
 
 
 
-function buildUserFieldUpdates(
+export function buildUserFieldUpdates(
   body: { firstName?: string; lastName?: string },
   next: NextFunction
-): Record<string, any> | null {
+): Record<string, any> | void {
   const $set: Record<string, any> = {};
 
   if (body.firstName !== undefined) {
     if (typeof body.firstName !== "string" || body.firstName.trim().length < 3) {
-      next(new ErrorHandler("firstName must be at least 3 characters", 400));
-      return null;
+      return next(new ErrorHandler("firstName must be at least 3 characters", 400));
+
     }
     if (body.firstName.trim().length > 30) {
-      next(new ErrorHandler("firstName cannot exceed 30 characters", 400));
-      return null;
+      return next(new ErrorHandler("firstName cannot exceed 30 characters", 400));
+
     }
     $set.firstName = body.firstName.trim();
   }
 
   if (body.lastName !== undefined) {
     if (typeof body.lastName !== "string" || body.lastName.trim().length < 3) {
-      next(new ErrorHandler("lastName must be at least 3 characters", 400));
-      return null;
+      return next(new ErrorHandler("lastName must be at least 3 characters", 400));
+
     }
     if (body.lastName.trim().length > 30) {
-      next(new ErrorHandler("lastName cannot exceed 30 characters", 400));
-      return null;
+      return next(new ErrorHandler("lastName cannot exceed 30 characters", 400));
+
     }
     $set.lastName = body.lastName.trim();
   }
