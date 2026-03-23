@@ -201,69 +201,58 @@ export const resendActivation = catchAsyncError(
   },
 );
 
+
 export const activate = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { activation_token: ac_token, activation_number: ac_number } =
-        req.body;
-
-      const activation_token = ac_token || req.cookies.activation_token;
-
-      if (!activation_token) {
-        return next(new ErrorHandler("Activation token not found", 404));
-      }
-
-      if (!ac_number) {
-        return next(new ErrorHandler("Activation number not found", 404));
-      }
-
-      const secret = process.env.JWT_SECRET || "default_secret_key";
-      const decoded = verifyToken(activation_token, secret) as {
-        iv: string;
-        data: string;
-      };
-
-      if (typeof decoded === "string") {
-        return next(new ErrorHandler("Invalid activation token", 400));
-      }
-
-      const { firstName, lastName, phone, email, password, activation_number } =
-        decrypt(decoded.data, decoded.iv);
-
-      if (ac_number !== activation_number) {
-        return next(new ErrorHandler("Invalid activation number", 400));
-      }
-
-      const existingUser = await User.findOne({ email });
-      if (existingUser) {
-        return next(new ErrorHandler("User already exists", 400));
-      }
-
-      const newUser = new User({
-        firstName,
-        lastName,
-        phone,
-        email,
-        passwordHash: password,
-        status: "active",
-        role: "client",
-      });
-
-      await newUser.save();
-
-      res.clearCookie("activation_token", {
-        httpOnly: true,
-        sameSite: "none",
-        secure: true,
-      });
-
-      sendToken(newUser, 200, res, "Account activated successfully");
-      await sendToken(newUser, 200, res);
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(error.message || "Error activating account.", 500),
-      );
+    const { activation_token: ac_token, activation_number: ac_number } = req.body;
+    const activation_token = ac_token || req.cookies.activation_token;
+ 
+    if (!activation_token) {
+      return next(new ErrorHandler("Activation token not found", 404));
     }
+    if (!ac_number) {
+      return next(new ErrorHandler("Activation number is required", 400));
+    }
+ 
+    const secret = process.env.JWT_SECRET || "default_secret_key";
+    const decoded = verifyToken(activation_token, secret) as { iv: string; data: string };
+ 
+    if (typeof decoded === "string") {
+      return next(new ErrorHandler("Invalid or expired activation token", 400));
+    }
+ 
+    const { firstName, lastName, phone, email, password, activation_number } =
+      decrypt(decoded.data, decoded.iv);
+ 
+    if (ac_number !== activation_number) {
+      return next(new ErrorHandler("Invalid activation code", 400));
+    }
+ 
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return next(new ErrorHandler("User already exists", 400));
+    }
+ 
+    const newUser = new User({
+      firstName,
+      lastName,
+      phone,
+      email,
+      passwordHash: password,
+      status: "active",
+      role: "client",
+    });
+ 
+    await newUser.save();
+ 
+    res.clearCookie("activation_token", {
+      httpOnly: true,
+      sameSite: "none",
+      secure: true,
+    });
+ 
+
+    await sendToken(newUser, 200, res, "Account activated successfully");
   },
 );
 

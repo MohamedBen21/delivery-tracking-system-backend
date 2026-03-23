@@ -3293,3 +3293,49 @@ export const getCompanyVehicles = catchAsyncError(
     }
   },
 );
+
+
+
+export const getMeManager = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+ 
+    if (!userId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+ 
+    const [user, manager] = await Promise.all([
+      userModel.findById(userId)
+        .select("firstName lastName email phone imageUrl role status createdAt")
+        .lean(),
+      ManagerModel.findOne({ userId })
+        .populate("companyId", "name logo status businessType")
+        .lean(),
+    ]);
+ 
+    if (!user) {
+      return next(new ErrorHandler("User not found.", 404));
+    }
+    if (!manager || !manager.isActive) {
+      return next(new ErrorHandler("Manager profile not found or inactive.", 404));
+    }
+ 
+    return res.status(200).json({
+      success: true,
+      data: {
+
+        firstName:   user.firstName,
+        lastName:    user.lastName,
+        email:       user.email,
+        phone:       user.phone,
+        imageUrl:    user.imageUrl,
+        role:        user.role,
+        status:      user.status,
+        accessLevel:  manager.accessLevel,
+        permissions:  manager.permissions,
+        branchAccess: manager.branchAccess,
+        company:      manager.companyId, 
+      },
+    });
+  },
+);

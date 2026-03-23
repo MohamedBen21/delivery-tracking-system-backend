@@ -8395,3 +8395,54 @@ export const getRoutesByBranch = catchAsyncError(
     });
   },
 );
+
+
+
+
+export const getMeSupervisor = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+ 
+    if (!userId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+ 
+    const [user, supervisor] = await Promise.all([
+      userModel.findById(userId)
+        .select("firstName lastName email phone imageUrl role status createdAt")
+        .lean(),
+      SupervisorModel.findOne({ userId })
+        .populate("branchId",  "name code address wilaya")
+        .populate("companyId", "name logo status")
+        .lean(),
+    ]);
+ 
+    if (!user) {
+      return next(new ErrorHandler("User not found.", 404));
+    }
+    if (!supervisor || !supervisor.isActive) {
+      return next(new ErrorHandler("Supervisor profile not found or inactive.", 404));
+    }
+ 
+    return res.status(200).json({
+      success: true,
+      data: {
+
+        firstName:   user.firstName,
+        lastName:    user.lastName,
+        email:       user.email,
+        phone:       user.phone,
+        imageUrl:    user.imageUrl,
+        role:        user.role,
+        status:      user.status,
+
+
+        permissions:  supervisor.permissions,
+        workSchedule: supervisor.workSchedule,
+        performance:  supervisor.performance,
+        branch:       supervisor.branchId,  
+        company:      supervisor.companyId,  
+      },
+    });
+  },
+);

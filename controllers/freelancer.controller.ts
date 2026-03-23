@@ -6,6 +6,7 @@ import PackageModel, { PackageStatus } from "../models/package.model";
 import PackageHistoryModel from "../models/package-history.model";
 import FreelancerModel from "../models/freelancer.model";
 import BranchModel from "../models/branch.model";
+import userModel from "../models/user.model";
 
 
 
@@ -833,6 +834,58 @@ export const trackPackage = catchAsyncError(
 
       timeline,
       expectedSteps,
+    });
+  },
+);
+
+
+
+export const getMeFreelancer = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+ 
+    if (!userId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+ 
+    const [user, freelancer] = await Promise.all([
+      userModel.findById(userId)
+        .select("firstName lastName email phone imageUrl role status createdAt")
+        .lean(),
+      FreelancerModel.findOne({ userId })
+        .populate("companyId",            "name logo status")
+        .populate("defaultOriginBranchId", "name code address wilaya")
+        .lean(),
+    ]);
+ 
+    if (!user) {
+      return next(new ErrorHandler("User not found.", 404));
+    }
+    if (!freelancer) {
+      return next(new ErrorHandler("Freelancer profile not found.", 404));
+    }
+ 
+    return res.status(200).json({
+      success: true,
+      data: {
+
+        firstName:   user.firstName,
+        lastName:    user.lastName,
+        email:       user.email,
+        phone:       user.phone,
+        imageUrl:    user.imageUrl,
+        role:        user.role,
+        status:      user.status,
+
+        businessName:          freelancer.businessName          ?? null,
+        businessType:          freelancer.businessType          ?? null,
+        preferredDeliveryType: freelancer.preferredDeliveryType ?? null,
+        freelancerStatus:      freelancer.status,
+        statistics:            freelancer.statistics,
+        company:               freelancer.companyId,       
+        defaultOriginBranch:   freelancer.defaultOriginBranchId,
+        lastActiveAt:          freelancer.lastActiveAt,
+      },
     });
   },
 );
