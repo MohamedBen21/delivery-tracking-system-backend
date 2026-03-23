@@ -14,7 +14,10 @@ export interface IUser extends Document {
   passwordHash?: string;
   firstName: string;
   lastName: string;
-  imageUrl?: string;
+  imageUrl?: {
+    public_id: string;
+    url:string;
+  };
   role: "admin" | "manager" | "client" | "deliverer" | "transporter" | "supervisor" | "freelancer";
   status: "active" | "pending" | "suspended" | "inactive";
 
@@ -103,8 +106,14 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
     },
     
     imageUrl: {
-      type: String,
+      type: {
+
+        public_id: { type: String, default: null },
+        url:{ type: String, default: null },
+      },
+
       default: null,
+      _id: false,
     },
   },
   { timestamps: true }

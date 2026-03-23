@@ -20,6 +20,10 @@ import {
   trackFailedLogin,
 } from "../middleware/redisRateLimiter";
 import { clearTokens, sendToken } from "../utils/Token.util";
+import cloudinary from "cloudinary";
+import userModel from "../models/user.model";
+import { getRedisClient } from "../databases/Redis.database";
+
 
 export const register = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -403,9 +407,9 @@ export const updateUser = catchAsyncError(
     try {
       const { firstName, lastName, password, newPassword, email } = req.body;
 
-      const filename = req.file?.filename;
+      // const filename = req.file?.filename;
       const userId = req.user?._id;
-      const user = await User.findById(userId).select("+password");
+      const user = await User.findById(userId).select("+passwordHash");
       if (!user) {
         return next(new ErrorHandler("User not found.", 404));
       }
@@ -424,12 +428,12 @@ export const updateUser = catchAsyncError(
       if (firstName) user.firstName = firstName;
       if (lastName) user.lastName = lastName;
 
-      if (filename) {
-        if (user.imageUrl && user.imageUrl !== "/uploads/users/user.jpeg")
-          deleteImage(user.imageUrl);
-        const imageUrl = `/uploads/users/${filename}`;
-        user.imageUrl = imageUrl;
-      }
+      // if (filename) {
+      //   if (user.imageUrl && user.imageUrl.url !== "/uploads/users/user.jpeg")
+      //     deleteImage(user.imageUrl.url);
+      //   const imageUrl = `/uploads/users/${filename}`;
+      //   user.imageUrl = { public_id: "" , url: imageUrl };
+      // }
 
       if (email && email !== user.email) {
         const { email_token, activation_number } = generateChangeEmailToken(
@@ -629,5 +633,192 @@ export const resetPassword = catchAsyncError(
         new ErrorHandler(error.message || "Error resetting password.", 500),
       );
     }
+  },
+);
+
+
+
+
+
+const UPLOAD_FOLDER   = "profile_pictures";
+const MAX_FILE_BYTES  = 5 * 1024 * 1024; // 5 MB
+const ALLOWED_FORMATS = ["jpg", "jpeg", "png", "webp"];
+
+
+
+async function uploadToCloudinary(
+  source: string,
+): Promise<{ public_id: string; url: string }> {
+  const result = await cloudinary.v2.uploader.upload(source, {
+    folder:        UPLOAD_FOLDER,
+    width:         300,
+    height:        300,
+    crop:          "fill",
+    gravity:       "face",          
+    quality:       "auto:good",
+    fetch_format:  "auto",
+    resource_type: "image",
+    allowed_formats: ALLOWED_FORMATS,
+  });
+
+  return {
+    public_id: result.public_id,
+    url:       result.secure_url,
+  };
+}
+
+
+
+export const updateProfilePicture = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+
+    let uploadSource: string | null = null;
+
+    if (req.file) {
+
+      if (req.file.size > MAX_FILE_BYTES) {
+        return next(
+          new ErrorHandler(
+            `File too large. Maximum allowed size is ${MAX_FILE_BYTES / 1024 / 1024} MB`,
+            400,
+          ),
+        );
+      }
+
+      const ext = req.file.mimetype.split("/")[1]?.toLowerCase();
+      if (!ALLOWED_FORMATS.includes(ext ?? "")) {
+        return next(
+          new ErrorHandler(
+            `Invalid file type. Allowed formats: ${ALLOWED_FORMATS.join(", ")}`,
+            400,
+          ),
+        );
+      }
+
+      uploadSource = `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
+    } else if (typeof req.body?.image === "string" && req.body.image.trim()) {
+      uploadSource = req.body.image.trim();
+    }
+
+    if (!uploadSource) {
+      return next(
+        new ErrorHandler(
+          "No image provided. Send a file under the 'image' field or a base64/URL string in the request body.",
+          400,
+        ),
+      );
+    }
+
+
+    const user = await userModel.findById(userId).lean();
+    if (!user) {
+      return next(new ErrorHandler("User not found.", 404));
+    }
+
+
+    const oldPublicId = user.imageUrl?.public_id;
+    if (oldPublicId) {
+      try {
+        await cloudinary.v2.uploader.destroy(oldPublicId);
+      } catch (err) {
+
+        console.warn(`[updateProfilePicture] Failed to delete old image ${oldPublicId}:`, err);
+      }
+    }
+
+
+    const { public_id, url } = await uploadToCloudinary(uploadSource);
+
+
+    const updatedUser = await userModel.findByIdAndUpdate(
+      userId,
+      { $set: { imageUrl: { public_id, url } } },
+      { new: true },
+    ).select("firstName lastName email phone imageUrl role status");
+
+
+    try {
+      const redis = getRedisClient();
+      const cached = await redis.get(`user:${userId.toString()}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        parsed.imageUrl = { public_id, url };
+        await redis.setex(
+          `user:${userId.toString()}`,
+          7 * 24 * 60 * 60,
+          JSON.stringify(parsed),
+        );
+      }
+    } catch (err) {
+
+      console.warn("[updateProfilePicture] Redis cache update failed:", err);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile picture updated successfully",
+      data: {
+        imageUrl: { public_id, url },
+        user:     updatedUser,
+      },
+    });
+  },
+);
+
+
+//  DELETE PROFILE PICTURE
+//  POST /user/profile-picture/delete
+//  Removes the current profile picture from Cloudinary and sets imageUrl to null.
+
+export const deleteProfilePicture = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    const user = await userModel.findById(userId).lean();
+    if (!user) {
+      return next(new ErrorHandler("User not found.", 404));
+    }
+
+    if (!user.imageUrl?.public_id) {
+      return next(new ErrorHandler("No profile picture to delete.", 400));
+    }
+
+
+    await cloudinary.v2.uploader.destroy(user.imageUrl.public_id);
+
+
+    await userModel.findByIdAndUpdate(userId, { $set: { imageUrl: null } });
+
+
+    try {
+      const redis = getRedisClient();
+      const cached = await redis.get(`user:${userId.toString()}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        parsed.imageUrl = null;
+        await redis.setex(
+          `user:${userId.toString()}`,
+          7 * 24 * 60 * 60,
+          JSON.stringify(parsed),
+        );
+      }
+    } catch (err) {
+      console.warn("[deleteProfilePicture] Redis cache update failed:", err);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile picture removed successfully",
+    });
   },
 );

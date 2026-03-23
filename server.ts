@@ -1,6 +1,7 @@
 require("dotenv").config(); 
 
 import { app } from "./app";
+import { configureCloudinary } from "./conifg/cloudinary.conf";
 import { connectMongo } from "./databases/Mongo.database";
 import { connectRedis } from "./databases/Redis.database";
 import { startScheduler } from "./route_planning/scheduler";
@@ -9,6 +10,9 @@ import { startScheduler } from "./route_planning/scheduler";
 const port = process.env.PORT || 8080;
 
 async function bootstrap() {
+
+  configureCloudinary();
+  
   await connectMongo();
   connectRedis();
 
