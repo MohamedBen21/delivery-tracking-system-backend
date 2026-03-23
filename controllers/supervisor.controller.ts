@@ -16,6 +16,7 @@ import PackageHistoryModel from "../models/package-history.model";
 import RouteModel, { RouteStatus, RouteType } from "../models/route.model";
 import VehicleModel from "../models/vehicle.model";
 import { deleteImage } from "../utils/Multer.util";
+import { buildUserFieldUpdates } from "./manager.controller";
 
 
 interface ILocationBody {
@@ -8448,4 +8449,145 @@ export const getMeSupervisor = catchAsyncError(
   },
 );
 
+
+
+//  UPDATE ME — SUPERVISOR
+//  PATCH /supervisor/me
+
+//  Updatable on User:           firstName, lastName, imageUrl
+//  Updatable on SupervisorModel: workSchedule (one day at a time or full object)
+
+//  workSchedule body format:
+//    { workSchedule: { monday: { start: "09:00", end: "18:00", dayOff: false } } }
+//  Any subset of days can be passed — unmentioned days stay unchanged.
+
+//  Blocked: permissions, branchId, companyId, isActive, performance
+
+ 
+const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
+type WeekDay   = typeof WEEKDAYS[number];
+ 
+export const updateMeSupervisor = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+ 
+    if (!userId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+ 
+    const blocked = ["permissions", "branchId", "companyId", "isActive", "performance"];
+    const blockedFound = blocked.filter((f) => f in req.body);
+    if (blockedFound.length) {
+      return next(
+        new ErrorHandler(
+          `Field(s) cannot be self-updated: ${blockedFound.join(", ")}`,
+          400,
+        ),
+      );
+    }
+ 
+    const [user, supervisor] = await Promise.all([
+      userModel.findById(userId).lean(),
+      SupervisorModel.findOne({ userId }).lean(),
+    ]);
+ 
+    if (!user)       return next(new ErrorHandler("User not found.", 404));
+    if (!supervisor || !supervisor.isActive) {
+      return next(new ErrorHandler("Supervisor profile not found or inactive.", 404));
+    }
+ 
+
+    const userUpdates = buildUserFieldUpdates(req.body, next);
+
+    if (!userUpdates) return;
+ 
+
+    const scheduleUpdates: Record<string, any> = {};
+    const scheduleInput = req.body.workSchedule as Record<string, any> | undefined;
+ 
+    if (scheduleInput !== undefined) {
+      if (typeof scheduleInput !== "object" || Array.isArray(scheduleInput)) {
+        return next(new ErrorHandler("workSchedule must be an object", 400));
+      }
+ 
+      const TIME_REGEX = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+ 
+      for (const day of Object.keys(scheduleInput)) {
+        if (!WEEKDAYS.includes(day as WeekDay)) {
+          return next(new ErrorHandler(`Invalid day: ${day}`, 400));
+        }
+ 
+        const dayData = scheduleInput[day];
+ 
+        if (typeof dayData !== "object" || dayData === null) {
+          return next(new ErrorHandler(`workSchedule.${day} must be an object`, 400));
+        }
+ 
+        // dayOff = true → zero out times, no further validation needed
+        if (dayData.dayOff === true) {
+          scheduleUpdates[`workSchedule.${day}.dayOff`]  = true;
+          scheduleUpdates[`workSchedule.${day}.start`]   = "00:00";
+          scheduleUpdates[`workSchedule.${day}.end`]     = "00:00";
+          continue;
+        }
+ 
+        if (dayData.dayOff === false || dayData.dayOff === undefined) {
+          // Validate start / end if provided
+          const current = (supervisor.workSchedule as any)[day] ?? {};
+          const start   = dayData.start ?? current.start;
+          const end     = dayData.end   ?? current.end;
+ 
+          if (dayData.start !== undefined && !TIME_REGEX.test(dayData.start)) {
+            return next(new ErrorHandler(`workSchedule.${day}.start must be HH:MM`, 400));
+          }
+          if (dayData.end !== undefined && !TIME_REGEX.test(dayData.end)) {
+            return next(new ErrorHandler(`workSchedule.${day}.end must be HH:MM`, 400));
+          }
+          if (start >= end) {
+            return next(new ErrorHandler(`${day}: start time must be before end time`, 400));
+          }
+ 
+          if (dayData.start !== undefined) scheduleUpdates[`workSchedule.${day}.start`] = dayData.start;
+          if (dayData.end   !== undefined) scheduleUpdates[`workSchedule.${day}.end`]   = dayData.end;
+          if (dayData.dayOff === false)    scheduleUpdates[`workSchedule.${day}.dayOff`] = false;
+        }
+      }
+    }
+ 
+    const allUpdates = { ...userUpdates, ...scheduleUpdates };
+ 
+    if (Object.keys(allUpdates).length === 0) {
+      return next(new ErrorHandler("No valid fields to update.", 400));
+    }
+ 
+
+    await Promise.all([
+      Object.keys(userUpdates).length > 0 &&
+        userModel.findByIdAndUpdate(userId, { $set: userUpdates }, { runValidators: true }),
+      Object.keys(scheduleUpdates).length > 0 &&
+        SupervisorModel.findByIdAndUpdate(supervisor._id, { $set: scheduleUpdates }, { runValidators: true }),
+    ]);
+ 
+    // Fetch the refreshed profile to return
+    const [updatedUser, updatedSupervisor] = await Promise.all([
+      userModel.findById(userId)
+        .select("firstName lastName email phone imageUrl role status")
+        .lean(),
+      SupervisorModel.findById(supervisor._id)
+        .select("workSchedule permissions performance")
+        .lean(),
+    ]);
+ 
+    return res.status(200).json({
+      success: true,
+      message: "Profile updated successfully",
+      data: {
+        ...updatedUser,
+        workSchedule: updatedSupervisor?.workSchedule,
+        permissions:  updatedSupervisor?.permissions,
+        performance:  updatedSupervisor?.performance,
+      },
+    });
+  },
+);
 
