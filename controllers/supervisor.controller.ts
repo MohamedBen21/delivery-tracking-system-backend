@@ -41,7 +41,7 @@ interface ICreateDeliverer {
   password: string;
   firstName: string;
   lastName: string;
-  imageUrl?: string;
+  // imageUrl?: string;
 
   currentLocation?: ILocationBody;
   documents?: IDelivererDocumentsBody;
@@ -53,7 +53,7 @@ interface IUpdateDeliverer {
   username?: string;
   firstName?: string;
   lastName?: string;
-  imageUrl?: string;
+  // imageUrl?: string;
 
   currentLocation?: ILocationBody;
   documents?: IDelivererDocumentsBody;
@@ -91,7 +91,7 @@ export const createDeliverer = catchAsyncError(
         password,
         firstName,
         lastName,
-        imageUrl,
+        // imageUrl,
         currentLocation,
         documents,
       } = req.body as ICreateDeliverer;
@@ -193,7 +193,7 @@ export const createDeliverer = catchAsyncError(
             passwordHash: password,
             firstName,
             lastName,
-            imageUrl,
+            // imageUrl,
             role: "deliverer",
             status: "pending",
           },
@@ -382,7 +382,7 @@ export const updateDeliverer = catchAsyncError(
       if (body.username) userUpdates.username = body.username;
       if (body.firstName) userUpdates.firstName = body.firstName;
       if (body.lastName) userUpdates.lastName = body.lastName;
-      if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
+      // if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
 
       if (body.currentLocation) delivererUpdates.currentLocation = body.currentLocation;
       if (body.documents) delivererUpdates.documents = body.documents;
@@ -672,7 +672,7 @@ interface ICreateTransporter {
   password: string;
   firstName: string;
   lastName: string;
-  imageUrl?: string;
+  // imageUrl?: string;
 
   documents?: ITransporterDocumentsBody;
 }
@@ -684,7 +684,7 @@ interface IUpdateTransporter {
   username?: string;
   firstName?: string;
   lastName?: string;
-  imageUrl?: string;
+  // imageUrl?: string;
 
   documents?: ITransporterDocumentsBody;
   availabilityStatus?: "available" | "on_route" | "off_duty" | "on_break" | "maintenance";
@@ -722,7 +722,7 @@ export const createTransporter = catchAsyncError(
         password,
         firstName,
         lastName,
-        imageUrl,
+        // imageUrl,
         documents,
       } = req.body as ICreateTransporter;
 
@@ -814,7 +814,7 @@ export const createTransporter = catchAsyncError(
             passwordHash: password,
             firstName,
             lastName,
-            imageUrl,
+            // imageUrl,
             role: "transporter",
             status: "pending",
           },
@@ -993,7 +993,7 @@ export const updateTransporter = catchAsyncError(
       if (body.username) userUpdates.username = body.username;
       if (body.firstName) userUpdates.firstName = body.firstName;
       if (body.lastName) userUpdates.lastName = body.lastName;
-      if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
+      // if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
 
       if (body.documents) transporterUpdates.documents = body.documents;
       if (body.availabilityStatus) transporterUpdates.availabilityStatus = body.availabilityStatus;
@@ -2686,7 +2686,7 @@ interface ICreateFreelancer {
   password: string;
   firstName: string;
   lastName: string;
-  imageUrl?: string;
+  // imageUrl?: string;
 
   businessName?: string;
   businessType?: 'individual' | 'small_business' | 'ecommerce' | 'other';
@@ -2700,7 +2700,7 @@ interface IUpdateFreelancer {
   username?: string;
   firstName?: string;
   lastName?: string;
-  imageUrl?: string;
+  // imageUrl?: string;
 
   businessName?: string;
   businessType?: 'individual' | 'small_business' | 'ecommerce' | 'other';
@@ -2738,7 +2738,7 @@ export const createFreelancer = catchAsyncError(
         password,
         firstName,
         lastName,
-        imageUrl,
+        // imageUrl,
         businessName,
         businessType,
         preferredDeliveryType,
@@ -2831,7 +2831,7 @@ export const createFreelancer = catchAsyncError(
             passwordHash: password,
             firstName,
             lastName,
-            imageUrl,
+            // imageUrl,
             role: "freelancer",
             status: "pending",
           },
@@ -3007,7 +3007,7 @@ export const updateFreelancer = catchAsyncError(
       if (body.username) userUpdates.username = body.username;
       if (body.firstName) userUpdates.firstName = body.firstName;
       if (body.lastName) userUpdates.lastName = body.lastName;
-      if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
+      // if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
 
       if (body.businessName !== undefined) freelancerUpdates.businessName = body.businessName;
       if (body.businessType) freelancerUpdates.businessType = body.businessType;

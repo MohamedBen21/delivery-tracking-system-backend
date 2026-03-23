@@ -1368,7 +1368,7 @@ interface IUpdateSupervisor {
     firstName?: string;
     lastName?: string;
     phone?: string;
-    imageUrl?: string;
+
   };
 }
 
@@ -1704,14 +1704,6 @@ export const updateSupervisor = catchAsyncError(
           user.phone = userData.phone;
         }
 
-        if (userData.imageUrl !== undefined) {
-          if (typeof userData.imageUrl !== "string") {
-            await session.abortTransaction();
-            session.endSession();
-            return next(new ErrorHandler("imageUrl must be string", 400));
-          }
-          user.imageUrl = userData.imageUrl;
-        }
 
         await user.save({ session });
       }
