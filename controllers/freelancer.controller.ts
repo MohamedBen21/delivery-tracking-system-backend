@@ -7,6 +7,7 @@ import PackageHistoryModel from "../models/package-history.model";
 import FreelancerModel from "../models/freelancer.model";
 import BranchModel from "../models/branch.model";
 import userModel from "../models/user.model";
+import { buildUserFieldUpdates } from "./manager.controller";
 
 
 
@@ -885,6 +886,137 @@ export const getMeFreelancer = catchAsyncError(
         company:               freelancer.companyId,       
         defaultOriginBranch:   freelancer.defaultOriginBranchId,
         lastActiveAt:          freelancer.lastActiveAt,
+      },
+    });
+  },
+);
+
+
+
+
+
+//  UPDATE ME — FREELANCER
+//  PATCH /freelancer/me
+
+//  Updatable on User:             firstName, lastName, imageUrl
+//  Updatable on FreelancerModel:  businessName, businessType, preferredDeliveryType
+
+//  Blocked: status, statistics, companyId, defaultOriginBranchId, lastActiveAt
+//  — all system or supervisor managed.
+
+ 
+export const updateMeFreelancer = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+ 
+    if (!userId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+ 
+    const blocked = ["status", "statistics", "companyId", "defaultOriginBranchId", "lastActiveAt"];
+    const blockedFound = blocked.filter((f) => f in req.body);
+    if (blockedFound.length) {
+      return next(
+        new ErrorHandler(
+          `Field(s) cannot be self-updated: ${blockedFound.join(", ")}`,
+          400,
+        ),
+      );
+    }
+ 
+    const [user, freelancer] = await Promise.all([
+      userModel.findById(userId).lean(),
+      FreelancerModel.findOne({ userId }).lean(),
+    ]);
+ 
+    if (!user)       return next(new ErrorHandler("User not found.", 404));
+    if (!freelancer) return next(new ErrorHandler("Freelancer profile not found.", 404));
+ 
+    if (freelancer.status === "suspended") {
+      return next(new ErrorHandler("Your account is suspended. Contact support.", 403));
+    }
+ 
+
+    const userUpdates = buildUserFieldUpdates(req.body, next);
+
+    if (!userUpdates) return;
+ 
+
+    const freelancerUpdates: Record<string, any> = {};
+    const { businessName, businessType, preferredDeliveryType } = req.body as {
+      businessName?:          string;
+      businessType?:          string;
+      preferredDeliveryType?: string;
+    };
+ 
+    if (businessName !== undefined) {
+      if (typeof businessName !== "string") {
+        return next(new ErrorHandler("businessName must be a string", 400));
+      }
+      const trimmed = businessName.trim();
+      if (trimmed.length > 100) {
+        return next(new ErrorHandler("businessName cannot exceed 100 characters", 400));
+      }
+      freelancerUpdates.businessName = trimmed || null;
+    }
+ 
+    if (businessType !== undefined) {
+      const valid = ["individual", "small_business", "ecommerce", "other"];
+      if (!valid.includes(businessType)) {
+        return next(
+          new ErrorHandler(`businessType must be one of: ${valid.join(", ")}`, 400),
+        );
+      }
+      freelancerUpdates.businessType = businessType;
+    }
+ 
+    if (preferredDeliveryType !== undefined) {
+      if (!["home", "branch_pickup"].includes(preferredDeliveryType)) {
+        return next(
+          new ErrorHandler("preferredDeliveryType must be 'home' or 'branch_pickup'", 400),
+        );
+      }
+      freelancerUpdates.preferredDeliveryType = preferredDeliveryType;
+    }
+ 
+    const allUpdates = { ...userUpdates, ...freelancerUpdates };
+ 
+    if (Object.keys(allUpdates).length === 0) {
+      return next(new ErrorHandler("No valid fields to update.", 400));
+    }
+ 
+
+    await Promise.all([
+      Object.keys(userUpdates).length > 0 &&
+        userModel.findByIdAndUpdate(userId, { $set: userUpdates }, { runValidators: true }),
+      Object.keys(freelancerUpdates).length > 0 &&
+        FreelancerModel.findByIdAndUpdate(
+          freelancer._id,
+          { $set: { ...freelancerUpdates, lastActiveAt: new Date() } },
+          { runValidators: true },
+        ),
+    ]);
+ 
+    const [updatedUser, updatedFreelancer] = await Promise.all([
+      userModel.findById(userId)
+        .select("firstName lastName email phone imageUrl role status")
+        .lean(),
+      FreelancerModel.findById(freelancer._id)
+        .select("businessName businessType preferredDeliveryType status statistics lastActiveAt")
+        .lean(),
+    ]);
+ 
+    return res.status(200).json({
+      success: true,
+      message: "Profile updated successfully",
+      data: {
+        ...updatedUser,
+        businessName:          updatedFreelancer?.businessName          ?? null,
+        businessType:          updatedFreelancer?.businessType          ?? null,
+        preferredDeliveryType: updatedFreelancer?.preferredDeliveryType ?? null,
+        freelancerStatus:      updatedFreelancer?.status,
+        statistics:            updatedFreelancer?.statistics,
+        lastActiveAt:          updatedFreelancer?.lastActiveAt,
       },
     });
   },
