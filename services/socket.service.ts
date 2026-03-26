@@ -174,6 +174,155 @@ export class SocketService {
   }
 
   
+  // ─── Broadcast: deliverer location to package tracking rooms ──────────────
+
+  private async broadcastDelivererLocation(
+    delivererUserId: string,
+    coordinates: [number, number]
+  ): Promise<void> {
+    try {
+      // Find all packages currently assigned to this deliverer and out for delivery
+      const packages = await PackageModel.find({
+        assignedDelivererId: delivererUserId,
+        status: "out_for_delivery",
+      })
+        .select("_id clientId")
+        .lean();
+
+      for (const pkg of packages) {
+        const room = this.getPackageRoom(pkg._id.toString());
+        this.io.to(room).emit("deliverer_location_update", {
+          packageId: pkg._id,
+          delivererId: delivererUserId,
+          coordinates,
+          timestamp: new Date(),
+        });
+      }
+    } catch (err) {
+      console.error("[Socket] Error broadcasting deliverer location:", err);
+    }
+  }
+
+  // ─── Broadcast: transporter location to relevant branch rooms ─────────────
+
+  private async broadcastTransporterLocation(
+    transporterUserId: string,
+    coordinates: [number, number]
+  ): Promise<void> {
+    try {
+      const transporter = await TransporterModel.findOne({ userId: transporterUserId })
+        .select("companyId currentBranchId currentRouteId")
+        .lean();
+
+      if (!transporter) return;
+
+      if (transporter.currentBranchId) {
+        this.io
+          .to(this.getBranchRoom(transporter.currentBranchId.toString()))
+          .emit("transporter_location_update", {
+            transporterId: transporter._id,
+            userId: transporterUserId,
+            coordinates,
+            timestamp: new Date(),
+          });
+      }
+
+      // Also push to packages in transit by this transporter
+      const packages = await PackageModel.find({
+        assignedTransporterId: transporterUserId,
+        status: "in_transit_to_branch",
+      })
+        .select("_id")
+        .lean();
+
+      for (const pkg of packages) {
+        this.io.to(this.getPackageRoom(pkg._id.toString())).emit("transporter_location_update", {
+          packageId: pkg._id,
+          transporterId: transporter._id,
+          coordinates,
+          timestamp: new Date(),
+        });
+      }
+    } catch (err) {
+      console.error("[Socket] Error broadcasting transporter location:", err);
+    }
+  }
+
+  // ─── Broadcast: deliverer availability change to active trackers ───────────
+
+  private async notifyDelivererStatusToTrackers(
+    delivererUserId: string,
+    status: string
+  ): Promise<void> {
+    try {
+      const packages = await PackageModel.find({
+        assignedDelivererId: delivererUserId,
+        status: { $in: ["out_for_delivery", "at_destination_branch"] },
+      })
+        .select("_id")
+        .lean();
+
+      for (const pkg of packages) {
+        this.io.to(this.getPackageRoom(pkg._id.toString())).emit("deliverer_status_update", {
+          packageId: pkg._id,
+          delivererId: delivererUserId,
+          availabilityStatus: status,
+          timestamp: new Date(),
+        });
+      }
+    } catch (err) {
+      console.error("[Socket] Error notifying trackers about deliverer status:", err);
+    }
+  }
+
+  // ─── Disconnect: notify trackers deliverer went offline ───────────────────
+
+  private async notifyDelivererOfflineToTrackers(delivererUserId: string): Promise<void> {
+    try {
+      const packages = await PackageModel.find({
+        assignedDelivererId: delivererUserId,
+        status: "out_for_delivery",
+      })
+        .select("_id")
+        .lean();
+
+      for (const pkg of packages) {
+        this.io.to(this.getPackageRoom(pkg._id.toString())).emit("deliverer_offline", {
+          packageId: pkg._id,
+          delivererId: delivererUserId,
+          message: "Deliverer is temporarily offline.",
+          timestamp: new Date(),
+        });
+      }
+    } catch (err) {
+      console.error("[Socket] Error notifying offline deliverer to trackers:", err);
+    }
+  }
+
+  // ─── Disconnect: notify branch that transporter went offline ──────────────
+
+  private async notifyTransporterOfflineToBranch(transporterUserId: string): Promise<void> {
+    try {
+      const transporter = await TransporterModel.findOne({ userId: transporterUserId })
+        .select("currentBranchId companyId availabilityStatus")
+        .lean();
+
+      if (!transporter) return;
+
+      const target = transporter.currentBranchId
+        ? this.getBranchRoom(transporter.currentBranchId.toString())
+        : this.getCompanyRoom(transporter.companyId.toString());
+
+      this.io.to(target).emit("transporter_offline", {
+        transporterId: transporter._id,
+        userId: transporterUserId,
+        message: "Transporter is temporarily offline.",
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error("[Socket] Error notifying offline transporter to branch:", err);
+    }
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   //  PUBLIC API  –  called from controllers / other services
