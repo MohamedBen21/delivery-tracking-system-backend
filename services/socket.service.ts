@@ -5,12 +5,14 @@ import mongoose from "mongoose";
 import DelivererModel from "../models/deliverer.model";
 import TransporterModel from "../models/transporter.model";
 import ClientModel from "../models/client.model";
+import SupervisorModel from "../models/supervisor.model";
+import FreelancerModel from "../models/freelancer.model";
 import PackageModel from "../models/package.model";
 import { IUser } from "../models/user.model";
 
 
 
-export type DeliveryUserRole = "deliverer" | "transporter" | "client" | "supervisor" | "manager" | "admin";
+export type DeliveryUserRole = "deliverer" | "transporter" | "client" | "freelancer" | "supervisor" | "manager" | "admin";
 
 interface LocationUpdateData {
   userId: string;
@@ -38,9 +40,10 @@ export class SocketService {
   private io: Server;
 
   // userId (string) → socketId
-  private delivererSockets: Map<string, string>  = new Map();
+  private delivererSockets: Map<string, string>   = new Map();
   private transporterSockets: Map<string, string> = new Map();
   private clientSockets: Map<string, string>      = new Map();
+  private freelancerSockets: Map<string, string>  = new Map();
   private supervisorSockets: Map<string, string>  = new Map();
   private managerSockets: Map<string, string>     = new Map();
   private adminSockets: Map<string, string>       = new Map();
@@ -273,13 +276,14 @@ export class SocketService {
             }
 
             // Authorization: only the sender or the recipient's client can track
+            // senderId covers both client and freelancer senders.
             const isAuthorized =
               role === "admin" ||
               role === "manager" ||
               role === "supervisor" ||
-              (role === "client"     && pkg.clientId?.toString() === userId) ||
-              (role === "deliverer"  && pkg.assignedDelivererId?.toString()  === userId) ||
-              (role === "transporter"&& pkg.assignedTransporterId?.toString() === userId);
+              (pkg.senderId?.toString() === userId) ||
+              (role === "deliverer"   && (pkg as any).assignedDelivererId?.toString()  === userId) ||
+              (role === "transporter" && (pkg as any).assignedTransporterId?.toString() === userId);
 
             if (!isAuthorized) {
               socket.emit("track_package_error", { message: "Not authorized to track this package." });
@@ -415,8 +419,19 @@ export class SocketService {
           }
         }
       } else if (role === "supervisor") {
-        // Supervisors join their branch room automatically
-        // (branchId expected to be on the socket via middleware or populated separately)
+        const supervisor = await SupervisorModel.findOne({ userId }).select("branchId companyId").lean();
+        if (supervisor) {
+          socket.join(this.getBranchRoom(supervisor.branchId.toString()));
+          socket.join(this.getCompanyRoom(supervisor.companyId.toString()));
+        }
+      } else if (role === "freelancer") {
+        const freelancer = await FreelancerModel.findOne({ userId }).select("companyId defaultOriginBranchId").lean();
+        if (freelancer) {
+          socket.join(this.getCompanyRoom(freelancer.companyId.toString()));
+          if (freelancer.defaultOriginBranchId) {
+            socket.join(this.getBranchRoom(freelancer.defaultOriginBranchId.toString()));
+          }
+        }
       }
     } catch (err) {
       console.error("[Socket] Error joining role rooms:", err);
@@ -427,23 +442,65 @@ export class SocketService {
 
   private registerSocket(userId: string, role: DeliveryUserRole, socketId: string): void {
     switch (role) {
-      case "deliverer":   this.delivererSockets.set(userId, socketId);   break;
-      case "transporter": this.transporterSockets.set(userId, socketId); break;
-      case "client":      this.clientSockets.set(userId, socketId);      break;
-      case "supervisor":  this.supervisorSockets.set(userId, socketId);  break;
-      case "manager":     this.managerSockets.set(userId, socketId);     break;
-      case "admin":       this.adminSockets.set(userId, socketId);       break;
+      case "deliverer":   
+      this.delivererSockets.set(userId, socketId);   
+      break;
+
+      case "transporter": 
+      this.transporterSockets.set(userId, socketId); 
+      break;
+
+      case "client":      
+      this.clientSockets.set(userId, socketId);      
+      break;
+
+      case "freelancer":  
+      this.freelancerSockets.set(userId, socketId);  
+      break;
+
+      case "supervisor":  
+      this.supervisorSockets.set(userId, socketId);  
+      break;
+
+      case "manager":     
+      this.managerSockets.set(userId, socketId);     
+      break;
+
+      case "admin":       
+      this.adminSockets.set(userId, socketId);       
+      break;
     }
   }
 
   private unregisterSocket(userId: string, role: DeliveryUserRole): void {
     switch (role) {
-      case "deliverer":   this.delivererSockets.delete(userId);   break;
-      case "transporter": this.transporterSockets.delete(userId); break;
-      case "client":      this.clientSockets.delete(userId);      break;
-      case "supervisor":  this.supervisorSockets.delete(userId);  break;
-      case "manager":     this.managerSockets.delete(userId);     break;
-      case "admin":       this.adminSockets.delete(userId);       break;
+      case "deliverer":   
+      this.delivererSockets.delete(userId);   
+      break;
+
+      case "transporter": 
+      this.transporterSockets.delete(userId); 
+      break;
+
+      case "client":      
+      this.clientSockets.delete(userId);      
+      break;
+
+      case "freelancer":  
+      this.freelancerSockets.delete(userId);  
+      break;
+
+      case "supervisor":  
+      this.supervisorSockets.delete(userId);  
+      break;
+      
+      case "manager":     
+      this.managerSockets.delete(userId);     
+      break;
+      
+      case "admin":       
+      this.adminSockets.delete(userId);       
+      break;
     }
   }
 
@@ -650,13 +707,29 @@ export class SocketService {
    */
   public getSocketId(userId: string, role: DeliveryUserRole): string | undefined {
     switch (role) {
-      case "deliverer":   return this.delivererSockets.get(userId);
-      case "transporter": return this.transporterSockets.get(userId);
-      case "client":      return this.clientSockets.get(userId);
-      case "supervisor":  return this.supervisorSockets.get(userId);
-      case "manager":     return this.managerSockets.get(userId);
-      case "admin":       return this.adminSockets.get(userId);
-      default:            return undefined;
+      case "deliverer":   
+      return this.delivererSockets.get(userId);
+
+      case "transporter": 
+      return this.transporterSockets.get(userId);
+
+      case "client":      
+      return this.clientSockets.get(userId);
+
+      case "freelancer":  
+      return this.freelancerSockets.get(userId);
+
+      case "supervisor":  
+      return this.supervisorSockets.get(userId);
+
+      case "manager":     
+      return this.managerSockets.get(userId);
+
+      case "admin":       
+      return this.adminSockets.get(userId);
+
+      default:            
+      return undefined;
     }
   }
   
@@ -878,18 +951,34 @@ export class SocketService {
    */
   public getConnectionStats(): Record<string, number> {
     return {
+
       deliverers:   this.delivererSockets.size,
+
       transporters: this.transporterSockets.size,
+      
       clients:      this.clientSockets.size,
+      
+      freelancers:  this.freelancerSockets.size,
+      
       supervisors:  this.supervisorSockets.size,
+      
       managers:     this.managerSockets.size,
+      
       admins:       this.adminSockets.size,
       total: (
+        
         this.delivererSockets.size +
+        
         this.transporterSockets.size +
+        
         this.clientSockets.size +
+        
+        this.freelancerSockets.size +
+        
         this.supervisorSockets.size +
+        
         this.managerSockets.size +
+        
         this.adminSockets.size
       ),
     };
