@@ -68,11 +68,328 @@ export class SocketService {
 
   constructor(io: Server) {
     this.io = io;
-    // this.setupSocketHandlers();
+    this.setupSocketHandlers();
   }
 
 
+  private setupSocketHandlers(): void {
+    this.io.on("connection", async (socket: AuthenticatedSocket) => {
+      const user = socket.user as IUser & { _id: mongoose.Types.ObjectId };
 
+      if (!user) {
+        socket.disconnect();
+        return;
+      }
+
+      const userId = user._id.toString();
+      const role   = user.role as DeliveryUserRole;
+
+      console.log(`[Socket] Connected: userId=${userId} role=${role} socketId=${socket.id}`);
+
+      // Register socket by role
+      this.registerSocket(userId, role, socket.id);
+
+      // Join company / branch rooms (populated by middleware or from DB)
+      await this.joinRoleRooms(socket, userId, role);
+
+      // Confirm connection to caller
+      socket.emit("connected", {
+        message: "Socket connected successfully",
+        userId,
+        role,
+        socketId: socket.id,
+        timestamp: new Date(),
+      });
+
+      // Broadcast online status to relevant parties
+      await this.broadcastOnlineStatus(userId, role, true);
+
+
+      //  LOCATION UPDATE
+
+
+      socket.on(
+        "update_location",
+        async (data: { coordinates: [number, number] }) => {
+          try {
+            if (!data?.coordinates || !Array.isArray(data.coordinates) || data.coordinates.length !== 2) {
+              socket.emit("location_update_error", { message: "Invalid coordinates format. Expected [longitude, latitude]." });
+              return;
+            }
+
+            const [lng, lat] = data.coordinates;
+            if (lng < -180 || lng > 180 || lat < -90 || lat > 90) {
+              socket.emit("location_update_error", { message: "Coordinates out of valid range." });
+              return;
+            }
+
+            const locationUpdate: LocationUpdateData = {
+              userId,
+              role,
+              coordinates: data.coordinates,
+              timestamp: new Date(),
+            };
+
+            if (role === "deliverer") {
+              await DelivererModel.findOneAndUpdate(
+                { userId },
+                {
+                  currentLocation: { type: "Point", coordinates: data.coordinates },
+                  lastLocationUpdate: new Date(),
+                  lastActiveAt: new Date(),
+                }
+              );
+
+              await this.broadcastDelivererLocation(userId, data.coordinates);
+
+            } else if (role === "transporter") {
+              await TransporterModel.findOneAndUpdate(
+                { userId },
+                {
+                  lastActiveAt: new Date(),
+                }
+              );
+
+              await this.broadcastTransporterLocation(userId, data.coordinates);
+
+            } else if (role === "client") {
+              await ClientModel.findOneAndUpdate(
+                { userId },
+                {
+                  currentLocation: {
+                    type: "Point",
+                    coordinates: data.coordinates,
+                    timestamp: new Date(),
+                  },
+                }
+              );
+            }
+
+            socket.emit("location_update_success", {
+              coordinates: data.coordinates,
+              timestamp: locationUpdate.timestamp,
+            });
+
+          } catch (error: any) {
+            console.error("[Socket] Error updating location:", error);
+            socket.emit("location_update_error", {
+              message: "Failed to update location.",
+              error: error.message,
+            });
+          }
+        }
+      );
+
+
+      //  AVAILABILITY STATUS  (deliverer / transporter only)
+
+
+      if (role === "deliverer") {
+        socket.on(
+          "change_availability",
+          async (data: { status: "available" | "on_route" | "off_duty" | "on_break" | "maintenance" }) => {
+            try {
+              const allowedStatuses = ["available", "on_route", "off_duty", "on_break", "maintenance"];
+              if (!data?.status || !allowedStatuses.includes(data.status)) {
+                socket.emit("availability_change_error", { message: `Invalid status. Must be one of: ${allowedStatuses.join(", ")}` });
+                return;
+              }
+
+              await DelivererModel.findOneAndUpdate(
+                { userId },
+                { availabilityStatus: data.status, lastActiveAt: new Date() }
+              );
+
+              // Notify packages that have this deliverer assigned (clients tracking their parcel)
+              await this.notifyDelivererStatusToTrackers(userId, data.status);
+
+              socket.emit("availability_change_success", {
+                status: data.status,
+                timestamp: new Date(),
+              });
+
+              console.log(`[Socket] Deliverer ${userId} changed availability → ${data.status}`);
+            } catch (error: any) {
+              console.error("[Socket] Error changing deliverer availability:", error);
+              socket.emit("availability_change_error", {
+                message: "Failed to update availability status.",
+                error: error.message,
+              });
+            }
+          }
+        );
+      }
+
+      if (role === "transporter") {
+        socket.on(
+          "change_availability",
+          async (data: { status: "available" | "on_route" | "off_duty" | "on_break" | "maintenance" }) => {
+            try {
+              const allowedStatuses = ["available", "on_route", "off_duty", "on_break", "maintenance"];
+              if (!data?.status || !allowedStatuses.includes(data.status)) {
+                socket.emit("availability_change_error", { message: `Invalid status. Must be one of: ${allowedStatuses.join(", ")}` });
+                return;
+              }
+
+              await TransporterModel.findOneAndUpdate(
+                { userId },
+                { availabilityStatus: data.status, lastActiveAt: new Date() }
+              );
+
+              socket.emit("availability_change_success", {
+                status: data.status,
+                timestamp: new Date(),
+              });
+
+              console.log(`[Socket] Transporter ${userId} changed availability → ${data.status}`);
+            } catch (error: any) {
+              console.error("[Socket] Error changing transporter availability:", error);
+              socket.emit("availability_change_error", {
+                message: "Failed to update availability status.",
+                error: error.message,
+              });
+            }
+          }
+        );
+      }
+
+      // ══════════════════════════════════════════════════════════════════════
+      //  PACKAGE TRACKING  –  client subscribes to a package's live updates
+      // ══════════════════════════════════════════════════════════════════════
+
+      socket.on(
+        "track_package",
+        async (data: { packageId: string }) => {
+          try {
+            if (!data?.packageId) {
+              socket.emit("track_package_error", { message: "packageId is required." });
+              return;
+            }
+
+            const pkg = await PackageModel.findById(data.packageId).lean();
+            if (!pkg) {
+              socket.emit("track_package_error", { message: "Package not found." });
+              return;
+            }
+
+            // Authorization: only the sender or the recipient's client can track
+            const isAuthorized =
+              role === "admin" ||
+              role === "manager" ||
+              role === "supervisor" ||
+              (role === "client"     && pkg.clientId?.toString() === userId) ||
+              (role === "deliverer"  && pkg.assignedDelivererId?.toString()  === userId) ||
+              (role === "transporter"&& pkg.assignedTransporterId?.toString() === userId);
+
+            if (!isAuthorized) {
+              socket.emit("track_package_error", { message: "Not authorized to track this package." });
+              return;
+            }
+
+            const room = this.getPackageRoom(data.packageId);
+            socket.join(room);
+
+            // Immediately push current state to the subscriber
+            socket.emit("package_status_update", {
+              packageId: data.packageId,
+              status: pkg.status,
+              currentBranchId: pkg.currentBranchId,
+              assignedDelivererId: pkg.assignedDelivererId,
+              assignedTransporterId: pkg.assignedTransporterId,
+              estimatedDeliveryTime: pkg.estimatedDeliveryTime,
+              trackingHistory: pkg.trackingHistory,
+              timestamp: new Date(),
+            });
+
+            console.log(`[Socket] ${role} ${userId} is now tracking package ${data.packageId}`);
+          } catch (error: any) {
+            console.error("[Socket] Error subscribing to package tracking:", error);
+            socket.emit("track_package_error", {
+              message: "Failed to subscribe to package tracking.",
+              error: error.message,
+            });
+          }
+        }
+      );
+
+      socket.on(
+        "untrack_package",
+        (data: { packageId: string }) => {
+          if (!data?.packageId) return;
+          const room = this.getPackageRoom(data.packageId);
+          socket.leave(room);
+          console.log(`[Socket] ${role} ${userId} stopped tracking package ${data.packageId}`);
+        }
+      );
+
+      // ══════════════════════════════════════════════════════════════════════
+      //  JOIN BRANCH ROOM  –  supervisor / manager joins a branch room to
+      //  receive real-time events for that branch
+      // ══════════════════════════════════════════════════════════════════════
+
+      if (role === "supervisor" || role === "manager" || role === "admin") {
+        socket.on(
+          "join_branch_room",
+          (data: { branchId: string }) => {
+            if (!data?.branchId) return;
+            const room = this.getBranchRoom(data.branchId);
+            socket.join(room);
+            socket.emit("joined_branch_room", { branchId: data.branchId, room });
+            console.log(`[Socket] ${role} ${userId} joined branch room ${room}`);
+          }
+        );
+
+        socket.on(
+          "leave_branch_room",
+          (data: { branchId: string }) => {
+            if (!data?.branchId) return;
+            socket.leave(this.getBranchRoom(data.branchId));
+          }
+        );
+      }
+
+      // ══════════════════════════════════════════════════════════════════════
+      //  DISCONNECT
+      // ══════════════════════════════════════════════════════════════════════
+
+      socket.on("disconnect", async () => {
+        console.log(`[Socket] Disconnected: userId=${userId} role=${role} socketId=${socket.id}`);
+
+        this.unregisterSocket(userId, role);
+
+        // Mark offline in DB
+        try {
+          if (role === "deliverer") {
+            // Do NOT forcibly change availabilityStatus on disconnect —
+            // the deliverer may just be reconnecting. The last known status stays.
+            await DelivererModel.findOneAndUpdate(
+              { userId },
+              { lastActiveAt: new Date() }
+            );
+            await this.broadcastOnlineStatus(userId, role, false);
+          } else if (role === "transporter") {
+            await TransporterModel.findOneAndUpdate(
+              { userId },
+              { lastActiveAt: new Date() }
+            );
+            await this.broadcastOnlineStatus(userId, role, false);
+          }
+        } catch (err) {
+          console.error("[Socket] Error on disconnect cleanup:", err);
+        }
+
+        // Notify clients actively tracking a package this deliverer is on
+        if (role === "deliverer") {
+          await this.notifyDelivererOfflineToTrackers(userId);
+        }
+
+        // Notify branch room about transporter going offline
+        if (role === "transporter") {
+          await this.notifyTransporterOfflineToBranch(userId);
+        }
+      });
+    });
+  }
   
 
   // ─── Role-based Room Joining on Connect ───────────────────────────────────
