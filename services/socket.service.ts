@@ -194,4 +194,238 @@ export class SocketService {
     }
   }
   
+  /**
+   * Emit an event directly to a specific user.
+   */
+  public emitToUser(
+    userId: string,
+    role: DeliveryUserRole,
+    event: string,
+    data: any
+  ): void {
+    const socketId = this.getSocketId(userId, role);
+    if (socketId) {
+      this.io.to(socketId).emit(event, data);
+    }
+  }
+
+  /**
+   * Emit an event to every socket in a branch room
+   * (all deliverers + supervisors that joined it).
+   */
+  public emitToBranch(branchId: string, event: string, data: any): void {
+    this.io.to(this.getBranchRoom(branchId)).emit(event, data);
+  }
+
+  /**
+   * Emit an event to every socket in a company room.
+   */
+  public emitToCompany(companyId: string, event: string, data: any): void {
+    this.io.to(this.getCompanyRoom(companyId)).emit(event, data);
+  }
+
+  /**
+   * Notify everyone tracking a package about a status change.
+   * Call this from your package controller / service whenever status changes.
+   */
+  public emitPackageStatusUpdate(
+    packageId: string,
+    payload: {
+      status: string;
+      currentBranchId?: string;
+      assignedDelivererId?: string;
+      assignedTransporterId?: string;
+      estimatedDeliveryTime?: Date;
+      notes?: string;
+    }
+  ): void {
+    this.io.to(this.getPackageRoom(packageId)).emit("package_status_update", {
+      packageId,
+      ...payload,
+      timestamp: new Date(),
+    });
+  }
+
+  /**
+   * Assign a deliverer to a package delivery session and notify both parties.
+   * Call this when a package is dispatched (out_for_delivery).
+   */
+  public async startDeliverySession(
+    packageId: string,
+    delivererUserId: string,
+    clientUserId?: string
+  ): Promise<void> {
+    try {
+      // Store in memory
+      this.activeDeliveries.set(packageId, {
+        packageId,
+        delivererId: delivererUserId,
+        clientId: clientUserId,
+      });
+
+      // Deliverer joins the package room for two-way pushes
+      const delivererSocketId = this.delivererSockets.get(delivererUserId);
+      if (delivererSocketId) {
+        const delivererSocket = this.io.sockets.sockets.get(delivererSocketId);
+        delivererSocket?.join(this.getPackageRoom(packageId));
+      }
+
+      // Notify the deliverer
+      this.emitToUser(delivererUserId, "deliverer", "delivery_assigned", {
+        packageId,
+        timestamp: new Date(),
+      });
+
+      // Notify the client (if home delivery)
+      if (clientUserId) {
+        this.emitToUser(clientUserId, "client", "package_out_for_delivery", {
+          packageId,
+          delivererId: delivererUserId,
+          message: "Your package is on the way!",
+          timestamp: new Date(),
+        });
+      }
+
+      console.log(`[Socket] Delivery session started: package=${packageId} deliverer=${delivererUserId}`);
+    } catch (err) {
+      console.error("[Socket] Error starting delivery session:", err);
+    }
+  }
+
+  /**
+   * End a delivery session (delivered, failed, returned …).
+   * Call this whenever the package reaches a terminal or rescheduled state.
+   */
+  public async endDeliverySession(
+    packageId: string,
+    outcome: "delivered" | "failed_delivery" | "returned" | "rescheduled"
+  ): Promise<void> {
+    try {
+      const session = this.activeDeliveries.get(packageId);
+
+      // Notify room
+      this.io.to(this.getPackageRoom(packageId)).emit("delivery_session_ended", {
+        packageId,
+        outcome,
+        timestamp: new Date(),
+      });
+
+      // Remove deliverer from the room
+      if (session) {
+        const delivererSocketId = this.delivererSockets.get(session.delivererId);
+        if (delivererSocketId) {
+          this.io.sockets.sockets.get(delivererSocketId)?.leave(this.getPackageRoom(packageId));
+        }
+      }
+
+      this.activeDeliveries.delete(packageId);
+      console.log(`[Socket] Delivery session ended: package=${packageId} outcome=${outcome}`);
+    } catch (err) {
+      console.error("[Socket] Error ending delivery session:", err);
+    }
+  }
+
+  /**
+   * Start a branch-to-branch transit session (transporter picked up packages).
+   */
+  public async startTransitSession(
+    packageId: string,
+    transporterUserId: string,
+    originBranchId: string,
+    destinationBranchId: string
+  ): Promise<void> {
+    try {
+      this.activeTransits.set(packageId, {
+        packageId,
+        transporterId: transporterUserId,
+        originBranchId,
+        destinationBranchId,
+      });
+
+      // Transporter joins the package room
+      const transporterSocketId = this.transporterSockets.get(transporterUserId);
+      if (transporterSocketId) {
+        this.io.sockets.sockets.get(transporterSocketId)?.join(this.getPackageRoom(packageId));
+      }
+
+      // Notify origin and destination branch rooms
+      const payload = {
+        packageId,
+        transporterId: transporterUserId,
+        originBranchId,
+        destinationBranchId,
+        timestamp: new Date(),
+      };
+      this.emitToBranch(originBranchId, "package_in_transit", payload);
+      this.emitToBranch(destinationBranchId, "package_incoming", payload);
+
+      console.log(
+        `[Socket] Transit session started: package=${packageId} transporter=${transporterUserId} ` +
+        `${originBranchId} → ${destinationBranchId}`
+      );
+    } catch (err) {
+      console.error("[Socket] Error starting transit session:", err);
+    }
+  }
+
+  /**
+   * End a transit session when the package arrives at the destination branch.
+   */
+  public async endTransitSession(packageId: string): Promise<void> {
+    try {
+      const session = this.activeTransits.get(packageId);
+
+      this.io.to(this.getPackageRoom(packageId)).emit("transit_session_ended", {
+        packageId,
+        timestamp: new Date(),
+      });
+
+      if (session) {
+        this.emitToBranch(session.destinationBranchId, "package_arrived", {
+          packageId,
+          transporterId: session.transporterId,
+          timestamp: new Date(),
+        });
+
+        const transporterSocketId = this.transporterSockets.get(session.transporterId);
+        if (transporterSocketId) {
+          this.io.sockets.sockets.get(transporterSocketId)?.leave(this.getPackageRoom(packageId));
+        }
+      }
+
+      this.activeTransits.delete(packageId);
+      console.log(`[Socket] Transit session ended: package=${packageId}`);
+    } catch (err) {
+      console.error("[Socket] Error ending transit session:", err);
+    }
+  }
+
+  /**
+   * Check whether a user is currently connected.
+   */
+  public isUserOnline(userId: string, role: DeliveryUserRole): boolean {
+    return !!this.getSocketId(userId, role);
+  }
+
+  /**
+   * Return all connected users counts (useful for monitoring endpoints).
+   */
+  public getConnectionStats(): Record<string, number> {
+    return {
+      deliverers:   this.delivererSockets.size,
+      transporters: this.transporterSockets.size,
+      clients:      this.clientSockets.size,
+      supervisors:  this.supervisorSockets.size,
+      managers:     this.managerSockets.size,
+      admins:       this.adminSockets.size,
+      total: (
+        this.delivererSockets.size +
+        this.transporterSockets.size +
+        this.clientSockets.size +
+        this.supervisorSockets.size +
+        this.managerSockets.size +
+        this.adminSockets.size
+      ),
+    };
+  }
 }
