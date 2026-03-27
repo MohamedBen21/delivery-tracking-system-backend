@@ -1060,6 +1060,334 @@ export class SocketService {
           }
         });
 
+        // ── arrived_at_delivery ──────────────────────────────────────────────
+        // Deliverer signals they have arrived at a client's location.
+        // Conditions: 50m proximity check against stop location.
+        // On success: stop status → arrived, actualArrival recorded.
+        socket.on("arrived_at_delivery", async (data: {
+          routeId:     string;
+          stopIndex:   number;
+          coordinates: [number, number];
+        }) => {
+          try {
+            if (!data?.routeId || !mongoose.Types.ObjectId.isValid(data.routeId)) {
+              socket.emit("route_error", { code: "INVALID_ROUTE_ID", message: "Invalid routeId." });
+              return;
+            }
+            if (!data?.coordinates || data.coordinates.length !== 2) {
+              socket.emit("route_error", { code: "NO_COORDINATES", message: "Current coordinates are required." });
+              return;
+            }
+
+            const deliverer = await DelivererModel.findOne({ userId }).lean();
+            if (!deliverer) {
+              socket.emit("route_error", { code: "NOT_FOUND", message: "Deliverer profile not found." });
+              return;
+            }
+
+            const route = await RouteModel.findOne({
+              _id: data.routeId,
+              assignedDelivererId: deliverer._id,
+              status: "active",
+            });
+            if (!route) {
+              socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "Active route not found." });
+              return;
+            }
+
+            if (data.stopIndex !== route.currentStopIndex) {
+              socket.emit("route_error", {
+                code: "WRONG_STOP",
+                message: `Expected stop ${route.currentStopIndex}, received ${data.stopIndex}.`,
+                expectedStopIndex: route.currentStopIndex,
+              });
+              return;
+            }
+
+            const stop = route.stops[data.stopIndex];
+            if (!stop) {
+              socket.emit("route_error", { code: "STOP_NOT_FOUND", message: "Stop not found in route." });
+              return;
+            }
+
+            // Proximity check: 50m
+            const stopCoords = stop.location.coordinates;
+            const distanceMeters = this.calculateDistance(data.coordinates, stopCoords) * 1000;
+            if (distanceMeters > 50) {
+              socket.emit("route_error", {
+                code: "TOO_FAR",
+                message: `You must be within 50m of the delivery address. Current distance: ${Math.round(distanceMeters)}m.`,
+                distanceMeters: Math.round(distanceMeters),
+                requiredMeters: 50,
+                stopLocation: stopCoords,
+              });
+              return;
+            }
+
+            // Mark arrived
+            stop.status        = "arrived";
+            stop.actualArrival = new Date();
+            await route.save();
+
+            await DelivererModel.findByIdAndUpdate(deliverer._id, { lastActiveAt: new Date() });
+
+            // Notify branch room
+            this.io.to(this.getBranchRoom(deliverer.branchId.toString())).emit("deliverer_arrived_at_client", {
+              routeId:       data.routeId,
+              delivererId:   deliverer._id,
+              stopIndex:     data.stopIndex,
+              stopId:        stop._id,
+              clientId:      stop.clientId,
+              distanceMeters: Math.round(distanceMeters),
+              timestamp: new Date(),
+            });
+
+            // Notify tracking room for the package
+            if (stop.packageIds[0]) {
+              this.io.to(this.getPackageRoom(stop.packageIds[0].toString())).emit("deliverer_arrived", {
+                packageId:      stop.packageIds[0],
+                delivererId:    deliverer._id,
+                distanceMeters: Math.round(distanceMeters),
+                message: "Your deliverer has arrived!",
+                timestamp: new Date(),
+              });
+            }
+
+            socket.emit("arrived_at_delivery_confirmed", {
+              routeId:        data.routeId,
+              stopIndex:      data.stopIndex,
+              stopId:         stop._id,
+              packageId:      stop.packageIds[0],
+              address:        stop.address,
+              distanceMeters: Math.round(distanceMeters),
+              message: "Arrival confirmed. Ask the client for the OTP code.",
+              timestamp: new Date(),
+            });
+
+            console.log(`[Socket] Deliverer ${userId} arrived at stop ${data.stopIndex} (${Math.round(distanceMeters)}m)`);
+          } catch (err: any) {
+            console.error("[Socket] arrived_at_delivery failed:", err);
+            socket.emit("route_error", { code: "ARRIVE_FAILED", message: err.message || "Failed to mark arrival." });
+          }
+        });
+
+        // ── complete_delivery ─────────────────────────────────────────────────
+        // Deliverer enters the OTP the client received by SMS.
+        // Conditions:
+        //   1. Route active, stop in order.
+        //   2. Deliverer within 50m of stop location.
+        //   3. OTP matches the stored code and is not expired (10 min window).
+        // On success:
+        //   - Package → delivered, trackingHistory updated.
+        //   - Stop completed via route.completeStop().
+        //   - OTP for next stop generated and sent.
+        //   - If last stop → route completed, deliverer freed.
+        socket.on("complete_delivery", async (data: {
+          routeId:     string;
+          stopIndex:   number;
+          coordinates: [number, number];
+          otp:         string;
+          notes?:      string;
+        }) => {
+          try {
+            if (!data?.routeId || !mongoose.Types.ObjectId.isValid(data.routeId)) {
+              socket.emit("route_error", { code: "INVALID_ROUTE_ID", message: "Invalid routeId." });
+              return;
+            }
+            if (!data?.coordinates || data.coordinates.length !== 2) {
+              socket.emit("route_error", { code: "NO_COORDINATES", message: "Current coordinates are required." });
+              return;
+            }
+            if (!data?.otp || typeof data.otp !== "string") {
+              socket.emit("route_error", { code: "OTP_REQUIRED", message: "OTP code is required." });
+              return;
+            }
+
+            const deliverer = await DelivererModel.findOne({ userId }).lean();
+            if (!deliverer) {
+              socket.emit("route_error", { code: "NOT_FOUND", message: "Deliverer profile not found." });
+              return;
+            }
+
+            const route = await RouteModel.findOne({
+              _id: data.routeId,
+              assignedDelivererId: deliverer._id,
+              status: "active",
+            });
+            if (!route) {
+              socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "Active route not found." });
+              return;
+            }
+
+            if (data.stopIndex !== route.currentStopIndex) {
+              socket.emit("route_error", {
+                code: "WRONG_STOP",
+                message: `Expected stop ${route.currentStopIndex}, received ${data.stopIndex}.`,
+                expectedStopIndex: route.currentStopIndex,
+              });
+              return;
+            }
+
+            const stop = route.stops[data.stopIndex];
+            if (!stop || !stop.packageIds[0]) {
+              socket.emit("route_error", { code: "STOP_NOT_FOUND", message: "Stop or package not found." });
+              return;
+            }
+
+            // Proximity check: 50m
+            const stopCoords = stop.location.coordinates;
+            const distanceMeters = this.calculateDistance(data.coordinates, stopCoords) * 1000;
+            if (distanceMeters > 50) {
+              socket.emit("route_error", {
+                code: "TOO_FAR",
+                message: `You must be within 50m to complete the delivery. Current distance: ${Math.round(distanceMeters)}m.`,
+                distanceMeters: Math.round(distanceMeters),
+                requiredMeters: 50,
+              });
+              return;
+            }
+
+            // OTP validation
+            const packageId = stop.packageIds[0].toString();
+            const otpKey    = `delivery_otp_${packageId}`;
+            const stored    = this.deliveryOTPs.get(otpKey);
+
+            if (!stored) {
+              socket.emit("route_error", { code: "OTP_NOT_FOUND", message: "No OTP found. Request a new code." });
+              return;
+            }
+            if (Date.now() > stored.expiresAt) {
+              this.deliveryOTPs.delete(otpKey);
+              socket.emit("route_error", { code: "OTP_EXPIRED", message: "OTP has expired. A new code has been sent to the client." });
+              // Regenerate and resend
+              await this.generateAndSendDeliveryOTP(route, data.stopIndex, data.routeId);
+              return;
+            }
+            if (stored.code !== data.otp.trim()) {
+              socket.emit("route_error", { code: "OTP_MISMATCH", message: "Incorrect OTP. Please try again." });
+              return;
+            }
+
+            // OTP correct — mark package delivered
+            const pkg = await PackageModel.findById(packageId);
+            if (!pkg) {
+              socket.emit("route_error", { code: "PACKAGE_NOT_FOUND", message: "Package not found." });
+              return;
+            }
+
+            await pkg.markAsDelivered(deliverer.userId, data.notes);
+
+            // Complete the stop
+            await route.completeStop(
+              data.stopIndex,
+              [new mongoose.Types.ObjectId(packageId)],
+              [],
+              data.notes
+            );
+
+            // Clean up OTP
+            this.deliveryOTPs.delete(otpKey);
+
+            // Update deliverer stats
+            await DelivererModel.findByIdAndUpdate(deliverer._id, {
+              $inc: { totalDeliveries: 1, successfulDeliveries: 1 },
+              lastActiveAt: new Date(),
+            });
+
+            const isLastStop   = data.stopIndex === route.stops.length - 1;
+            const routeRoom    = this.getRouteRoom(data.routeId);
+
+            // Notify client/sender tracking room
+            this.io.to(this.getPackageRoom(packageId)).emit("package_delivered", {
+              packageId,
+              deliveredAt: new Date(),
+              message: "Your package has been delivered!",
+              timestamp: new Date(),
+            });
+
+            if (isLastStop) {
+              // ── All stops done ─────────────────────────────────────────
+              await route.completeRoute(data.notes);
+
+              await DelivererModel.findByIdAndUpdate(deliverer._id, {
+                availabilityStatus: "available",
+                currentRouteId:     null,
+                lastActiveAt: new Date(),
+              });
+
+              socket.emit("delivery_route_completed", {
+                routeId:        data.routeId,
+                routeNumber:    route.routeNumber,
+                totalStops:     route.stops.length,
+                completedStops: route.completedStops,
+                failedStops:    route.failedStops,
+                actualStart:    route.actualStart,
+                actualEnd:      route.actualEnd,
+                actualTime:     route.actualTime,
+                onTimePerformance: route.onTimePerformance,
+                message: "Route completed successfully! Great work today.",
+                timestamp: new Date(),
+              });
+
+              this.io.to(this.getBranchRoom(deliverer.branchId.toString())).emit("deliverer_route_completed", {
+                routeId:      data.routeId,
+                routeNumber:  route.routeNumber,
+                delivererId:  deliverer._id,
+                userId,
+                onTimePerformance: route.onTimePerformance,
+                timestamp: new Date(),
+              });
+
+              this.io.to(routeRoom).emit("delivery_route_completed", {
+                routeId:    data.routeId,
+                routeNumber: route.routeNumber,
+                timestamp:  new Date(),
+              });
+
+              console.log(`[Socket] Deliverer ${userId} COMPLETED delivery route ${data.routeId}`);
+            } else {
+              // ── More stops remain ──────────────────────────────────────
+              const nextStop = route.stops[data.stopIndex + 1];
+
+              // Generate OTP for next stop immediately
+              if (nextStop) {
+                await this.generateAndSendDeliveryOTP(route, data.stopIndex + 1, data.routeId);
+              }
+
+              socket.emit("delivery_stop_completed", {
+                routeId:            data.routeId,
+                completedStopIndex: data.stopIndex,
+                packageId,
+                distanceMeters:     Math.round(distanceMeters),
+                nextStop: nextStop ? {
+                  stopIndex:      data.stopIndex + 1,
+                  stopId:         nextStop._id,
+                  clientId:       nextStop.clientId,
+                  packageId:      nextStop.packageIds[0],
+                  address:        nextStop.address,
+                  location:       nextStop.location.coordinates,
+                  otpSent: true,
+                } : null,
+                remainingStops: route.stops.length - (data.stopIndex + 1),
+                timestamp: new Date(),
+              });
+
+              this.io.to(routeRoom).emit("delivery_stop_completed", {
+                routeId:   data.routeId,
+                stopIndex: data.stopIndex,
+                packageId,
+                timestamp: new Date(),
+              });
+
+              console.log(`[Socket] Deliverer ${userId} completed delivery stop ${data.stopIndex}/${route.stops.length - 1}`);
+            }
+          } catch (err: any) {
+            console.error("[Socket] complete_delivery failed:", err);
+            socket.emit("route_error", { code: "COMPLETE_FAILED", message: err.message || "Failed to complete delivery." });
+          }
+        });
+
+        
       }
 
       // ══════════════════════════════════════════════════════════════════════
