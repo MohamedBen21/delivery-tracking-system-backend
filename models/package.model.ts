@@ -143,6 +143,47 @@ export interface IPackage extends Document {
   estimatedTimeRemaining?: number;
   isOverdue: boolean;
   canBeDelivered: boolean;
+
+
+  updateStatus: (
+    newStatus: PackageStatus,
+    userId?: mongoose.Types.ObjectId,
+    branchId?: mongoose.Types.ObjectId,
+    notes?: string,
+    location?: string
+  ) => Promise<IPackage>;
+  
+  assignDelivery: (
+    delivererId: mongoose.Types.ObjectId,
+    vehicleId?: mongoose.Types.ObjectId
+  ) => Promise<IPackage>;
+  
+  markAsDelivered: (
+    deliveredBy: mongoose.Types.ObjectId,
+    notes?: string
+  ) => Promise<IPackage>;
+  
+  addIssue: (
+    type: IIssue['type'],
+    description: string,
+    reportedBy: mongoose.Types.ObjectId,
+    priority?: IIssue['priority']
+  ) => Promise<IPackage>;
+  
+  resolveIssue: (
+    issueIndex: number,
+    resolution: string,
+    resolvedBy: mongoose.Types.ObjectId
+  ) => Promise<IPackage>;
+  
+  initiateReturn: (
+    reason: string,
+    refundAmount?: number,
+    notes?: string
+  ) => Promise<IPackage>;
+  
+  canBeAccepted: () => boolean;
+  
 }
 
 
