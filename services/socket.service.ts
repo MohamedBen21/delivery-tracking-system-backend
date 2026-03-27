@@ -1387,6 +1387,303 @@ export class SocketService {
           }
         });
 
+        // ── fail_delivery_attempt ─────────────────────────────────────────────
+        // Client is not available / not responding.
+        // Conditions: deliverer must be within 50m (proves they were actually there).
+        // Behaviour:
+        //   - package.updateStatus('failed_delivery') which increments attemptCount
+        //     and sets nextAttemptDate (+1 day).
+        //   - If attemptCount < maxAttempts (3): package rescheduled, route advances.
+        //   - If attemptCount >= maxAttempts: package → returned, deliverer gets
+        //     "return_packages_to_branch" instruction.
+        //   - Stop is failed via route.failStop().
+        //   - Supervisor and branch rooms notified.
+        socket.on("fail_delivery_attempt", async (data: {
+          routeId:     string;
+          stopIndex:   number;
+          coordinates: [number, number];
+          reason:      string;
+          issueType?:  "customer_unavailable" | "wrong_address" | "other";
+        }) => {
+          try {
+            if (!data?.routeId || !data?.reason) {
+              socket.emit("route_error", { code: "MISSING_DATA", message: "routeId and reason are required." });
+              return;
+            }
+            if (!data?.coordinates || data.coordinates.length !== 2) {
+              socket.emit("route_error", { code: "NO_COORDINATES", message: "Current coordinates are required." });
+              return;
+            }
+
+            const deliverer = await DelivererModel.findOne({ userId }).lean();
+            if (!deliverer) {
+              socket.emit("route_error", { code: "NOT_FOUND", message: "Deliverer profile not found." });
+              return;
+            }
+
+            const route = await RouteModel.findOne({
+              _id: data.routeId,
+              assignedDelivererId: deliverer._id,
+              status: "active",
+            });
+            if (!route) {
+              socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "Active route not found." });
+              return;
+            }
+
+            if (data.stopIndex !== route.currentStopIndex) {
+              socket.emit("route_error", {
+                code: "WRONG_STOP",
+                message: `Expected stop ${route.currentStopIndex}, received ${data.stopIndex}.`,
+                expectedStopIndex: route.currentStopIndex,
+              });
+              return;
+            }
+
+            const stop = route.stops[data.stopIndex];
+            if (!stop || !stop.packageIds[0]) {
+              socket.emit("route_error", { code: "STOP_NOT_FOUND", message: "Stop or package not found." });
+              return;
+            }
+
+            // Proximity check: must prove they were actually there
+            const stopCoords = stop.location.coordinates;
+            const distanceMeters = this.calculateDistance(data.coordinates, stopCoords) * 1000;
+            if (distanceMeters > 50) {
+              socket.emit("route_error", {
+                code: "TOO_FAR",
+                message: `You must be within 50m of the delivery address to record a failed attempt. Current distance: ${Math.round(distanceMeters)}m.`,
+                distanceMeters: Math.round(distanceMeters),
+                requiredMeters: 50,
+              });
+              return;
+            }
+
+            const packageId = stop.packageIds[0].toString();
+            const pkg = await PackageModel.findById(packageId);
+            if (!pkg) {
+              socket.emit("route_error", { code: "PACKAGE_NOT_FOUND", message: "Package not found." });
+              return;
+            }
+
+            // Add issue to package and update status to failed_delivery
+            // The model's updateStatus increments attemptCount and sets nextAttemptDate
+            await pkg.updateStatus(
+              "failed_delivery",
+              deliverer.userId,
+              pkg.currentBranchId,
+              data.reason
+            );
+
+            if (data.issueType) {
+              await pkg.addIssue(
+                data.issueType,
+                data.reason,
+                deliverer.userId,
+                "medium"
+              );
+            }
+
+            // Clean up OTP for this stop (they didn't use it)
+            this.deliveryOTPs.delete(`delivery_otp_${packageId}`);
+
+            // Fail the stop on the route
+            await route.failStop(
+              data.stopIndex,
+              data.reason,
+              [new mongoose.Types.ObjectId(packageId)]
+            );
+
+            // Update deliverer stats
+            await DelivererModel.findByIdAndUpdate(deliverer._id, {
+              $inc: { totalDeliveries: 1, failedDeliveries: 1 },
+              lastActiveAt: new Date(),
+            });
+
+            // Re-fetch fresh package to get updated attemptCount
+            const updatedPkg = await PackageModel.findById(packageId).lean();
+            const attemptsLeft = (updatedPkg?.maxAttempts ?? 3) - (updatedPkg?.attemptCount ?? 0);
+            const maxReached   = (updatedPkg?.attemptCount ?? 0) >= (updatedPkg?.maxAttempts ?? 3);
+
+            const isLastStop   = data.stopIndex === route.stops.length - 1;
+            const routeRoom    = this.getRouteRoom(data.routeId);
+
+            // Notify package tracking room
+            this.io.to(this.getPackageRoom(packageId)).emit("package_delivery_failed", {
+              packageId,
+              attemptCount:  updatedPkg?.attemptCount,
+              maxAttempts:   updatedPkg?.maxAttempts,
+              attemptsLeft,
+              nextAttemptDate: updatedPkg?.nextAttemptDate,
+              reason:        data.reason,
+              message: maxReached
+                ? "All delivery attempts exhausted. Package will be returned."
+                : `Delivery attempt failed. We will try again on ${updatedPkg?.nextAttemptDate?.toLocaleDateString()}.`,
+              timestamp: new Date(),
+            });
+
+            if (maxReached) {
+              // Package exceeded max attempts — instruct deliverer to return it
+              // Note: the package model pre-save already flipped status to 'returned'
+              this.deliveryOTPs.delete(`delivery_otp_${packageId}`);
+
+              socket.emit("delivery_attempt_failed", {
+                routeId:       data.routeId,
+                stopIndex:     data.stopIndex,
+                packageId,
+                attemptCount:  updatedPkg?.attemptCount,
+                maxAttempts:   updatedPkg?.maxAttempts,
+                maxReached:    true,
+                requiresReturn: true,
+                distanceMeters: Math.round(distanceMeters),
+                message: "Maximum delivery attempts reached. Please return this package to your branch at the end of your route.",
+                timestamp: new Date(),
+              });
+
+              // Notify branch immediately
+              this.io.to(this.getBranchRoom(deliverer.branchId.toString())).emit("package_requires_return", {
+                packageId,
+                trackingNumber: updatedPkg?.trackingNumber,
+                delivererId:    deliverer._id,
+                attemptCount:   updatedPkg?.attemptCount,
+                reason:         data.reason,
+                timestamp: new Date(),
+              });
+            } else {
+              // Still has attempts left — package rescheduled for tomorrow
+              socket.emit("delivery_attempt_failed", {
+                routeId:        data.routeId,
+                stopIndex:      data.stopIndex,
+                packageId,
+                attemptCount:   updatedPkg?.attemptCount,
+                maxAttempts:    updatedPkg?.maxAttempts,
+                attemptsLeft,
+                maxReached:     false,
+                requiresReturn: false,
+                nextAttemptDate: updatedPkg?.nextAttemptDate,
+                distanceMeters: Math.round(distanceMeters),
+                message: `Attempt recorded. ${attemptsLeft} attempt${attemptsLeft === 1 ? "" : "s"} remaining. Package rescheduled.`,
+                timestamp: new Date(),
+              });
+            }
+
+            // Notify branch / supervisor room regardless
+            this.io.to(this.getBranchRoom(deliverer.branchId.toString())).emit("deliverer_delivery_failed", {
+              routeId:       data.routeId,
+              delivererId:   deliverer._id,
+              stopIndex:     data.stopIndex,
+              packageId,
+              attemptCount:  updatedPkg?.attemptCount,
+              maxAttempts:   updatedPkg?.maxAttempts,
+              maxReached,
+              reason:        data.reason,
+              timestamp: new Date(),
+            });
+
+            if (isLastStop) {
+              // Last stop, route still completes
+              await route.completeRoute(`Last stop failed: ${data.reason}`);
+              await DelivererModel.findByIdAndUpdate(deliverer._id, {
+                availabilityStatus: maxReached ? "on_route" : "available", // keep on_route if has package to return
+                currentRouteId: maxReached ? route._id : null,
+                lastActiveAt: new Date(),
+              });
+              socket.emit("delivery_route_completed", {
+                routeId:    data.routeId,
+                routeNumber: route.routeNumber,
+                status:     "completed",
+                hasPackagesToReturn: maxReached,
+                message: maxReached
+                  ? "Route finished. Please return the failed package to your branch."
+                  : "Route completed.",
+                timestamp: new Date(),
+              });
+            } else {
+              // More stops remain — show next stop
+              const nextStop = route.stops[data.stopIndex + 1];
+              if (nextStop) {
+                await this.generateAndSendDeliveryOTP(route, data.stopIndex + 1, data.routeId);
+              }
+
+              socket.emit("delivery_attempt_failed", {
+                ...await this.buildFailedStopPayload(data.routeId, data.stopIndex, packageId, data.reason, updatedPkg, distanceMeters),
+                nextStop: nextStop ? {
+                  stopIndex:   data.stopIndex + 1,
+                  stopId:      nextStop._id,
+                  clientId:    nextStop.clientId,
+                  packageId:   nextStop.packageIds[0],
+                  address:     nextStop.address,
+                  location:    nextStop.location.coordinates,
+                  otpSent: true,
+                } : null,
+                remainingStops: route.stops.length - (data.stopIndex + 1),
+              });
+
+              this.io.to(routeRoom).emit("delivery_stop_failed", {
+                routeId:   data.routeId,
+                stopIndex: data.stopIndex,
+                packageId,
+                reason:    data.reason,
+                timestamp: new Date(),
+              });
+            }
+
+            console.log(`[Socket] Deliverer ${userId} failed delivery at stop ${data.stopIndex}. Attempts: ${updatedPkg?.attemptCount}/${updatedPkg?.maxAttempts}`);
+          } catch (err: any) {
+            console.error("[Socket] fail_delivery_attempt failed:", err);
+            socket.emit("route_error", { code: "FAIL_DELIVERY_FAILED", message: err.message || "Failed to record delivery failure." });
+          }
+        });
+
+        // ── resend_delivery_otp ──────────────────────────────────────────────
+        // Deliverer can request a fresh OTP if the client claims they didn't
+        // receive the SMS. Generates a new 6-digit code and re-sends it.
+        socket.on("resend_delivery_otp", async (data: {
+          routeId:   string;
+          stopIndex: number;
+        }) => {
+          try {
+            const deliverer = await DelivererModel.findOne({ userId }).lean();
+            if (!deliverer) return;
+
+            const route = await RouteModel.findOne({
+              _id: data?.routeId,
+              assignedDelivererId: deliverer._id,
+              status: "active",
+            }).lean();
+            if (!route) {
+              socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "Active route not found." });
+              return;
+            }
+            if (data.stopIndex !== route.currentStopIndex) {
+              socket.emit("route_error", { code: "WRONG_STOP", message: "Can only resend OTP for the current stop." });
+              return;
+            }
+
+            const stop = route.stops[data.stopIndex];
+            if (!stop?.packageIds[0]) {
+              socket.emit("route_error", { code: "STOP_NOT_FOUND", message: "Stop or package not found." });
+              return;
+            }
+
+            // Delete old OTP and generate a new one
+            const packageId = stop.packageIds[0].toString();
+            this.deliveryOTPs.delete(`delivery_otp_${packageId}`);
+            await this.generateAndSendDeliveryOTP(route as any, data.stopIndex, data.routeId);
+
+            socket.emit("delivery_otp_resent", {
+              routeId:   data.routeId,
+              stopIndex: data.stopIndex,
+              packageId,
+              message: "A new OTP has been sent to the client.",
+              timestamp: new Date(),
+            });
+          } catch (err: any) {
+            console.error("[Socket] resend_delivery_otp failed:", err);
+            socket.emit("route_error", { code: "RESEND_OTP_FAILED", message: "Failed to resend OTP." });
+          }
+        });
+
         
       }
 
