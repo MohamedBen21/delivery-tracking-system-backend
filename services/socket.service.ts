@@ -474,7 +474,397 @@ export class SocketService {
           }
         });
 
-        
+       // ── arrived_at_stop ──────────────────────────────────────────────────
+        // Transporter taps "I'm here" at a stop.
+        // Conditions:
+        //   1. Route status = active.
+        //   2. stopIndex must equal route.currentStopIndex (must go in order).
+        //   3. Transporter must be within 50m of the stop location.
+        socket.on("arrived_at_stop", async (data: {
+          routeId:     string;
+          stopIndex:   number;
+          coordinates: [number, number];
+        }) => {
+          try {
+            if (!data?.routeId || !mongoose.Types.ObjectId.isValid(data.routeId)) {
+              socket.emit("route_error", { code: "INVALID_ROUTE_ID", message: "Invalid routeId." });
+              return;
+            }
+            if (data.stopIndex === undefined || data.stopIndex < 0) {
+              socket.emit("route_error", { code: "INVALID_STOP", message: "Invalid stopIndex." });
+              return;
+            }
+            if (!data?.coordinates || data.coordinates.length !== 2) {
+              socket.emit("route_error", { code: "NO_COORDINATES", message: "Current coordinates are required." });
+              return;
+            }
+
+            const transporter = await TransporterModel.findOne({ userId }).lean();
+            if (!transporter) {
+              socket.emit("route_error", { code: "NOT_FOUND", message: "Transporter profile not found." });
+              return;
+            }
+
+            const route = await RouteModel.findOne({
+              _id: data.routeId,
+              assignedTransporterId: transporter._id,
+              status: "active",
+            });
+            if (!route) {
+              socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "Active route not found." });
+              return;
+            }
+
+            // Must arrive at stops in order
+            if (data.stopIndex !== route.currentStopIndex) {
+              socket.emit("route_error", {
+                code: "WRONG_STOP",
+                message: `Expected stop ${route.currentStopIndex}, received ${data.stopIndex}.`,
+                expectedStopIndex: route.currentStopIndex,
+              });
+              return;
+            }
+
+            const stop = route.stops[data.stopIndex];
+            if (!stop) {
+              socket.emit("route_error", { code: "STOP_NOT_FOUND", message: "Stop not found in route." });
+              return;
+            }
+
+            // Proximity check: must be within 50m of the stop
+            const stopCoords = stop.location.coordinates;
+            const distanceMeters = this.calculateDistance(data.coordinates, stopCoords) * 1000;
+
+            if (distanceMeters > 50) {
+              socket.emit("route_error", {
+                code: "TOO_FAR",
+                message: `You must be within 50m of the stop to mark arrival. Current distance: ${Math.round(distanceMeters)}m.`,
+                distanceMeters: Math.round(distanceMeters),
+                requiredMeters: 50,
+                stopLocation: stopCoords,
+              });
+              return;
+            }
+
+            // Mark arrived and record actualArrival
+            stop.status        = "arrived";
+            stop.actualArrival = new Date();
+            await route.save();
+
+            await TransporterModel.findByIdAndUpdate(transporter._id, { lastActiveAt: new Date() });
+
+            // Notify the branch room (supervisor sees transporter arrived)
+            if (stop.branchId) {
+              this.io.to(this.getBranchRoom(stop.branchId.toString())).emit("transporter_arrived_at_branch", {
+                routeId:        data.routeId,
+                routeNumber:    route.routeNumber,
+                transporterId:  transporter._id,
+                stopIndex:      data.stopIndex,
+                stopId:         stop._id,
+                branchId:       stop.branchId,
+                distanceMeters: Math.round(distanceMeters),
+                packageCount:   stop.packageIds.length,
+                timestamp: new Date(),
+              });
+            }
+
+            // Broadcast to route room
+            this.io.to(this.getRouteRoom(data.routeId)).emit("stop_arrived", {
+              routeId:   data.routeId,
+              stopIndex: data.stopIndex,
+              stopId:    stop._id,
+              branchId:  stop.branchId,
+              timestamp: new Date(),
+            });
+
+            // Confirm to transporter
+            socket.emit("arrived_at_stop_confirmed", {
+              routeId:        data.routeId,
+              stopIndex:      data.stopIndex,
+              stopId:         stop._id,
+              branchId:       stop.branchId,
+              address:        stop.address,
+              packages:       stop.packageIds,
+              distanceMeters: Math.round(distanceMeters),
+              timestamp: new Date(),
+            });
+
+            console.log(`[Socket] Transporter ${userId} arrived at stop ${data.stopIndex} (${Math.round(distanceMeters)}m away)`);
+          } catch (err: any) {
+            console.error("[Socket] arrived_at_stop failed:", err);
+            socket.emit("route_error", { code: "ARRIVE_FAILED", message: err.message || "Failed to mark arrival." });
+          }
+        });
+
+        // ── complete_stop ────────────────────────────────────────────────────
+        // Transporter confirms packages are unloaded at this stop.
+        // Conditions:
+        //   1. Route status = active.
+        //   2. stopIndex === route.currentStopIndex (enforces order).
+        //   3. Stop status must be arrived / in_progress / pending.
+        //   4. Transporter within 50m of the stop.
+        //   5. All provided packageIds must belong to this stop.
+        // If this is the last stop → route.completeRoute() fires automatically
+        //   and the transporter receives a "route_completed" push notification.
+        socket.on("complete_stop", async (data: {
+          routeId:              string;
+          stopIndex:            number;
+          coordinates:          [number, number];
+          completedPackageIds?: string[];
+          failedPackageIds?:    string[];
+          notes?:               string;
+        }) => {
+          try {
+            if (!data?.routeId || !mongoose.Types.ObjectId.isValid(data.routeId)) {
+              socket.emit("route_error", { code: "INVALID_ROUTE_ID", message: "Invalid routeId." });
+              return;
+            }
+            if (data.stopIndex === undefined || data.stopIndex < 0) {
+              socket.emit("route_error", { code: "INVALID_STOP", message: "Invalid stopIndex." });
+              return;
+            }
+            if (!data?.coordinates || data.coordinates.length !== 2) {
+              socket.emit("route_error", { code: "NO_COORDINATES", message: "Current coordinates are required." });
+              return;
+            }
+
+            const transporter = await TransporterModel.findOne({ userId }).lean();
+            if (!transporter) {
+              socket.emit("route_error", { code: "NOT_FOUND", message: "Transporter profile not found." });
+              return;
+            }
+
+            const route = await RouteModel.findOne({
+              _id: data.routeId,
+              assignedTransporterId: transporter._id,
+              status: "active",
+            });
+            if (!route) {
+              socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "Active route not found." });
+              return;
+            }
+
+            // Enforce sequential stop order
+            if (data.stopIndex !== route.currentStopIndex) {
+              socket.emit("route_error", {
+                code: "WRONG_STOP",
+                message: `Expected stop ${route.currentStopIndex}, received ${data.stopIndex}.`,
+                expectedStopIndex: route.currentStopIndex,
+              });
+              return;
+            }
+
+            const stop = route.stops[data.stopIndex];
+            if (!stop) {
+              socket.emit("route_error", { code: "STOP_NOT_FOUND", message: "Stop not found in route." });
+              return;
+            }
+
+            if (!["arrived", "in_progress", "pending"].includes(stop.status)) {
+              socket.emit("route_error", {
+                code: "INVALID_STOP_STATUS",
+                message: `Stop status is '${stop.status}' — cannot complete.`,
+              });
+              return;
+            }
+
+            // Proximity check: within 50m
+            const stopCoords = stop.location.coordinates;
+            const distanceMeters = this.calculateDistance(data.coordinates, stopCoords) * 1000;
+            if (distanceMeters > 50) {
+              socket.emit("route_error", {
+                code: "TOO_FAR",
+                message: `You must be within 50m of the stop to complete it. Current distance: ${Math.round(distanceMeters)}m.`,
+                distanceMeters: Math.round(distanceMeters),
+                requiredMeters: 50,
+                stopLocation: stopCoords,
+              });
+              return;
+            }
+
+            // Validate all package IDs belong to this stop
+            const stopPackageSet = new Set(
+              (stop.packageIds as mongoose.Types.ObjectId[]).map((id) => id.toString())
+            );
+
+            const completedOids: mongoose.Types.ObjectId[] = [];
+            for (const idStr of (data.completedPackageIds ?? [])) {
+              if (!mongoose.Types.ObjectId.isValid(idStr)) {
+                socket.emit("route_error", { code: "INVALID_PACKAGE_ID", message: `Invalid package ID: ${idStr}` });
+                return;
+              }
+              if (!stopPackageSet.has(idStr)) {
+                socket.emit("route_error", { code: "PACKAGE_NOT_IN_STOP", message: `Package ${idStr} does not belong to stop ${data.stopIndex}.` });
+                return;
+              }
+              completedOids.push(new mongoose.Types.ObjectId(idStr));
+            }
+
+            const failedOids: mongoose.Types.ObjectId[] = [];
+            for (const idStr of (data.failedPackageIds ?? [])) {
+              if (!mongoose.Types.ObjectId.isValid(idStr)) {
+                socket.emit("route_error", { code: "INVALID_PACKAGE_ID", message: `Invalid package ID: ${idStr}` });
+                return;
+              }
+              if (!stopPackageSet.has(idStr)) {
+                socket.emit("route_error", { code: "PACKAGE_NOT_IN_STOP", message: `Package ${idStr} does not belong to stop ${data.stopIndex}.` });
+                return;
+              }
+              failedOids.push(new mongoose.Types.ObjectId(idStr));
+            }
+
+            // If transporter sent no breakdown, treat all packages as completed
+            const finalCompleted = completedOids.length > 0
+              ? completedOids
+              : (stop.packageIds as mongoose.Types.ObjectId[]);
+
+            // Update package statuses for completed packages
+            for (const pkgId of finalCompleted) {
+              await PackageModel.findByIdAndUpdate(pkgId, {
+                status: "at_destination_branch",
+                currentBranchId: stop.branchId,
+                updatedAt: new Date(),
+              });
+            }
+
+            // Update package statuses for failed packages
+            for (const pkgId of failedOids) {
+              await PackageModel.findByIdAndUpdate(pkgId, {
+                status: "failed_delivery",
+                updatedAt: new Date(),
+              });
+            }
+
+            await route.completeStop(data.stopIndex, finalCompleted, failedOids, data.notes);
+
+            const isLastStop   = data.stopIndex === route.stops.length - 1;
+            const routeRoom    = this.getRouteRoom(data.routeId);
+            const nextStop     = !isLastStop ? route.stops[data.stopIndex + 1] : null;
+
+            if (isLastStop) {
+              // ── All stops done: complete the entire route ────────────────
+              await route.completeRoute(data.notes);
+
+              // Free transporter
+              await TransporterModel.findByIdAndUpdate(transporter._id, {
+                availabilityStatus: "available",
+                currentRouteId:     null,
+                lastActiveAt: new Date(),
+              });
+
+              // Push completion notification directly to transporter's socket
+              socket.emit("route_completed", {
+                routeId:           data.routeId,
+                routeNumber:       route.routeNumber,
+                totalStops:        route.stops.length,
+                completedStops:    route.completedStops,
+                failedStops:       route.failedStops,
+                skippedStops:      route.skippedStops,
+                actualStart:       route.actualStart,
+                actualEnd:         route.actualEnd,
+                actualTime:        route.actualTime,
+                onTimePerformance: route.onTimePerformance,
+                message: "Route completed successfully! Great work today.",
+                timestamp: new Date(),
+              });
+
+              // Notify every branch the route touched
+              const branchIds = new Set<string>();
+              route.stops.forEach((s: any) => { if (s.branchId) branchIds.add(s.branchId.toString()); });
+              branchIds.forEach((bId) => {
+                this.io.to(this.getBranchRoom(bId)).emit("transporter_route_completed", {
+                  routeId:       data.routeId,
+                  routeNumber:   route.routeNumber,
+                  transporterId: transporter._id,
+                  userId,
+                  onTimePerformance: route.onTimePerformance,
+                  timestamp: new Date(),
+                });
+              });
+
+              // Notify company room (managers)
+              this.io.to(this.getCompanyRoom(transporter.companyId.toString())).emit("transporter_route_completed", {
+                routeId:           data.routeId,
+                routeNumber:       route.routeNumber,
+                transporterId:     transporter._id,
+                userId,
+                onTimePerformance: route.onTimePerformance,
+                timestamp: new Date(),
+              });
+
+              // Broadcast to route room
+              this.io.to(routeRoom).emit("route_completed", {
+                routeId:    data.routeId,
+                routeNumber: route.routeNumber,
+                timestamp:  new Date(),
+              });
+
+              console.log(`[Socket] Transporter ${userId} COMPLETED route ${data.routeId}`);
+            } else {
+              // ── More stops remain ────────────────────────────────────────
+              socket.emit("stop_completed", {
+                routeId:            data.routeId,
+                completedStopIndex: data.stopIndex,
+                completedStopId:    stop._id,
+                branchId:           stop.branchId,
+                completedPackages:  finalCompleted.length,
+                failedPackages:     failedOids.length,
+                distanceMeters:     Math.round(distanceMeters),
+                nextStop: nextStop ? {
+                  stopIndex:   data.stopIndex + 1,
+                  stopId:      nextStop._id,
+                  branchId:    nextStop.branchId,
+                  address:     nextStop.address,
+                  location:    nextStop.location.coordinates,
+                  packageCount: nextStop.packageIds.length,
+                  order:       nextStop.order,
+                } : null,
+                remainingStops: route.stops.length - (data.stopIndex + 1),
+                timestamp: new Date(),
+              });
+
+              // Notify the branch just left
+              if (stop.branchId) {
+                this.io.to(this.getBranchRoom(stop.branchId.toString())).emit("transporter_left_branch", {
+                  routeId:          data.routeId,
+                  routeNumber:      route.routeNumber,
+                  transporterId:    transporter._id,
+                  completedPackages: finalCompleted.length,
+                  failedPackages:    failedOids.length,
+                  timestamp: new Date(),
+                });
+              }
+
+              // Notify the next branch that transporter is inbound
+              if (nextStop?.branchId) {
+                this.io.to(this.getBranchRoom(nextStop.branchId.toString())).emit("transporter_en_route_to_branch", {
+                  routeId:          data.routeId,
+                  routeNumber:      route.routeNumber,
+                  transporterId:    transporter._id,
+                  packageCount:     nextStop.packageIds.length,
+                  estimatedArrival: nextStop.expectedArrival,
+                  timestamp: new Date(),
+                });
+              }
+
+              // Broadcast to route room
+              this.io.to(routeRoom).emit("stop_completed", {
+                routeId:       data.routeId,
+                stopIndex:     data.stopIndex,
+                stopId:        stop._id,
+                nextStopIndex: data.stopIndex + 1,
+                timestamp: new Date(),
+              });
+
+              console.log(`[Socket] Transporter ${userId} completed stop ${data.stopIndex}/${route.stops.length - 1}`);
+            }
+          } catch (err: any) {
+            console.error("[Socket] complete_stop failed:", err);
+            socket.emit("route_error", { code: "COMPLETE_STOP_FAILED", message: err.message || "Failed to complete stop." });
+          }
+        });
+
+
 
       } // end if (role === "transporter")
 
