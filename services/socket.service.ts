@@ -1684,7 +1684,258 @@ export class SocketService {
           }
         });
 
-        
+        // ── return_package_to_branch ─────────────────────────────────────────
+        // Deliverer confirms they have physically returned a failed package to branch.
+        // Updates package status to 'returned' with full returnInfo if not already set.
+        socket.on("return_package_to_branch", async (data: {
+          packageId:   string;
+          branchId:    string;
+          coordinates: [number, number];
+          notes?:      string;
+        }) => {
+          try {
+            if (!data?.packageId || !data?.branchId) {
+              socket.emit("route_error", { code: "MISSING_DATA", message: "packageId and branchId are required." });
+              return;
+            }
+            if (!data?.coordinates || data.coordinates.length !== 2) {
+              socket.emit("route_error", { code: "NO_COORDINATES", message: "Current coordinates are required." });
+              return;
+            }
+
+            const deliverer = await DelivererModel.findOne({ userId }).lean();
+            if (!deliverer) {
+              socket.emit("route_error", { code: "NOT_FOUND", message: "Deliverer profile not found." });
+              return;
+            }
+
+            const pkg = await PackageModel.findOne({
+              _id: data.packageId,
+              assignedDelivererId: deliverer._id,
+            });
+            if (!pkg) {
+              socket.emit("route_error", { code: "PACKAGE_NOT_FOUND", message: "Package not found or not assigned to you." });
+              return;
+            }
+
+            // Fetch branch location for proximity check
+            const BranchModel = (await import("../models/branch.model")).default;
+            const branch = await BranchModel.findById(data.branchId).select("location name").lean();
+            if (!branch || !(branch as any).location) {
+              socket.emit("route_error", { code: "BRANCH_NOT_FOUND", message: "Branch location not available." });
+              return;
+            }
+
+            const branchCoords = (branch as any).location.coordinates as [number, number];
+            const distanceMeters = this.calculateDistance(data.coordinates, branchCoords) * 1000;
+            if (distanceMeters > 50) {
+              socket.emit("route_error", {
+                code: "TOO_FAR",
+                message: `You must be at the branch to confirm the return (within 50m). Current distance: ${Math.round(distanceMeters)}m.`,
+                distanceMeters: Math.round(distanceMeters),
+                requiredMeters: 50,
+              });
+              return;
+            }
+
+            // Initiate return if not already marked
+            if (pkg.status !== "returned") {
+              await pkg.initiateReturn(
+                "Maximum delivery attempts exceeded",
+                undefined,
+                data.notes
+              );
+            } else {
+              // Already returned — just update the tracking history note
+              pkg.trackingHistory.push({
+                status: "returned",
+                branchId: new mongoose.Types.ObjectId(data.branchId),
+                userId:   deliverer.userId,
+                notes:    data.notes || "Package physically returned to branch",
+                timestamp: new Date(),
+              } as any);
+              await pkg.save();
+            }
+
+            // Free deliverer if this was the last package to return
+            await DelivererModel.findByIdAndUpdate(deliverer._id, {
+              availabilityStatus: "available",
+              currentRouteId:     null,
+              lastActiveAt: new Date(),
+            });
+
+            // Notify branch
+            this.io.to(this.getBranchRoom(data.branchId)).emit("package_returned_to_branch", {
+              packageId:      data.packageId,
+              trackingNumber: pkg.trackingNumber,
+              delivererId:    deliverer._id,
+              branchId:       data.branchId,
+              notes:          data.notes,
+              timestamp: new Date(),
+            });
+
+            // Notify package room (client/sender)
+            this.io.to(this.getPackageRoom(data.packageId)).emit("package_status_update", {
+              packageId: data.packageId,
+              status:    "returned",
+              message:   "Package has been returned to the branch after failed delivery attempts.",
+              timestamp: new Date(),
+            });
+
+            socket.emit("return_confirmed", {
+              packageId:      data.packageId,
+              trackingNumber: pkg.trackingNumber,
+              branchId:       data.branchId,
+              distanceMeters: Math.round(distanceMeters),
+              message: "Package return confirmed. You are now available for a new route.",
+              timestamp: new Date(),
+            });
+
+            console.log(`[Socket] Deliverer ${userId} returned package ${data.packageId} to branch ${data.branchId}`);
+          } catch (err: any) {
+            console.error("[Socket] return_package_to_branch failed:", err);
+            socket.emit("route_error", { code: "RETURN_FAILED", message: err.message || "Failed to confirm package return." });
+          }
+        });
+
+        // ── join_delivery_route_room ─────────────────────────────────────────
+        // Deliverer re-opens app mid-route and rejoins the room.
+        socket.on("join_delivery_route_room", async (data: { routeId: string }) => {
+          if (!data?.routeId) return;
+          const deliverer = await DelivererModel.findOne({ userId }).lean();
+          if (!deliverer) return;
+
+          const route = await RouteModel.findOne({
+            _id: data.routeId,
+            assignedDelivererId: deliverer._id,
+            status: { $in: ["active", "paused"] },
+          }).lean();
+
+          if (!route) {
+            socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "No active/paused route found." });
+            return;
+          }
+
+          socket.join(this.getRouteRoom(data.routeId));
+          const currentStop = route.stops[route.currentStopIndex];
+
+          socket.emit("delivery_route_rejoined", {
+            routeId:          data.routeId,
+            routeNumber:      route.routeNumber,
+            status:           route.status,
+            currentStopIndex: route.currentStopIndex,
+            totalStops:       route.stops.length,
+            completedStops:   route.completedStops,
+            currentStop: currentStop ? {
+              stopId:      currentStop._id,
+              clientId:    currentStop.clientId,
+              packageId:   currentStop.packageIds[0],
+              address:     currentStop.address,
+              location:    currentStop.location.coordinates,
+              status:      currentStop.status,
+            } : null,
+            timestamp: new Date(),
+          });
+        });
+
+      } // end if (role === "deliverer")
+
+
+
+      // ══════════════════════════════════════════════════════════════════════
+      //  PACKAGE TRACKING  –  client subscribes to a package's live updates
+      // ══════════════════════════════════════════════════════════════════════
+
+      socket.on(
+        "track_package",
+        async (data: { packageId: string }) => {
+          try {
+            if (!data?.packageId) {
+              socket.emit("track_package_error", { message: "packageId is required." });
+              return;
+            }
+
+            const pkg = await PackageModel.findById(data.packageId).lean();
+            if (!pkg) {
+              socket.emit("track_package_error", { message: "Package not found." });
+              return;
+            }
+
+            // Authorization: only the sender or the recipient's client can track
+            // senderId covers both client and freelancer senders.
+            const isAuthorized =
+              role === "admin" ||
+              role === "manager" ||
+              role === "supervisor" ||
+              (pkg.senderId?.toString() === userId) ||
+              (role === "deliverer"   && (pkg as any).assignedDelivererId?.toString()  === userId) ||
+              (role === "transporter" && (pkg as any).assignedTransporterId?.toString() === userId);
+
+            if (!isAuthorized) {
+              socket.emit("track_package_error", { message: "Not authorized to track this package." });
+              return;
+            }
+
+            const room = this.getPackageRoom(data.packageId);
+            socket.join(room);
+
+            // Immediately push current state to the subscriber
+            socket.emit("package_status_update", {
+              packageId: data.packageId,
+              status: pkg.status,
+              currentBranchId: pkg.currentBranchId,
+              assignedDelivererId: pkg.assignedDelivererId,
+              assignedTransporterId: pkg.assignedTransporterId,
+              estimatedDeliveryTime: pkg.estimatedDeliveryTime,
+              trackingHistory: pkg.trackingHistory,
+              timestamp: new Date(),
+            });
+
+            console.log(`[Socket] ${role} ${userId} is now tracking package ${data.packageId}`);
+          } catch (error: any) {
+            console.error("[Socket] Error subscribing to package tracking:", error);
+            socket.emit("track_package_error", {
+              message: "Failed to subscribe to package tracking.",
+              error: error.message,
+            });
+          }
+        }
+      );
+
+      socket.on(
+        "untrack_package",
+        (data: { packageId: string }) => {
+          if (!data?.packageId) return;
+          const room = this.getPackageRoom(data.packageId);
+          socket.leave(room);
+          console.log(`[Socket] ${role} ${userId} stopped tracking package ${data.packageId}`);
+        }
+      );
+
+      // ══════════════════════════════════════════════════════════════════════
+      //  JOIN BRANCH ROOM  –  supervisor / manager joins a branch room to
+      //  receive real-time events for that branch
+      // ══════════════════════════════════════════════════════════════════════
+
+      if (role === "supervisor" || role === "manager" || role === "admin") {
+        socket.on(
+          "join_branch_room",
+          (data: { branchId: string }) => {
+            if (!data?.branchId) return;
+            const room = this.getBranchRoom(data.branchId);
+            socket.join(room);
+            socket.emit("joined_branch_room", { branchId: data.branchId, room });
+            console.log(`[Socket] ${role} ${userId} joined branch room ${room}`);
+          }
+        );
+
+        socket.on(
+          "leave_branch_room",
+          (data: { branchId: string }) => {
+            if (!data?.branchId) return;
+            socket.leave(this.getBranchRoom(data.branchId));
+          }
+        );
       }
 
       // ══════════════════════════════════════════════════════════════════════
