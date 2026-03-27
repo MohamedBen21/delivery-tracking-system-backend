@@ -865,6 +865,204 @@ export class SocketService {
         });
 
 
+        // ── fail_stop ────────────────────────────────────────────────────────
+        // Transporter could not deliver packages at a stop (e.g. branch closed).
+        // Advances currentStopIndex so the route continues.
+        // If it's the last stop, the route is still completed.
+        socket.on("fail_stop", async (data: {
+          routeId:            string;
+          stopIndex:          number;
+          reason:             string;
+          skippedPackageIds?: string[];
+        }) => {
+          try {
+            if (!data?.routeId || !data?.reason) {
+              socket.emit("route_error", { code: "MISSING_DATA", message: "routeId and reason are required." });
+              return;
+            }
+
+            const transporter = await TransporterModel.findOne({ userId }).lean();
+            if (!transporter) return;
+
+            const route = await RouteModel.findOne({
+              _id: data.routeId,
+              assignedTransporterId: transporter._id,
+              status: "active",
+            });
+            if (!route) {
+              socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "Active route not found." });
+              return;
+            }
+
+            const skippedOids = (data.skippedPackageIds ?? [])
+              .filter((id) => mongoose.Types.ObjectId.isValid(id))
+              .map((id) => new mongoose.Types.ObjectId(id));
+
+            await route.failStop(data.stopIndex, data.reason, skippedOids);
+
+            const stop      = route.stops[data.stopIndex];
+            const isLastStop = data.stopIndex === route.stops.length - 1;
+
+            socket.emit("stop_failed", {
+              routeId:        data.routeId,
+              stopIndex:      data.stopIndex,
+              stopId:         stop?._id,
+              branchId:       stop?.branchId,
+              reason:         data.reason,
+              remainingStops: isLastStop ? 0 : route.stops.length - (data.stopIndex + 1),
+              timestamp: new Date(),
+            });
+
+            // Notify the branch that the delivery failed
+            if (stop?.branchId) {
+              this.io.to(this.getBranchRoom(stop.branchId.toString())).emit("transporter_stop_failed", {
+                routeId:       data.routeId,
+                transporterId: transporter._id,
+                stopId:        stop._id,
+                branchId:      stop.branchId,
+                reason:        data.reason,
+                timestamp: new Date(),
+              });
+            }
+
+            if (isLastStop) {
+              await route.completeRoute(`Last stop failed: ${data.reason}`);
+              await TransporterModel.findByIdAndUpdate(transporter._id, {
+                availabilityStatus: "available",
+                currentRouteId: null,
+                lastActiveAt: new Date(),
+              });
+              socket.emit("route_completed", {
+                routeId:    data.routeId,
+                routeNumber: route.routeNumber,
+                status:     "completed",
+                message:    "Route completed. Last stop failed — your supervisor has been notified.",
+                timestamp: new Date(),
+              });
+            }
+          } catch (err: any) {
+            console.error("[Socket] fail_stop failed:", err);
+            socket.emit("route_error", { code: "FAIL_STOP_FAILED", message: err.message || "Failed to record stop failure." });
+          }
+        });
+
+        // ── pause_route ──────────────────────────────────────────────────────
+        socket.on("pause_route", async (data: { routeId: string; reason?: string }) => {
+          try {
+            const transporter = await TransporterModel.findOne({ userId }).lean();
+            if (!transporter) return;
+
+            const route = await RouteModel.findOne({
+              _id: data?.routeId,
+              assignedTransporterId: transporter._id,
+              status: "active",
+            });
+            if (!route) {
+              socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "Active route not found." });
+              return;
+            }
+
+            await route.pauseRoute(data?.reason);
+
+            socket.emit("route_paused", {
+              routeId:  data.routeId,
+              reason:   data?.reason,
+              pausedAt: new Date(),
+            });
+
+            if (transporter.currentBranchId) {
+              this.io.to(this.getBranchRoom(transporter.currentBranchId.toString())).emit(
+                "transporter_route_paused",
+                { routeId: data.routeId, transporterId: transporter._id, reason: data?.reason, timestamp: new Date() }
+              );
+            }
+          } catch (err: any) {
+            socket.emit("route_error", { code: "PAUSE_FAILED", message: err.message });
+          }
+        });
+
+        // ── resume_route ─────────────────────────────────────────────────────
+        socket.on("resume_route", async (data: { routeId: string }) => {
+          try {
+            const transporter = await TransporterModel.findOne({ userId }).lean();
+            if (!transporter) return;
+
+            const route = await RouteModel.findOne({
+              _id: data?.routeId,
+              assignedTransporterId: transporter._id,
+              status: "paused",
+            });
+            if (!route) {
+              socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "Paused route not found." });
+              return;
+            }
+
+            await route.resumeRoute();
+            const currentStop = route.stops[route.currentStopIndex];
+
+            socket.emit("route_resumed", {
+              routeId:          data.routeId,
+              currentStopIndex: route.currentStopIndex,
+              currentStop: currentStop ? {
+                stopId:      currentStop._id,
+                branchId:    currentStop.branchId,
+                address:     currentStop.address,
+                location:    currentStop.location.coordinates,
+                packageCount: currentStop.packageIds.length,
+              } : null,
+              resumedAt: new Date(),
+            });
+
+            if (transporter.currentBranchId) {
+              this.io.to(this.getBranchRoom(transporter.currentBranchId.toString())).emit(
+                "transporter_route_resumed",
+                { routeId: data.routeId, transporterId: transporter._id, timestamp: new Date() }
+              );
+            }
+          } catch (err: any) {
+            socket.emit("route_error", { code: "RESUME_FAILED", message: err.message });
+          }
+        });
+
+        // ── join_route_room ──────────────────────────────────────────────────
+        // Transporter re-opens app mid-route and rejoins the room.
+        socket.on("join_route_room", async (data: { routeId: string }) => {
+          if (!data?.routeId) return;
+          const transporter = await TransporterModel.findOne({ userId }).lean();
+          if (!transporter) return;
+
+          const route = await RouteModel.findOne({
+            _id: data.routeId,
+            assignedTransporterId: transporter._id,
+            status: { $in: ["active", "paused"] },
+          }).lean();
+
+          if (!route) {
+            socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "No active/paused route found." });
+            return;
+          }
+
+          socket.join(this.getRouteRoom(data.routeId));
+          const currentStop = route.stops[route.currentStopIndex];
+
+          socket.emit("route_rejoined", {
+            routeId:          data.routeId,
+            routeNumber:      route.routeNumber,
+            status:           route.status,
+            currentStopIndex: route.currentStopIndex,
+            totalStops:       route.stops.length,
+            completedStops:   route.completedStops,
+            currentStop: currentStop ? {
+              stopId:      currentStop._id,
+              branchId:    currentStop.branchId,
+              address:     currentStop.address,
+              location:    currentStop.location.coordinates,
+              status:      currentStop.status,
+              packageCount: currentStop.packageIds.length,
+            } : null,
+            timestamp: new Date(),
+          });
+        });         
 
       } // end if (role === "transporter")
 
