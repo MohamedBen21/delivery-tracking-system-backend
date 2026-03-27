@@ -105,6 +105,29 @@ export interface IRoute extends Document {
   remainingStops: IRouteStop[];
   totalPackages: number;
   completedPackages: number;
+
+
+
+    startRoute: (startedBy?: mongoose.Types.ObjectId) => Promise<IRoute>;
+  pauseRoute: (reason?: string) => Promise<IRoute>;
+  resumeRoute: () => Promise<IRoute>;
+  completeStop: (
+    stopIndex: number,
+    completedPackages?: mongoose.Types.ObjectId[],
+    failedPackages?: mongoose.Types.ObjectId[],
+    notes?: string
+  ) => Promise<IRoute>;
+  failStop: (
+    stopIndex: number,
+    reason: string,
+    skippedPackages?: mongoose.Types.ObjectId[]
+  ) => Promise<IRoute>;
+  skipStop: (stopIndex: number, reason: string) => Promise<IRoute>;
+  completeRoute: (notes?: string) => Promise<IRoute>;
+  cancelRoute: (reason: string) => Promise<IRoute>;
+  addStop: (stopData: Partial<IRouteStop>) => Promise<IRoute>;
+  reorderStops: (newOrder: number[]) => Promise<IRoute>;
+  
 }
 
 const routeStopSchema = new Schema<IRouteStop>({

@@ -8,6 +8,7 @@ import ClientModel from "../models/client.model";
 import SupervisorModel from "../models/supervisor.model";
 import FreelancerModel from "../models/freelancer.model";
 import PackageModel from "../models/package.model";
+import RouteModel from "../models/route.model";
 import { IUser } from "../models/user.model";
 
 
@@ -67,6 +68,38 @@ export class SocketService {
     return `company_${companyId}`;
   }
 
+  private getRouteRoom(routeId: string): string {
+    return `route_${routeId}`;
+  }
+
+  /**
+   * Calculate distance between two coordinates in kilometers using Haversine formula
+   */
+  private calculateDistance(
+    coord1: [number, number],
+    coord2: [number, number]
+  ): number {
+    const [lng1, lat1] = coord1;
+    const [lng2, lat2] = coord2;
+    
+    const R = 6371; // Earth's radius in km
+    const dLat = this.toRad(lat2 - lat1);
+    const dLon = this.toRad(lng2 - lng1);
+    
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(this.toRad(lat1)) *
+        Math.cos(this.toRad(lat2)) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  private toRad(degrees: number): number {
+    return degrees * (Math.PI / 180);
+  }
 
 
   constructor(io: Server) {
@@ -353,6 +386,99 @@ export class SocketService {
       }
 
       // ══════════════════════════════════════════════════════════════════════
+      //  TRANSPORTER ROUTE EVENTS
+      // ══════════════════════════════════════════════════════════════════════
+
+      if (role === "transporter") {
+
+        // ── start_route ──────────────────────────────────────────────────────
+        // Tap "Start Route". Route must be status=assigned and assigned to this transporter.
+        socket.on("start_route", async (data: { routeId: string }) => {
+          try {
+            if (!data?.routeId || !mongoose.Types.ObjectId.isValid(data.routeId)) {
+              socket.emit("route_error", { code: "INVALID_ROUTE_ID", message: "Invalid routeId." });
+              return;
+            }
+
+            const transporter = await TransporterModel.findOne({ userId }).lean();
+            if (!transporter) {
+              socket.emit("route_error", { code: "NOT_FOUND", message: "Transporter profile not found." });
+              return;
+            }
+
+            const route = await RouteModel.findOne({
+              _id: data.routeId,
+              assignedTransporterId: transporter._id,
+              status: "assigned",
+            });
+            if (!route) {
+              socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "Route not found, already started, or not assigned to you." });
+              return;
+            }
+
+            await route.startRoute();
+
+            // Join the route room for subsequent stop events
+            socket.join(this.getRouteRoom(data.routeId));
+
+            // Mark transporter on_route
+            await TransporterModel.findByIdAndUpdate(transporter._id, {
+              availabilityStatus: "on_route",
+              lastActiveAt: new Date(),
+              currentRouteId: route._id,
+            });
+
+            // Notify supervisor branch room
+            if (transporter.currentBranchId) {
+              this.io.to(this.getBranchRoom(transporter.currentBranchId.toString())).emit("transporter_route_started", {
+                routeId:       data.routeId,
+                routeNumber:   route.routeNumber,
+                transporterId: transporter._id,
+                userId,
+                totalStops:    route.stops.length,
+                firstStop: route.stops[0] ? {
+                  stopId:   route.stops[0]._id,
+                  branchId: route.stops[0].branchId,
+                  address:  route.stops[0].address,
+                  location: route.stops[0].location.coordinates,
+                } : null,
+                actualStart:  route.actualStart,
+                scheduledEnd: route.scheduledEnd,
+                timestamp: new Date(),
+              });
+            }
+
+            // Confirm to transporter
+            socket.emit("route_started", {
+              routeId:          data.routeId,
+              routeNumber:      route.routeNumber,
+              status:           "active",
+              currentStopIndex: 0,
+              totalStops:       route.stops.length,
+              currentStop: route.stops[0] ? {
+                stopId:      route.stops[0]._id,
+                branchId:    route.stops[0].branchId,
+                address:     route.stops[0].address,
+                location:    route.stops[0].location.coordinates,
+                packageCount: route.stops[0].packageIds.length,
+                order:       route.stops[0].order,
+              } : null,
+              scheduledEnd: route.scheduledEnd,
+              timestamp: new Date(),
+            });
+
+            console.log(`[Socket] Transporter ${userId} started route ${data.routeId}`);
+          } catch (err: any) {
+            console.error("[Socket] start_route failed:", err);
+            socket.emit("route_error", { code: "START_FAILED", message: err.message || "Failed to start route." });
+          }
+        });
+
+        
+
+      } // end if (role === "transporter")
+
+      // ══════════════════════════════════════════════════════════════════════
       //  DISCONNECT
       // ══════════════════════════════════════════════════════════════════════
 
@@ -416,6 +542,13 @@ export class SocketService {
           socket.join(this.getCompanyRoom(transporter.companyId.toString()));
           if (transporter.currentBranchId) {
             socket.join(this.getBranchRoom(transporter.currentBranchId.toString()));
+          }
+          // If transporter has an active route, join route room
+          if (transporter.currentRouteId) {
+            const route = await RouteModel.findById(transporter.currentRouteId).lean();
+            if (route && ["active", "paused"].includes(route.status)) {
+              socket.join(this.getRouteRoom(route._id.toString()));
+            }
           }
         }
       } else if (role === "supervisor") {
@@ -761,6 +894,13 @@ export class SocketService {
    */
   public emitToCompany(companyId: string, event: string, data: any): void {
     this.io.to(this.getCompanyRoom(companyId)).emit(event, data);
+  }
+
+  /**
+   * Emit an event to every socket in a route room.
+   */
+  public emitToRoute(routeId: string, event: string, data: any): void {
+    this.io.to(this.getRouteRoom(routeId)).emit(event, data);
   }
 
   /**
