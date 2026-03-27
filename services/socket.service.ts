@@ -53,6 +53,9 @@ export class SocketService {
   private activeDeliveries: Map<string, ActiveDelivery>  = new Map();
   // packageId → active transit session (branch-to-branch)
   private activeTransits: Map<string, ActiveTransit>     = new Map();
+  // packageId -> { code, expiresAt } -- in-memory, short-lived (10 min)
+  private deliveryOTPs: Map<string, { code: string; expiresAt: number }> = new Map();
+
 
 
 
@@ -67,12 +70,12 @@ export class SocketService {
   private getCompanyRoom(companyId: string): string {
     return `company_${companyId}`;
   }
-
   private getRouteRoom(routeId: string): string {
     return `route_${routeId}`;
   }
 
-  /**
+
+    /**
    * Calculate distance between two coordinates in kilometers using Haversine formula
    */
   private calculateDistance(
@@ -290,102 +293,6 @@ export class SocketService {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      //  PACKAGE TRACKING  –  client subscribes to a package's live updates
-      // ══════════════════════════════════════════════════════════════════════
-
-      socket.on(
-        "track_package",
-        async (data: { packageId: string }) => {
-          try {
-            if (!data?.packageId) {
-              socket.emit("track_package_error", { message: "packageId is required." });
-              return;
-            }
-
-            const pkg = await PackageModel.findById(data.packageId).lean();
-            if (!pkg) {
-              socket.emit("track_package_error", { message: "Package not found." });
-              return;
-            }
-
-            // Authorization: only the sender or the recipient's client can track
-            // senderId covers both client and freelancer senders.
-            const isAuthorized =
-              role === "admin" ||
-              role === "manager" ||
-              role === "supervisor" ||
-              (pkg.senderId?.toString() === userId) ||
-              (role === "deliverer"   && (pkg as any).assignedDelivererId?.toString()  === userId) ||
-              (role === "transporter" && (pkg as any).assignedTransporterId?.toString() === userId);
-
-            if (!isAuthorized) {
-              socket.emit("track_package_error", { message: "Not authorized to track this package." });
-              return;
-            }
-
-            const room = this.getPackageRoom(data.packageId);
-            socket.join(room);
-
-            // Immediately push current state to the subscriber
-            socket.emit("package_status_update", {
-              packageId: data.packageId,
-              status: pkg.status,
-              currentBranchId: pkg.currentBranchId,
-              assignedDelivererId: pkg.assignedDelivererId,
-              assignedTransporterId: pkg.assignedTransporterId,
-              estimatedDeliveryTime: pkg.estimatedDeliveryTime,
-              trackingHistory: pkg.trackingHistory,
-              timestamp: new Date(),
-            });
-
-            console.log(`[Socket] ${role} ${userId} is now tracking package ${data.packageId}`);
-          } catch (error: any) {
-            console.error("[Socket] Error subscribing to package tracking:", error);
-            socket.emit("track_package_error", {
-              message: "Failed to subscribe to package tracking.",
-              error: error.message,
-            });
-          }
-        }
-      );
-
-      socket.on(
-        "untrack_package",
-        (data: { packageId: string }) => {
-          if (!data?.packageId) return;
-          const room = this.getPackageRoom(data.packageId);
-          socket.leave(room);
-          console.log(`[Socket] ${role} ${userId} stopped tracking package ${data.packageId}`);
-        }
-      );
-
-      // ══════════════════════════════════════════════════════════════════════
-      //  JOIN BRANCH ROOM  –  supervisor / manager joins a branch room to
-      //  receive real-time events for that branch
-      // ══════════════════════════════════════════════════════════════════════
-
-      if (role === "supervisor" || role === "manager" || role === "admin") {
-        socket.on(
-          "join_branch_room",
-          (data: { branchId: string }) => {
-            if (!data?.branchId) return;
-            const room = this.getBranchRoom(data.branchId);
-            socket.join(room);
-            socket.emit("joined_branch_room", { branchId: data.branchId, room });
-            console.log(`[Socket] ${role} ${userId} joined branch room ${room}`);
-          }
-        );
-
-        socket.on(
-          "leave_branch_room",
-          (data: { branchId: string }) => {
-            if (!data?.branchId) return;
-            socket.leave(this.getBranchRoom(data.branchId));
-          }
-        );
-      }
-
-      // ══════════════════════════════════════════════════════════════════════
       //  TRANSPORTER ROUTE EVENTS
       // ══════════════════════════════════════════════════════════════════════
 
@@ -425,7 +332,6 @@ export class SocketService {
             await TransporterModel.findByIdAndUpdate(transporter._id, {
               availabilityStatus: "on_route",
               lastActiveAt: new Date(),
-              currentRouteId: route._id,
             });
 
             // Notify supervisor branch room
@@ -474,7 +380,7 @@ export class SocketService {
           }
         });
 
-       // ── arrived_at_stop ──────────────────────────────────────────────────
+        // ── arrived_at_stop ──────────────────────────────────────────────────
         // Transporter taps "I'm here" at a stop.
         // Conditions:
         //   1. Route status = active.
@@ -718,23 +624,6 @@ export class SocketService {
               ? completedOids
               : (stop.packageIds as mongoose.Types.ObjectId[]);
 
-            // Update package statuses for completed packages
-            for (const pkgId of finalCompleted) {
-              await PackageModel.findByIdAndUpdate(pkgId, {
-                status: "at_destination_branch",
-                currentBranchId: stop.branchId,
-                updatedAt: new Date(),
-              });
-            }
-
-            // Update package statuses for failed packages
-            for (const pkgId of failedOids) {
-              await PackageModel.findByIdAndUpdate(pkgId, {
-                status: "failed_delivery",
-                updatedAt: new Date(),
-              });
-            }
-
             await route.completeStop(data.stopIndex, finalCompleted, failedOids, data.notes);
 
             const isLastStop   = data.stopIndex === route.stops.length - 1;
@@ -863,7 +752,6 @@ export class SocketService {
             socket.emit("route_error", { code: "COMPLETE_STOP_FAILED", message: err.message || "Failed to complete stop." });
           }
         });
-
 
         // ── fail_stop ────────────────────────────────────────────────────────
         // Transporter could not deliver packages at a stop (e.g. branch closed).
@@ -1062,9 +950,117 @@ export class SocketService {
             } : null,
             timestamp: new Date(),
           });
-        });         
+        });
 
       } // end if (role === "transporter")
+
+      // ══════════════════════════════════════════════════════════════════════
+      //  DELIVERER ROUTE EVENTS
+      //
+      //  Flow per stop (each stop = one home delivery to one client):
+      //
+      //  1.  start_delivery_route    — deliverer starts their daily route
+      //  2.  arrived_at_delivery     — deliverer taps "I'm here" (50m check)
+      //  3.  complete_delivery       — deliverer enters the 6-digit OTP + 50m check
+      //                                → package marked delivered, next stop shown
+      //  4.  fail_delivery_attempt   — client not responding; deliverer records reason
+      //                                → package rescheduled (up to maxAttempts=3)
+      //                                → if max reached → marked returned
+      //  5.  return_package_to_branch— deliverer confirms return of failed packages
+      //  6.  join_delivery_route_room— re-join on app re-open mid-route
+      // ══════════════════════════════════════════════════════════════════════
+
+      if (role === "deliverer") {
+
+        // ── start_delivery_route ─────────────────────────────────────────────
+        // Deliverer taps "Start Route" in their app.
+        // Conditions: route must be status=assigned, assigned to this deliverer.
+        // On success:
+        //   - Route set to active
+        //   - Deliverer set to on_route
+        //   - 6-digit OTP generated for the FIRST stop's package and sent via SMS
+        //   - Supervisor branch room notified
+        socket.on("start_delivery_route", async (data: { routeId: string }) => {
+          try {
+            if (!data?.routeId || !mongoose.Types.ObjectId.isValid(data.routeId)) {
+              socket.emit("route_error", { code: "INVALID_ROUTE_ID", message: "Invalid routeId." });
+              return;
+            }
+
+            const deliverer = await DelivererModel.findOne({ userId }).lean();
+            if (!deliverer) {
+              socket.emit("route_error", { code: "NOT_FOUND", message: "Deliverer profile not found." });
+              return;
+            }
+
+            const route = await RouteModel.findOne({
+              _id: data.routeId,
+              assignedDelivererId: deliverer._id,
+              status: "assigned",
+            });
+            if (!route) {
+              socket.emit("route_error", { code: "ROUTE_NOT_FOUND", message: "Route not found, already started, or not assigned to you." });
+              return;
+            }
+
+            await route.startRoute();
+
+            // Join the route room
+            socket.join(this.getRouteRoom(data.routeId));
+
+            // Mark deliverer on_route
+            await DelivererModel.findByIdAndUpdate(deliverer._id, {
+              availabilityStatus: "on_route",
+              currentRouteId: route._id,
+              lastActiveAt: new Date(),
+            });
+
+            // Generate and send OTP for the first stop
+            if (route.stops.length > 0) {
+              await this.generateAndSendDeliveryOTP(route, 0, data.routeId);
+            }
+
+            // Notify branch room
+            this.io.to(this.getBranchRoom(deliverer.branchId.toString())).emit("deliverer_route_started", {
+              routeId:      data.routeId,
+              routeNumber:  route.routeNumber,
+              delivererId:  deliverer._id,
+              userId,
+              totalStops:   route.stops.length,
+              actualStart:  route.actualStart,
+              scheduledEnd: route.scheduledEnd,
+              timestamp: new Date(),
+            });
+
+            const firstStop = route.stops[0];
+            socket.emit("delivery_route_started", {
+              routeId:          data.routeId,
+              routeNumber:      route.routeNumber,
+              status:           "active",
+              currentStopIndex: 0,
+              totalStops:       route.stops.length,
+              currentStop: firstStop ? {
+                stopId:       firstStop._id,
+                clientId:     firstStop.clientId,
+                packageId:    firstStop.packageIds[0],
+                address:      firstStop.address,
+                location:     firstStop.location.coordinates,
+                recipientName:  (firstStop as any).recipientName,
+                recipientPhone: (firstStop as any).recipientPhone,
+                otpSent: true,
+              } : null,
+              scheduledEnd: route.scheduledEnd,
+              timestamp: new Date(),
+            });
+
+            console.log(`[Socket] Deliverer ${userId} started delivery route ${data.routeId}`);
+          } catch (err: any) {
+            console.error("[Socket] start_delivery_route failed:", err);
+            socket.emit("route_error", { code: "START_FAILED", message: err.message || "Failed to start route." });
+          }
+        });
+
+      }
 
       // ══════════════════════════════════════════════════════════════════════
       //  DISCONNECT
@@ -1131,13 +1127,6 @@ export class SocketService {
           if (transporter.currentBranchId) {
             socket.join(this.getBranchRoom(transporter.currentBranchId.toString()));
           }
-          // If transporter has an active route, join route room
-          if (transporter.currentRouteId) {
-            const route = await RouteModel.findById(transporter.currentRouteId).lean();
-            if (route && ["active", "paused"].includes(route.status)) {
-              socket.join(this.getRouteRoom(route._id.toString()));
-            }
-          }
         }
       } else if (role === "supervisor") {
         const supervisor = await SupervisorModel.findOne({ userId }).select("branchId companyId").lean();
@@ -1163,65 +1152,25 @@ export class SocketService {
 
   private registerSocket(userId: string, role: DeliveryUserRole, socketId: string): void {
     switch (role) {
-      case "deliverer":   
-      this.delivererSockets.set(userId, socketId);   
-      break;
-
-      case "transporter": 
-      this.transporterSockets.set(userId, socketId); 
-      break;
-
-      case "client":      
-      this.clientSockets.set(userId, socketId);      
-      break;
-
-      case "freelancer":  
-      this.freelancerSockets.set(userId, socketId);  
-      break;
-
-      case "supervisor":  
-      this.supervisorSockets.set(userId, socketId);  
-      break;
-
-      case "manager":     
-      this.managerSockets.set(userId, socketId);     
-      break;
-
-      case "admin":       
-      this.adminSockets.set(userId, socketId);       
-      break;
+      case "deliverer":   this.delivererSockets.set(userId, socketId);   break;
+      case "transporter": this.transporterSockets.set(userId, socketId); break;
+      case "client":      this.clientSockets.set(userId, socketId);      break;
+      case "freelancer":  this.freelancerSockets.set(userId, socketId);  break;
+      case "supervisor":  this.supervisorSockets.set(userId, socketId);  break;
+      case "manager":     this.managerSockets.set(userId, socketId);     break;
+      case "admin":       this.adminSockets.set(userId, socketId);       break;
     }
   }
 
   private unregisterSocket(userId: string, role: DeliveryUserRole): void {
     switch (role) {
-      case "deliverer":   
-      this.delivererSockets.delete(userId);   
-      break;
-
-      case "transporter": 
-      this.transporterSockets.delete(userId); 
-      break;
-
-      case "client":      
-      this.clientSockets.delete(userId);      
-      break;
-
-      case "freelancer":  
-      this.freelancerSockets.delete(userId);  
-      break;
-
-      case "supervisor":  
-      this.supervisorSockets.delete(userId);  
-      break;
-      
-      case "manager":     
-      this.managerSockets.delete(userId);     
-      break;
-      
-      case "admin":       
-      this.adminSockets.delete(userId);       
-      break;
+      case "deliverer":   this.delivererSockets.delete(userId);   break;
+      case "transporter": this.transporterSockets.delete(userId); break;
+      case "client":      this.clientSockets.delete(userId);      break;
+      case "freelancer":  this.freelancerSockets.delete(userId);  break;
+      case "supervisor":  this.supervisorSockets.delete(userId);  break;
+      case "manager":     this.managerSockets.delete(userId);     break;
+      case "admin":       this.adminSockets.delete(userId);       break;
     }
   }
 
@@ -1428,29 +1377,14 @@ export class SocketService {
    */
   public getSocketId(userId: string, role: DeliveryUserRole): string | undefined {
     switch (role) {
-      case "deliverer":   
-      return this.delivererSockets.get(userId);
-
-      case "transporter": 
-      return this.transporterSockets.get(userId);
-
-      case "client":      
-      return this.clientSockets.get(userId);
-
-      case "freelancer":  
-      return this.freelancerSockets.get(userId);
-
-      case "supervisor":  
-      return this.supervisorSockets.get(userId);
-
-      case "manager":     
-      return this.managerSockets.get(userId);
-
-      case "admin":       
-      return this.adminSockets.get(userId);
-
-      default:            
-      return undefined;
+      case "deliverer":   return this.delivererSockets.get(userId);
+      case "transporter": return this.transporterSockets.get(userId);
+      case "client":      return this.clientSockets.get(userId);
+      case "freelancer":  return this.freelancerSockets.get(userId);
+      case "supervisor":  return this.supervisorSockets.get(userId);
+      case "manager":     return this.managerSockets.get(userId);
+      case "admin":       return this.adminSockets.get(userId);
+      default:            return undefined;
     }
   }
   
@@ -1482,13 +1416,6 @@ export class SocketService {
    */
   public emitToCompany(companyId: string, event: string, data: any): void {
     this.io.to(this.getCompanyRoom(companyId)).emit(event, data);
-  }
-
-  /**
-   * Emit an event to every socket in a route room.
-   */
-  public emitToRoute(routeId: string, event: string, data: any): void {
-    this.io.to(this.getRouteRoom(routeId)).emit(event, data);
   }
 
   /**
@@ -1677,12 +1604,90 @@ export class SocketService {
   /**
    * Return all connected users counts (useful for monitoring endpoints).
    */
+
+  // --- OTP helper: generate 6-digit code, store in memory, send via SMS ---
+
+  private async generateAndSendDeliveryOTP(
+    route: any,
+    stopIndex: number,
+    routeId: string
+  ): Promise<void> {
+    try {
+      const stop = route.stops[stopIndex];
+      if (!stop || !stop.packageIds[0]) return;
+
+      const packageId = stop.packageIds[0].toString();
+      const pkg = await PackageModel.findById(packageId)
+        .select("destination trackingNumber")
+        .lean();
+      if (!pkg) return;
+
+      // 6-digit OTP, valid 10 minutes
+      const code      = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = Date.now() + 10 * 60 * 1000;
+
+      this.deliveryOTPs.set(`delivery_otp_${packageId}`, { code, expiresAt });
+
+      // Persist on the package for durability across restarts
+      await PackageModel.findByIdAndUpdate(packageId, {
+        $set: {
+          "deliveryOtp.code":      code,
+          "deliveryOtp.expiresAt": new Date(expiresAt),
+          "deliveryOtp.stopIndex": stopIndex,
+          "deliveryOtp.routeId":   routeId,
+        },
+      });
+
+      const recipientPhone = (pkg as any).destination?.recipientPhone;
+      const trackingNumber = (pkg as any).trackingNumber;
+
+      if (recipientPhone) {
+        // TODO: replace with your SMS provider (Twilio, Vonage, etc.)
+        // await smsService.send(
+        //   recipientPhone,
+        //   `Your delivery OTP for package ${trackingNumber} is: ${code}. Valid for 10 minutes.`
+        // );
+        console.log(`[OTP] pkg=${packageId} phone=${recipientPhone} code=${code}`);
+      }
+    } catch (err) {
+      console.error("[Socket] generateAndSendDeliveryOTP failed:", err);
+    }
+  }
+
+  // --- Helper: build fail_delivery_attempt payload -------------------------
+
+  private buildFailedStopPayload(
+    routeId:        string,
+    stopIndex:      number,
+    packageId:      string,
+    reason:         string,
+    pkg:            any,
+    distanceMeters: number
+  ): Record<string, any> {
+    const attemptsLeft = (pkg?.maxAttempts ?? 3) - (pkg?.attemptCount ?? 0);
+    const maxReached   = (pkg?.attemptCount ?? 0) >= (pkg?.maxAttempts ?? 3);
+    return {
+      routeId,
+      stopIndex,
+      packageId,
+      attemptCount:    pkg?.attemptCount,
+      maxAttempts:     pkg?.maxAttempts,
+      attemptsLeft,
+      maxReached,
+      requiresReturn:  maxReached,
+      nextAttemptDate: pkg?.nextAttemptDate,
+      distanceMeters:  Math.round(distanceMeters),
+      reason,
+      timestamp: new Date(),
+    };
+  }
+
   public getConnectionStats(): Record<string, number> {
     return {
-
       deliverers:   this.delivererSockets.size,
 
       transporters: this.transporterSockets.size,
+
       
       clients:      this.clientSockets.size,
       
@@ -1694,17 +1699,17 @@ export class SocketService {
       
       admins:       this.adminSockets.size,
       total: (
-        
+      
         this.delivererSockets.size +
-        
+      
         this.transporterSockets.size +
-        
+      
         this.clientSockets.size +
-        
+      
         this.freelancerSockets.size +
-        
+      
         this.supervisorSockets.size +
-        
+      
         this.managerSockets.size +
         
         this.adminSockets.size
