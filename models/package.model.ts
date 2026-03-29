@@ -79,6 +79,17 @@ export interface ITrackingEvent {
   timestamp: Date;
 }
 
+export interface IDeliveryOtp {
+
+  code: string;
+  expiresAt: Date;
+  stopIndex: number;
+  routeId: mongoose.Types.ObjectId;
+  generatedAt: Date;
+  verified: boolean;
+  verifiedAt?: Date;
+
+}
 
 export interface IPackage extends Document {
   trackingNumber: string;
@@ -144,6 +155,7 @@ export interface IPackage extends Document {
   isOverdue: boolean;
   canBeDelivered: boolean;
 
+  deliveryOtp?: IDeliveryOtp;
 
   updateStatus: (
     newStatus: PackageStatus,
@@ -394,6 +406,41 @@ const trackingEventSchema = new Schema<ITrackingEvent>({
 }, { _id: false });
 
 
+const deliveryOtpSchema = new Schema<IDeliveryOtp>({
+
+  code:{ 
+    type: String,  
+    required: true, 
+    trim: true },
+
+  expiresAt:{ 
+    type: Date,
+    required: true },
+
+  stopIndex:{ 
+    type: Number,  
+    required: true, 
+    min: 0 },
+
+  routeId:{ 
+    type: Schema.Types.ObjectId, 
+    ref: 'Route', 
+    required: true },
+    
+  generatedAt: 
+  { type: Date,    
+    default: Date.now },
+
+  verified:{ 
+    type: Boolean, 
+    default: false },
+
+  verifiedAt:{ 
+    type: Date },
+
+}, { _id: false });
+
+
 const packageSchema = new Schema<IPackage>({
 
   trackingNumber: {
@@ -574,7 +621,7 @@ const packageSchema = new Schema<IPackage>({
   lastAttemptDate: {
     type: Date,
   },
-  
+
   nextAttemptDate: {
     type: Date,
   },
@@ -611,6 +658,13 @@ const packageSchema = new Schema<IPackage>({
   deliveredAt: {
     type: Date,
   },
+
+  deliveryOtp: {
+    type: deliveryOtpSchema,
+    required: false,
+    default: null,
+  },
+
 }, {
   timestamps: true,
   toJSON: { virtuals: true },

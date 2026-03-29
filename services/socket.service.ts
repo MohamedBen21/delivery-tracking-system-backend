@@ -10,6 +10,7 @@ import FreelancerModel from "../models/freelancer.model";
 import PackageModel from "../models/package.model";
 import RouteModel from "../models/route.model";
 import { IUser } from "../models/user.model";
+import sendSMS from "../utils/sendSMS";
 
 
 
@@ -2498,32 +2499,45 @@ export class SocketService {
         .lean();
       if (!pkg) return;
 
-      // 6-digit OTP, valid 10 minutes
-      const code      = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiresAt = Date.now() + 10 * 60 * 1000;
-
-      this.deliveryOTPs.set(`delivery_otp_${packageId}`, { code, expiresAt });
-
-      // Persist on the package for durability across restarts
-      await PackageModel.findByIdAndUpdate(packageId, {
-        $set: {
-          "deliveryOtp.code":      code,
-          "deliveryOtp.expiresAt": new Date(expiresAt),
-          "deliveryOtp.stopIndex": stopIndex,
-          "deliveryOtp.routeId":   routeId,
-        },
-      });
-
       const recipientPhone = (pkg as any).destination?.recipientPhone;
       const trackingNumber = (pkg as any).trackingNumber;
 
-      if (recipientPhone) {
-        // TODO: replace with your SMS provider (Twilio, Vonage, etc.)
-        // await smsService.send(
-        //   recipientPhone,
-        //   `Your delivery OTP for package ${trackingNumber} is: ${code}. Valid for 10 minutes.`
-        // );
-        console.log(`[OTP] pkg=${packageId} phone=${recipientPhone} code=${code}`);
+      if (!recipientPhone) {
+        console.warn(`[OTP] No recipient phone for package ${packageId} -- OTP not sent`);
+        return;
+      }
+
+      // 6-digit OTP, valid 10 minutes
+      const code       = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt  = Date.now() + 10 * 60 * 1000;
+      const routeObjId = new mongoose.Types.ObjectId(routeId);
+
+      // Store in memory for fast lookup during complete_delivery
+      this.deliveryOTPs.set(`delivery_otp_${packageId}`, { code, expiresAt });
+
+      // Persist on the package so the code survives a server restart
+      await PackageModel.findByIdAndUpdate(packageId, {
+        $set: {
+          "deliveryOtp.code":        code,
+          "deliveryOtp.expiresAt":   new Date(expiresAt),
+          "deliveryOtp.stopIndex":   stopIndex,
+          "deliveryOtp.routeId":     routeObjId,
+          "deliveryOtp.generatedAt": new Date(),
+          "deliveryOtp.verified":    false,
+        },
+      });
+
+      // Send via Twilio SMS
+      const smsSent = await sendSMS({
+        to:      recipientPhone,
+        message: `Your delivery code for package ${trackingNumber} is: ${code}. Valid for 10 minutes. Do not share this code.`,
+      });
+
+      if (!smsSent) {
+        console.error(`[OTP] SMS failed for package ${packageId} to ${recipientPhone}`);
+        // OTP is still stored -- deliverer can ask client to check or request a resend
+      } else {
+        console.log(`[OTP] SMS sent to ${recipientPhone} for package ${packageId}`);
       }
     } catch (err) {
       console.error("[Socket] generateAndSendDeliveryOTP failed:", err);
