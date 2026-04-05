@@ -1,18 +1,22 @@
 import express from "express";
 import {
   activate,
+  changeEmail,
+  deleteProfilePicture,
+  googleLogin,
   login,
   logout,
   passwordRecovery,
-  register,
-  resetPassword,
   refreshTokens,
-  updateUser,
-  changeEmail,
-  googleLogin,
+  register,
   resendActivation,
+  resetPassword,
+  updateProfilePicture,
+  updateUser,
 } from "../controllers/auth.controller";
 import { checkFailedLogins, limiters } from "../middleware/redisRateLimiter";
+import { isAuthenticated } from "../middleware/auth";
+import { profileImageUpload } from "../middleware/uploadProfile";
 
 const authRouter = express.Router();
 
@@ -32,10 +36,17 @@ authRouter.post(
 );
 authRouter.post("/reset-password", resetPassword);
 authRouter.post("/refresh", refreshTokens);
-authRouter.post("/logout", logout);
 authRouter.post("/google", googleLogin);
 
-authRouter.put("/update", limiters.emailChange, updateUser);
+authRouter.post("/logout", isAuthenticated, logout);
+authRouter.put("/update", isAuthenticated, limiters.emailChange, updateUser);
 authRouter.post("/change-email", changeEmail);
+authRouter.put(
+  "/profile-picture",
+  isAuthenticated,
+  profileImageUpload,
+  updateProfilePicture,
+);
+authRouter.delete("/profile-picture", isAuthenticated, deleteProfilePicture);
 
 export default authRouter;
