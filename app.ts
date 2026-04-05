@@ -5,6 +5,11 @@ export const app = express();
 import cookieParser from "cookie-parser";
 import { ErrorMiddleware } from "./middleware/errors";
 import authRouter from "./routes/auth.routes";
+import freelancerRouter from "./routes/freelancer.routes";
+import managerRouter from "./routes/manager.routes";
+import supervisorRouter from "./routes/supervisor.routes";
+import transporterRouter from "./routes/transporter.routes";
+import delivererRouter from "./routes/deliverer.routes";
 
 app.use(express.json({ limit: "50mb" }));
 
@@ -25,6 +30,11 @@ app.get("/", (req: Request, res: Response, next: NextFunction) => {
 });
 
 app.use("/api/auth", authRouter);
+app.use("/api/freelancer", freelancerRouter);
+app.use("/api/manager", managerRouter);
+app.use("/api/supervisor", supervisorRouter);
+app.use("/api/transporter", transporterRouter);
+app.use("/api/deliverer", delivererRouter);
 
 app.all("*", (req: Request, res: Response, next: NextFunction) => {
   const err = new Error(`route ${req.originalUrl} not found :(`) as any;
