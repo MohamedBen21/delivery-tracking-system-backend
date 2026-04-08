@@ -4,11 +4,9 @@ import {
   createBranch,
   createCompany,
   createSupervisor,
-  createVehicle,
   getBranch,
   getBranchSupervisor,
   getCompany,
-  getCompanyVehicles,
   getMeManager,
   getMyBranches,
   getMyCompany,
@@ -20,7 +18,6 @@ import {
   updateCompany,
   updateMeManager,
   updateSupervisor,
-  updateVehicle,
 } from "../controllers/manager.controller";
 import {
   assignTransporter,
@@ -68,9 +65,6 @@ managerRouter.patch(
   toggleBlockSupervisor,
 );
 
-managerRouter.post("/companies/:companyId/vehicles", ...managerOrAdmin, createVehicle);
-managerRouter.get("/companies/:companyId/vehicles", ...managerOrAdmin, getCompanyVehicles);
-managerRouter.patch("/companies/:companyId/vehicles/:vehicleId", ...managerOrAdmin, updateVehicle);
 
 managerRouter.post("/companies/:companyId/transporters", ...managerOrAdmin, createTransporter);
 managerRouter.post(
@@ -96,3 +90,5 @@ managerRouter.patch(
 );
 
 export default managerRouter;
+
+
