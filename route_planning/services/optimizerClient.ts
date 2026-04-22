@@ -77,7 +77,7 @@ export interface OptimizerRoute {
   totalVolume:           number;
   distanceKm:            number;
   estimatedTimeMinutes:  number;
-  distanceSource:        "osrm" | "haversine";
+  distanceSource:        "osrm" | "haversine" | "n/a";
 }
 
 export interface OptimizerResponse {
