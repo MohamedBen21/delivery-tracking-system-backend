@@ -5,6 +5,12 @@ import dotenv from "dotenv";
 import { Logger } from "./Logger.util";
 import { getRedisClient } from "../databases/Redis.database";
 import { IUser } from "../models/user.model";
+import adminModel from "../models/admin.model";
+import clientModel from "../models/client.model";
+import delivererModel from "../models/deliverer.model";
+import transporterModel from "../models/transporter.model";
+import SupervisorModel from "../models/supervisor.model";
+import freelancerModel from "../models/freelancer.model";
 
 dotenv.config();
 
@@ -150,13 +156,40 @@ export const sendToken = async (
       refreshToken,
     );
 
+
+    //switch case for role 
+
+    let associated ;
+    switch (user.role){
+     case "admin":
+       associated = adminModel.findOne({user_id:user._id});
+
+     case "manager":
+       associated = adminModel.findOne({user_id:user._id});
+
+     case "client":
+       associated = clientModel.findOne({user_id:user._id});
+
+     case "deliverer":
+       associated = delivererModel.findOne({user_id:user._id});
+       
+     case "transporter":
+      associated = transporterModel.findOne({user_id:user._id});
+
+     case "supervisor":
+      associated = SupervisorModel.findOne({user_id:user._id});
+
+     case "freelancer":
+       associated = freelancerModel.findOne({user_id:user._id});
+
+    }
     // Set cookies
     res.cookie("accessToken", accessToken, accessTokenOptions);
     res.cookie("refreshToken", refreshToken, refreshTokenOptions);
 
-    // Also set for compatibility with both naming conventions
-    res.cookie("access_token", accessToken, accessTokenOptions);
-    res.cookie("refresh_token", refreshToken, refreshTokenOptions);
+    // // Also set for compatibility with both naming conventions
+    // res.cookie("access_token", accessToken, accessTokenOptions);
+    // res.cookie("refresh_token", refreshToken, refreshTokenOptions);
 
     // Remove sensitive data
     const userWithoutPassword = { ...user.toObject(), passwordHash: undefined };
@@ -165,8 +198,11 @@ export const sendToken = async (
       success: true,
       message,
       user: userWithoutPassword,
+      associated,
+      Role:user.role,
       accessToken,
     });
+    
   } catch (error) {
     Logger.error("Error in sendToken:", error);
     throw error;

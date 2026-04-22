@@ -22,11 +22,13 @@ import {
   getPackagesByReceiver,
   getPackagesBySender,
   getPackagesByStatus,
+  getPackagesPaginated,
   getPackageTracking,
   getRoute,
   getRoutes,
   getRoutesByBranch,
   resolvePackageIssue,
+  searchPackages,
   toggleBlockDeliverer,
   toggleBlockFreelancer,
   toggleCancelPackage,
@@ -110,6 +112,10 @@ supervisorRouter.patch(
   ...supOrAdmin,
   toggleCancelRoute,
 );
+
+supervisorRouter.get("/packages/search", isAuthenticated, searchPackages);
+supervisorRouter.get("/packages", isAuthenticated, getPackagesPaginated);
+
 
 export default supervisorRouter;
 

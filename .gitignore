@@ -1,3 +1,7 @@
 /node_modules
 .env
 .DS_Store
+
+
+# firebase admin sdk json file
+delivery-tracking-system-d7985-firebase-adminsdk-fbsvc-09342fb014.json

@@ -2,6 +2,7 @@ import express from "express";
 import {
   activate,
   changeEmail,
+  confirmPasswordReset,
   deleteProfilePicture,
   googleLogin,
   login,
@@ -9,10 +10,12 @@ import {
   passwordRecovery,
   refreshTokens,
   register,
+  requestPasswordReset,
   resendActivation,
   resetPassword,
   updateProfilePicture,
   updateUser,
+  verifyOTP,
 } from "../controllers/auth.controller";
 import { checkFailedLogins, limiters } from "../middleware/redisRateLimiter";
 import { isAuthenticated } from "../middleware/auth";
@@ -47,6 +50,12 @@ authRouter.put(
   profileImageUpload,
   updateProfilePicture,
 );
+
 authRouter.delete("/profile-picture", isAuthenticated, deleteProfilePicture);
+
+
+authRouter.post("/reset-password/request",    requestPasswordReset);
+authRouter.post("/reset-password/verify-otp", verifyOTP);
+authRouter.post("/reset-password/confirm",    confirmPasswordReset);
 
 export default authRouter;
