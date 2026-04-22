@@ -9128,3 +9128,334 @@ export const searchPackages = catchAsyncError(
     }
   },
 );
+
+
+
+
+export const getPackagesPaginated = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+
+      const limit = Math.min(
+        100,
+        Math.max(1, parseInt(req.query.limit as string) || 20),
+      );
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const skip = (page - 1) * limit;
+
+
+      const filter: Record<string, any> = {};
+
+
+      const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
+      const isValidId  = (val: string) => mongoose.Types.ObjectId.isValid(val);
+
+
+      if (req.query.companyId) {
+        if (!isValidId(req.query.companyId as string))
+          return next(new ErrorHandler("Invalid companyId.", 400));
+        filter.companyId = toObjectId(req.query.companyId as string);
+      }
+
+      if (req.query.clientId) {
+        if (!isValidId(req.query.clientId as string))
+          return next(new ErrorHandler("Invalid clientId.", 400));
+        filter.clientId = toObjectId(req.query.clientId as string);
+      }
+
+      if (req.query.originBranchId) {
+        if (!isValidId(req.query.originBranchId as string))
+          return next(new ErrorHandler("Invalid originBranchId.", 400));
+        filter.originBranchId = toObjectId(req.query.originBranchId as string);
+      }
+
+      if (req.query.currentBranchId) {
+        if (!isValidId(req.query.currentBranchId as string))
+          return next(new ErrorHandler("Invalid currentBranchId.", 400));
+        filter.currentBranchId = toObjectId(req.query.currentBranchId as string);
+      }
+
+      if (req.query.assignedDelivererId) {
+        if (!isValidId(req.query.assignedDelivererId as string))
+          return next(new ErrorHandler("Invalid assignedDelivererId.", 400));
+        filter.assignedDelivererId = toObjectId(req.query.assignedDelivererId as string);
+      }
+
+
+      const VALID_STATUSES: PackageStatus[] = [
+        "pending", "accepted", "at_origin_branch", "in_transit_to_branch",
+        "at_destination_branch", "out_for_delivery", "delivered",
+        "failed_delivery", "rescheduled", "returned", "cancelled",
+        "lost", "damaged", "on_hold",
+      ];
+      if (req.query.status) {
+        const s = req.query.status as string;
+        if (!VALID_STATUSES.includes(s as PackageStatus))
+          return next(new ErrorHandler(`Invalid status: ${s}.`, 400));
+        filter.status = s;
+      }
+
+      const VALID_TYPES: PackageType[] = [
+        "document", "parcel", "fragile", "heavy",
+        "perishable", "electronic", "clothing",
+      ];
+      if (req.query.type) {
+        const t = req.query.type as string;
+        if (!VALID_TYPES.includes(t as PackageType))
+          return next(new ErrorHandler(`Invalid package type: ${t}.`, 400));
+        filter.type = t;
+      }
+
+      const VALID_PAYMENT_STATUSES: PaymentStatus[] = [
+        "pending", "paid", "partially_paid", "refunded", "failed",
+      ];
+      if (req.query.paymentStatus) {
+        const ps = req.query.paymentStatus as string;
+        if (!VALID_PAYMENT_STATUSES.includes(ps as PaymentStatus))
+          return next(new ErrorHandler(`Invalid paymentStatus: ${ps}.`, 400));
+        filter.paymentStatus = ps;
+      }
+
+      const VALID_PRIORITIES = ["standard", "express", "same_day"];
+      if (req.query.deliveryPriority) {
+        const dp = req.query.deliveryPriority as string;
+        if (!VALID_PRIORITIES.includes(dp))
+          return next(new ErrorHandler(`Invalid deliveryPriority: ${dp}.`, 400));
+        filter.deliveryPriority = dp;
+      }
+
+      const VALID_DELIVERY_TYPES: DeliveryType[] = ["home", "branch_pickup"];
+      if (req.query.deliveryType) {
+        const dt = req.query.deliveryType as string;
+        if (!VALID_DELIVERY_TYPES.includes(dt as DeliveryType))
+          return next(new ErrorHandler(`Invalid deliveryType: ${dt}.`, 400));
+        filter.deliveryType = dt;
+      }
+
+
+      if (req.query.isFragile !== undefined) {
+        filter.isFragile = req.query.isFragile === "true";
+      }
+
+      if (req.query.isReturn !== undefined) {
+        filter["returnInfo.isReturn"] = req.query.isReturn === "true";
+      }
+
+      if (req.query.hasIssues !== undefined) {
+        filter.issues =
+          req.query.hasIssues === "true"
+            ? { $elemMatch: { resolved: false } }
+            : { $not: { $elemMatch: { resolved: false } } };
+      }
+
+
+      const applyRange = (
+        field: string,
+        minKey: string,
+        maxKey: string,
+      ) => {
+        const min = req.query[minKey]
+          ? parseFloat(req.query[minKey] as string)
+          : null;
+        const max = req.query[maxKey]
+          ? parseFloat(req.query[maxKey] as string)
+          : null;
+        if (min !== null || max !== null) {
+          filter[field] = {
+            ...(min !== null && !isNaN(min) && { $gte: min }),
+            ...(max !== null && !isNaN(max) && { $lte: max }),
+          };
+        }
+      };
+
+      applyRange("weight",            "minWeight", "maxWeight");
+      applyRange("volume",            "minVolume", "maxVolume");
+      applyRange("dimensions.length", "minLength", "maxLength");
+      applyRange("dimensions.width",  "minWidth",  "maxWidth");
+      applyRange("dimensions.height", "minHeight", "maxHeight");
+
+
+      if (req.query.city) {
+        filter["destination.city"] = new RegExp(req.query.city as string, "i");
+      }
+      if (req.query.state) {
+        filter["destination.state"] = new RegExp(req.query.state as string, "i");
+      }
+
+
+      const [total, packages] = await Promise.all([
+        PackageModel.countDocuments(filter),
+        PackageModel.find(filter)
+          .skip(skip)
+          .limit(limit)
+          .lean({ virtuals: true }), // include virtuals so estimatedTimeRemaining is present
+      ]);
+
+
+      let filtered = packages as any[];
+
+      if (req.query.isOverdue !== undefined) {
+        const wantOverdue = req.query.isOverdue === "true";
+        filtered = filtered.filter((pkg) => pkg.isOverdue === wantOverdue);
+      }
+
+
+      const sortBy = (req.query.sortBy as string) || "estimatedTimeRemaining";
+      const order  = req.query.order === "desc" ? -1 : 1;
+
+      if (sortBy === "estimatedTimeRemaining") {
+
+        filtered.sort((a, b) => {
+          const aVal = a.estimatedTimeRemaining ?? Infinity;
+          const bVal = b.estimatedTimeRemaining ?? Infinity;
+          return (aVal - bVal) * order;
+        });
+      } else if (sortBy === "weight") {
+        filtered.sort((a, b) => (a.weight - b.weight) * order);
+      } else if (sortBy === "totalPrice") {
+        filtered.sort((a, b) => (a.totalPrice - b.totalPrice) * order);
+      } else if (sortBy === "createdAt") {
+        filtered.sort(
+          (a, b) =>
+            (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) *
+            order,
+        );
+      } else if (sortBy === "attemptCount") {
+        filtered.sort((a, b) => (a.attemptCount - b.attemptCount) * order);
+      }
+
+
+      const formattedPackages = filtered.map((pkg) => ({
+        id: pkg._id,
+        trackingNumber: pkg.trackingNumber,
+        status: pkg.status,
+        type: pkg.type,
+        isFragile: pkg.isFragile,
+
+
+        senderId: pkg.senderId,
+        senderType: pkg.senderType,
+        clientId: pkg.clientId ?? null,
+
+
+        weight: pkg.weight,
+        volume: pkg.volume ?? null,
+        dimensions: pkg.dimensions ?? null,
+
+
+        destination: {
+          recipientName: pkg.destination.recipientName,
+          recipientPhone: pkg.destination.recipientPhone,
+          alternativePhone: pkg.destination.alternativePhone ?? null,
+          address: pkg.destination.address,
+          city: pkg.destination.city,
+          state: pkg.destination.state,
+          postalCode: pkg.destination.postalCode ?? null,
+          notes: pkg.destination.notes ?? null,
+        },
+
+
+        deliveryType: pkg.deliveryType,
+        deliveryPriority: pkg.deliveryPriority,
+        estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
+
+
+        estimatedTimeRemaining: pkg.estimatedTimeRemaining ?? null,
+        isOverdue: pkg.isOverdue,
+        deliveryProgress: pkg.deliveryProgress,
+        canBeDelivered: pkg.canBeDelivered,
+        needsAttention: pkg.needsAttention,
+        isInTransit: pkg.isInTransit,
+        isAtBranch: pkg.isAtBranch,
+
+
+        totalPrice: pkg.totalPrice,
+        paymentStatus: pkg.paymentStatus,
+        paymentMethod: pkg.paymentMethod ?? null,
+        paidAt: pkg.paidAt ?? null,
+
+
+        assignedDelivererId: pkg.assignedDelivererId ?? null,
+        assignedTransporterId: pkg.assignedTransporterId ?? null,
+        assignedVehicleId: pkg.assignedVehicleId ?? null,
+
+
+        attemptCount: pkg.attemptCount,
+        maxAttempts: pkg.maxAttempts,
+        lastAttemptDate: pkg.lastAttemptDate ?? null,
+        nextAttemptDate: pkg.nextAttemptDate ?? null,
+
+
+        returnInfo: pkg.returnInfo,
+
+
+        unresolvedIssuesCount: (pkg.issues as IIssue[]).filter(
+          (i) => !i.resolved,
+        ).length,
+
+
+        createdAt: pkg.createdAt,
+        updatedAt: pkg.updatedAt,
+        deliveredAt: pkg.deliveredAt ?? null,
+      }));
+
+      res.status(200).json({
+        success: true,
+        data: {
+          packages: formattedPackages,
+          pagination: {
+            total: filtered.length, 
+            page,
+            limit,
+            pages: Math.ceil(filtered.length / limit),
+            hasMore: filtered.length > skip + limit,
+          },
+          filters: {
+            status:               req.query.status               ?? null,
+            type:                 req.query.type                 ?? null,
+            paymentStatus:        req.query.paymentStatus        ?? null,
+            deliveryPriority:     req.query.deliveryPriority     ?? null,
+            deliveryType:         req.query.deliveryType         ?? null,
+            isFragile:            req.query.isFragile            ?? null,
+            isOverdue:            req.query.isOverdue            ?? null,
+            isReturn:             req.query.isReturn             ?? null,
+            hasIssues:            req.query.hasIssues            ?? null,
+            minWeight:            req.query.minWeight            ?? null,
+            maxWeight:            req.query.maxWeight            ?? null,
+            minVolume:            req.query.minVolume            ?? null,
+            maxVolume:            req.query.maxVolume            ?? null,
+            minLength:            req.query.minLength            ?? null,
+            maxLength:            req.query.maxLength            ?? null,
+            minWidth:             req.query.minWidth             ?? null,
+            maxWidth:             req.query.maxWidth             ?? null,
+            minHeight:            req.query.minHeight            ?? null,
+            maxHeight:            req.query.maxHeight            ?? null,
+            city:                 req.query.city                 ?? null,
+            state:                req.query.state                ?? null,
+            clientId:             req.query.clientId             ?? null,
+            companyId:            req.query.companyId            ?? null,
+            originBranchId:       req.query.originBranchId       ?? null,
+            currentBranchId:      req.query.currentBranchId      ?? null,
+            assignedDelivererId:  req.query.assignedDelivererId  ?? null,
+            sortBy:               sortBy,
+            order:                req.query.order                ?? "asc",
+          },
+        },
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+      return next(
+        new ErrorHandler(error.message || "Error fetching packages.", 500),
+      );
+    }
+  },
+);
