@@ -1,3 +1,4 @@
+require("dotenv").config();
 import { NextFunction, Request, Response } from "express";
 import { catchAsyncError } from "../middleware/catchAsyncErrors";
 import User from "../models/user.model";
@@ -23,6 +24,9 @@ import { clearTokens, sendToken } from "../utils/Token.util";
 import cloudinary from "cloudinary";
 import userModel from "../models/user.model";
 import { getRedisClient } from "../databases/Redis.database";
+import jwt from "jsonwebtoken";
+import twilio from "twilio";
+import sendSMS from "../utils/sendSMS";
 
 
 export const register = catchAsyncError(
@@ -820,5 +824,327 @@ export const deleteProfilePicture = catchAsyncError(
       success: true,
       message: "Profile picture removed successfully",
     });
+  },
+);
+
+
+
+
+
+const generateOTP = (): string =>
+  Math.floor(100000 + Math.random() * 900000).toString();
+
+
+const createOTPToken = (
+  otp: string,
+  contact: { email?: string; phone?: string },
+): string => {
+  const expireMinutes = parseInt(process.env.OTP_EXPIRE ?? "10", 10);
+  return jwt.sign(
+    { otp, ...contact },
+    process.env.OTP_SECRET as string,
+    { expiresIn: expireMinutes * 60 }, 
+  );
+};
+
+
+
+const createResetToken = (userId: string): string =>
+  jwt.sign(
+    { userId, verified: true },
+    process.env.RESET_TOKEN_SECRET as string,
+    { expiresIn: "15m" },
+  );
+
+
+const ALLOWED_ROLES = ["deliverer", "transporter"];
+
+const twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN,
+);
+
+
+
+export const requestPasswordReset = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { identifier } = req.body as { identifier?: string };
+
+      if (!identifier || typeof identifier !== "string") {
+        return next(new ErrorHandler("Email or phone number is required.", 400));
+      }
+
+      const sanitized = identifier.trim().toLowerCase();
+
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const phoneRegex = /^(\+213|0)(5|6|7)[0-9]{8}$/;
+
+      const isEmail = emailRegex.test(sanitized);
+      const isPhone = phoneRegex.test(identifier.trim());
+
+      if (!isEmail && !isPhone) {
+        return next(
+          new ErrorHandler(
+            "Please provide a valid email address or Algerian phone number.",
+            400,
+          ),
+        );
+      }
+
+
+      const query = isEmail ? { email: sanitized } : { phone: identifier.trim() };
+      const user = await userModel.findOne(query);
+
+      if (!user) {
+
+        return next(
+          new ErrorHandler(
+            "Account not found with the provided email or phone number.",
+            404,
+          ),
+        );
+      }
+
+
+      if (!ALLOWED_ROLES.includes(user.role)) {
+        return next(
+          new ErrorHandler(
+            "Password reset via OTP is only available for deliverers and transporters.",
+            403,
+          ),
+        );
+      }
+
+
+      if (user.status === "suspended") {
+        return next(new ErrorHandler("This account has been suspended.", 403));
+      }
+
+      if (user.status === "inactive") {
+        return next(new ErrorHandler("This account is inactive.", 403));
+      }
+
+
+      const otp = generateOTP();
+      const otpToken = isEmail
+        ? createOTPToken(otp, { email: sanitized })
+        : createOTPToken(otp, { phone: identifier.trim() });
+
+
+      if (isEmail) {
+        const templatePath = path.join(
+          __dirname,
+          "..",
+          "mails",
+          "reset_password_otp.ejs",
+        );
+
+        let html: string;
+        if (fs.existsSync(templatePath)) {
+          const template = fs.readFileSync(templatePath, "utf8");
+          html = ejs.render(template, {
+            firstName: user.firstName,
+            otp,
+            expireMinutes: process.env.OTP_EXPIRE ?? 10,
+          });
+        } else {
+  
+          html = `<p>Hi ${user.firstName},</p>
+                  <p>Your password reset OTP is: <strong>${otp}</strong></p>
+                  <p>It expires in ${process.env.OTP_EXPIRE ?? 10} minutes.</p>`;
+        }
+
+        await Mail.sendMail({
+          from: `Delivery tracking system <${process.env.SMTP_MAIL}>`,
+          to: sanitized,
+          subject: `Your password reset code: ${otp}`,
+          html,
+        });
+
+        res.status(200).json({
+          success: true,
+          message: `OTP sent to your email: ${sanitized}`,
+          otp_token: otpToken,
+          method: "email",
+
+        });
+      } else {
+
+        const smsSent = await sendSMS({
+            to: identifier.trim(),
+            message: `Your OTP for password reset is: ${otp}. Valid for ${process.env.OTP_EXPIRE} minutes.`,
+          });
+
+        if (!smsSent) {
+          return next(
+            new ErrorHandler("Failed to send OTP. Please try again.", 500)
+          );
+        }
+
+        res.status(200).json({
+          success: true,
+          message: `OTP sent to your phone: ${identifier.trim()}`,
+          otp_token: otpToken,
+          method: "phone",
+
+        });
+      }
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error sending OTP.", 500));
+    }
+  },
+);
+
+
+
+export const verifyOTP = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { otp_token, otp } = req.body as {
+        otp_token?: string;
+        otp?: string;
+      };
+
+      if (!otp_token || !otp) {
+        return next(new ErrorHandler("OTP token and OTP are required.", 400));
+      }
+
+
+      let decoded: { otp: string; email?: string; phone?: string };
+      try {
+        decoded = jwt.verify(
+          otp_token,
+          process.env.OTP_SECRET as string,
+        ) as typeof decoded;
+      } catch (err: any) {
+        if (err.name === "TokenExpiredError") {
+          return next(new ErrorHandler("OTP has expired. Please request a new one.", 400));
+        }
+        return next(new ErrorHandler("Invalid OTP token.", 400));
+      }
+
+
+      if (decoded.otp !== otp.trim()) {
+        return next(new ErrorHandler("Incorrect OTP. Please try again.", 400));
+      }
+
+
+      const query = decoded.email
+        ? { email: decoded.email }
+        : { phone: decoded.phone };
+
+      const user = await userModel.findOne(query);
+
+      if (!user) {
+        return next(new ErrorHandler("User not found.", 404));
+      }
+
+      if (!ALLOWED_ROLES.includes(user.role)) {
+        return next(new ErrorHandler("Unauthorized role.", 403));
+      }
+
+
+      const reset_token = createResetToken(user._id.toString());
+
+      res.status(200).json({
+        success: true,
+        message: "OTP verified successfully. Proceed to reset your password.",
+        reset_token,
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error verifying OTP.", 500));
+    }
+  },
+);
+
+
+
+export const confirmPasswordReset = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { reset_token, new_password, confirm_password } = req.body as {
+        reset_token?: string;
+        new_password?: string;
+        confirm_password?: string;
+      };
+
+
+      if (!reset_token || !new_password || !confirm_password) {
+        return next(new ErrorHandler("All fields are required.", 400));
+      }
+
+      if (new_password !== confirm_password) {
+        return next(new ErrorHandler("Passwords do not match.", 400));
+      }
+
+      if (new_password.length < 6) {
+        return next(
+          new ErrorHandler("Password must be at least 6 characters long.", 400),
+        );
+      }
+
+
+      let decoded: { userId: string; verified: boolean };
+      try {
+        decoded = jwt.verify(
+          reset_token,
+          process.env.RESET_TOKEN_SECRET as string,
+        ) as typeof decoded;
+      } catch (err: any) {
+        if (err.name === "TokenExpiredError") {
+          return next(
+            new ErrorHandler(
+              "Reset session has expired. Please start over.",
+              400,
+            ),
+          );
+        }
+        return next(new ErrorHandler("Invalid reset token.", 400));
+      }
+
+      if (!decoded.verified) {
+        return next(new ErrorHandler("Reset token is not verified.", 400));
+      }
+
+
+      const user = await userModel
+        .findById(decoded.userId)
+        .select("+passwordHash role status");
+
+      if (!user) {
+        return next(new ErrorHandler("User not found.", 404));
+      }
+
+      if (!ALLOWED_ROLES.includes(user.role)) {
+        return next(new ErrorHandler("Unauthorized role.", 403));
+      }
+
+      if (user.status === "suspended") {
+        return next(new ErrorHandler("This account has been suspended.", 403));
+      }
+
+
+      user.passwordHash = new_password;
+      await user.save();
+
+      res.status(200).json({
+        success: true,
+        message: "Password has been reset successfully. You can now log in.",
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+      return next(new ErrorHandler(error.message || "Error resetting password.", 500));
+    }
   },
 );
