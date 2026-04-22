@@ -9,7 +9,7 @@ import ErrorHandler from "../utils/ErrorHandler";
 import ManagerModel from "../models/manager.model";
 import CompanyModel from "../models/company.model";
 import TransporterModel from "../models/transporter.model";
-import PackageModel, { DeliveryType, PackageStatus, PackageType, PaymentStatus } from "../models/package.model";
+import PackageModel, { DeliveryType, IIssue, PackageStatus, PackageType, PaymentStatus } from "../models/package.model";
 import FreelancerModel from "../models/freelancer.model";
 import clientModel from "../models/client.model";
 import PackageHistoryModel from "../models/package-history.model";
@@ -8591,3 +8591,540 @@ export const updateMeSupervisor = catchAsyncError(
   },
 );
 
+
+
+
+export const searchPackages = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+
+      const limit = Math.min(
+        100,
+        Math.max(1, parseInt(req.query.limit as string) || 20),
+      );
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const skip = (page - 1) * limit;
+
+
+      const rawSearch = (req.query.q as string)?.trim() ?? "";
+
+
+      const matchStage: Record<string, any> = {};
+
+      // companyId scope (supervisors / managers will always pass this)
+      if (req.query.companyId) {
+        if (!mongoose.Types.ObjectId.isValid(req.query.companyId as string)) {
+          return next(new ErrorHandler("Invalid companyId.", 400));
+        }
+        matchStage.companyId = new mongoose.Types.ObjectId(
+          req.query.companyId as string,
+        );
+      }
+
+
+      if (req.query.clientId) {
+        if (!mongoose.Types.ObjectId.isValid(req.query.clientId as string)) {
+          return next(new ErrorHandler("Invalid clientId.", 400));
+        }
+        matchStage.clientId = new mongoose.Types.ObjectId(
+          req.query.clientId as string,
+        );
+      }
+
+
+      const VALID_STATUSES: PackageStatus[] = [
+        "pending", "accepted", "at_origin_branch", "in_transit_to_branch",
+        "at_destination_branch", "out_for_delivery", "delivered",
+        "failed_delivery", "rescheduled", "returned", "cancelled",
+        "lost", "damaged", "on_hold",
+      ];
+
+      if (req.query.status) {
+        const s = req.query.status as string;
+        if (!VALID_STATUSES.includes(s as PackageStatus)) {
+          return next(new ErrorHandler(`Invalid status: ${s}`, 400));
+        }
+        matchStage.status = s;
+      }
+
+
+      const VALID_TYPES: PackageType[] = [
+        "document", "parcel", "fragile", "heavy",
+        "perishable", "electronic", "clothing",
+      ];
+
+      if (req.query.type) {
+        const t = req.query.type as string;
+        if (!VALID_TYPES.includes(t as PackageType)) {
+          return next(new ErrorHandler(`Invalid package type: ${t}`, 400));
+        }
+        matchStage.type = t;
+      }
+
+  
+      const VALID_PAYMENT_STATUSES: PaymentStatus[] = [
+        "pending", "paid", "partially_paid", "refunded", "failed",
+      ];
+
+      if (req.query.paymentStatus) {
+        const ps = req.query.paymentStatus as string;
+        if (!VALID_PAYMENT_STATUSES.includes(ps as PaymentStatus)) {
+          return next(new ErrorHandler(`Invalid paymentStatus: ${ps}`, 400));
+        }
+        matchStage.paymentStatus = ps;
+      }
+
+
+      const VALID_PRIORITIES = ["standard", "express", "same_day"];
+
+      if (req.query.deliveryPriority) {
+
+        const dp = req.query.deliveryPriority as string;
+        if (!VALID_PRIORITIES.includes(dp)) {
+
+          return next(new ErrorHandler(`Invalid deliveryPriority: ${dp}`, 400));
+        }
+        matchStage.deliveryPriority = dp;
+      }
+
+
+      const VALID_DELIVERY_TYPES: DeliveryType[] = ["home", "branch_pickup"];
+
+      if (req.query.deliveryType) {
+
+        const dt = req.query.deliveryType as string;
+        if (!VALID_DELIVERY_TYPES.includes(dt as DeliveryType)) {
+
+          return next(new ErrorHandler(`Invalid deliveryType: ${dt}`, 400));
+        }
+        matchStage.deliveryType = dt;
+      }
+
+
+      if (req.query.isFragile !== undefined) {
+        matchStage.isFragile = req.query.isFragile === "true";
+      }
+
+
+      if (req.query.isReturn !== undefined) {
+        matchStage["returnInfo.isReturn"] = req.query.isReturn === "true";
+      }
+
+
+      if (req.query.hasIssues !== undefined) {
+
+        if (req.query.hasIssues === "true") {
+          matchStage["issues"] = { $elemMatch: { resolved: false } };
+        } else {
+          matchStage["issues"] = {
+            $not: { $elemMatch: { resolved: false } },
+          };
+        }
+      }
+
+
+      if (req.query.needsAttention === "true") {
+        matchStage.status = {
+          $in: ["failed_delivery", "damaged", "lost", "on_hold"],
+        };
+      }
+
+
+      if (req.query.minWeight || req.query.maxWeight) {
+        matchStage.weight = {
+          ...(req.query.minWeight && {
+            $gte: parseFloat(req.query.minWeight as string),
+          }),
+          ...(req.query.maxWeight && {
+            $lte: parseFloat(req.query.maxWeight as string),
+          }),
+        };
+      }
+
+
+      if (req.query.minVolume || req.query.maxVolume) {
+        matchStage.volume = {
+          ...(req.query.minVolume && {
+            $gte: parseFloat(req.query.minVolume as string),
+          }),
+          ...(req.query.maxVolume && {
+            $lte: parseFloat(req.query.maxVolume as string),
+          }),
+        };
+      }
+
+
+      if (req.query.minLength || req.query.maxLength) {
+        matchStage["dimensions.length"] = {
+          ...(req.query.minLength && {
+            $gte: parseFloat(req.query.minLength as string),
+          }),
+          ...(req.query.maxLength && {
+            $lte: parseFloat(req.query.maxLength as string),
+          }),
+        };
+      }
+
+
+      if (req.query.minWidth || req.query.maxWidth) {
+        matchStage["dimensions.width"] = {
+          ...(req.query.minWidth && {
+            $gte: parseFloat(req.query.minWidth as string),
+          }),
+          ...(req.query.maxWidth && {
+            $lte: parseFloat(req.query.maxWidth as string),
+          }),
+        };
+      }
+
+
+      if (req.query.minHeight || req.query.maxHeight) {
+        matchStage["dimensions.height"] = {
+          ...(req.query.minHeight && {
+            $gte: parseFloat(req.query.minHeight as string),
+          }),
+          ...(req.query.maxHeight && {
+            $lte: parseFloat(req.query.maxHeight as string),
+          }),
+        };
+      }
+
+
+      if (req.query.city) {
+        matchStage["destination.city"] = new RegExp(
+          req.query.city as string,
+          "i",
+        );
+      }
+
+      if (req.query.state) {
+        matchStage["destination.state"] = new RegExp(
+          req.query.state as string,
+          "i",
+        );
+      }
+
+
+      if (req.query.originBranchId) {
+
+        if (!mongoose.Types.ObjectId.isValid(req.query.originBranchId as string)) {
+          return next(new ErrorHandler("Invalid originBranchId.", 400));
+        }
+        matchStage.originBranchId = new mongoose.Types.ObjectId(
+          req.query.originBranchId as string,
+        );
+      }
+
+      if (req.query.currentBranchId) {
+        if (!mongoose.Types.ObjectId.isValid(req.query.currentBranchId as string)) {
+          return next(new ErrorHandler("Invalid currentBranchId.", 400));
+        }
+        matchStage.currentBranchId = new mongoose.Types.ObjectId(
+          req.query.currentBranchId as string,
+        );
+      }
+
+
+      if (req.query.assignedDelivererId) {
+        if (!mongoose.Types.ObjectId.isValid(req.query.assignedDelivererId as string)) {
+          return next(new ErrorHandler("Invalid assignedDelivererId.", 400));
+        }
+        matchStage.assignedDelivererId = new mongoose.Types.ObjectId(
+          req.query.assignedDelivererId as string,
+        );
+      }
+
+
+      const pipeline: any[] = [
+
+        //  primary filters (all indexed fields)
+        { $match: matchStage },
+
+        // compute estimatedTimeRemaining in minutes so we can sort
+        //    Mirrors the virtual: max(0, round((estimatedDeliveryTime - now) / 60000))
+        {
+          $addFields: {
+            _estimatedTimeRemaining: {
+              $cond: {
+                if: {
+                  $and: [
+                    { $ifNull: ["$estimatedDeliveryTime", false] },
+                    { $ne: ["$status", "delivered"] },
+                  ],
+                },
+                then: {
+                  $max: [
+                    0,
+                    {
+                      $round: [
+                        {
+                          $divide: [
+                            {
+                              $subtract: [
+                                "$estimatedDeliveryTime",
+                                new Date(),
+                              ],
+                            },
+                            3600000, 
+                          ],
+                        },
+                        0,
+                      ],
+                    },
+                  ],
+                },
+                else: null,
+              },
+            },
+
+            
+            _isOverdue: {
+              $cond: {
+                if: {
+                  $and: [
+                    { $ifNull: ["$estimatedDeliveryTime", false] },
+                    { $ne: ["$status", "delivered"] },
+                    { $lt: ["$estimatedDeliveryTime", new Date()] },
+                  ],
+                },
+                then: true,
+                else: false,
+              },
+            },
+          },
+        },
+
+        // isOverdue filter (post-computed)
+        ...(req.query.isOverdue !== undefined
+          ? [
+              {
+                $match: {
+                  _isOverdue: req.query.isOverdue === "true",
+                },
+              },
+            ]
+          : []),
+
+        // text search across tracking number, recipient name/phone
+        ...(rawSearch
+          ? [
+              {
+                $match: {
+                  $or: [
+                    // Exact tracking number match (most common lookup — fast)
+                    {
+                      trackingNumber: {
+                        $regex: rawSearch,
+                        $options: "i",
+                      },
+                    },
+                    // Recipient name (partial match)
+                    {
+                      "destination.recipientName": {
+                        $regex: rawSearch,
+                        $options: "i",
+                      },
+                    },
+                    // Recipient phone (partial match — useful for +213 vs 0 prefix)
+                    {
+                      "destination.recipientPhone": {
+                        $regex: rawSearch,
+                        $options: "i",
+                      },
+                    },
+                    // Also check alternative phone
+                    {
+                      "destination.alternativePhone": {
+                        $regex: rawSearch,
+                        $options: "i",
+                      },
+                    },
+                  ],
+                },
+              },
+
+              // ── Relevance scoring: exact tracking number > starts-with > partial
+              {
+                $addFields: {
+                  _searchScore: {
+                    $add: [
+                      // Exact tracking number → highest priority
+                      {
+                        $cond: [
+                          {
+                            $regexMatch: {
+                              input: "$trackingNumber",
+                              regex: `^${rawSearch}$`,
+                              options: "i",
+                            },
+                          },
+                          10,
+                          0,
+                        ],
+                      },
+                      // Tracking number starts-with
+                      {
+                        $cond: [
+                          {
+                            $regexMatch: {
+                              input: "$trackingNumber",
+                              regex: `^${rawSearch}`,
+                              options: "i",
+                            },
+                          },
+                          5,
+                          0,
+                        ],
+                      },
+                      // Recipient name starts-with
+                      {
+                        $cond: [
+                          {
+                            $regexMatch: {
+                              input: { $toLower: "$destination.recipientName" },
+                              regex: `^${rawSearch.toLowerCase()}`,
+                            },
+                          },
+                          3,
+                          0,
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+            ]
+          : [
+              // No search query — assign neutral score
+              { $addFields: { _searchScore: 0 } },
+            ]),
+
+        // sort
+        //    Primary:   search relevance (desc)
+        //    Secondary: estimatedTimeRemaining ASC
+        //               → packages expiring soonest bubble to the top
+        //               → null (delivered / no estimate) sink to the bottom
+        {
+          $sort: {
+            _searchScore: -1,
+            _estimatedTimeRemaining: 1,
+            createdAt: -1, // tie-breaker
+          },
+        },
+
+        // facet for total count + paginated data in one round-trip
+        {
+          $facet: {
+            metadata: [{ $count: "total" }],
+            data: [
+              { $skip: skip },
+              { $limit: limit },
+              // Drop internal pipeline fields from the response
+              {
+                $project: {
+                  _estimatedTimeRemaining: 0,
+                  _isOverdue: 0,
+                  _searchScore: 0,
+                },
+              },
+            ],
+          },
+        },
+      ];
+
+
+      const [result] = await PackageModel.aggregate(pipeline);
+
+      const total: number = result.metadata[0]?.total ?? 0;
+      const packages: any[] = result.data ?? [];
+
+
+      const formattedPackages = packages.map((pkg) => ({
+        id: pkg._id,
+        trackingNumber: pkg.trackingNumber,
+        status: pkg.status,
+        type: pkg.type,
+        isFragile: pkg.isFragile,
+
+
+        senderId: pkg.senderId,
+        senderType: pkg.senderType,
+        clientId: pkg.clientId ?? null,
+
+
+        weight: pkg.weight,
+        volume: pkg.volume ?? null,
+        dimensions: pkg.dimensions ?? null,
+
+
+        destination: {
+          recipientName: pkg.destination.recipientName,
+          recipientPhone: pkg.destination.recipientPhone,
+          alternativePhone: pkg.destination.alternativePhone ?? null,
+          address: pkg.destination.address,
+          city: pkg.destination.city,
+          state: pkg.destination.state,
+          postalCode: pkg.destination.postalCode ?? null,
+          notes: pkg.destination.notes ?? null,
+        },
+
+
+        deliveryType: pkg.deliveryType,
+        deliveryPriority: pkg.deliveryPriority,
+        estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
+
+        totalPrice: pkg.totalPrice,
+        paymentStatus: pkg.paymentStatus,
+        paymentMethod: pkg.paymentMethod ?? null,
+
+
+        assignedDelivererId: pkg.assignedDelivererId ?? null,
+        assignedTransporterId: pkg.assignedTransporterId ?? null,
+        assignedVehicleId: pkg.assignedVehicleId ?? null,
+
+
+        attemptCount: pkg.attemptCount,
+        maxAttempts: pkg.maxAttempts,
+        nextAttemptDate: pkg.nextAttemptDate ?? null,
+
+
+        returnInfo: pkg.returnInfo,
+
+
+        unresolvedIssuesCount: (pkg.issues as any[]).filter(
+          (i) => !i.resolved,
+        ).length,
+
+
+        createdAt: pkg.createdAt,
+        updatedAt: pkg.updatedAt,
+        deliveredAt: pkg.deliveredAt ?? null,
+      }));
+
+      res.status(200).json({
+        success: true,
+        data: {
+          packages: formattedPackages,
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+          hasMore: total > skip + limit,
+          query: rawSearch || null,
+        },
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+      return next(new ErrorHandler(error.message || "Error searching packages.", 500));
+    }
+  },
+);
