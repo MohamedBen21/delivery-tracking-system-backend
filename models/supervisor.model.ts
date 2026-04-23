@@ -314,7 +314,7 @@ supervisorSchema.pre('save', function(next) {
   next();
 });
 
-supervisorSchema.index({ userId: 1 });
+// supervisorSchema.index({ userId: 1 }); // duplicate: userId already indexed via `unique: true`
 supervisorSchema.index({ branchId: 1 });
 supervisorSchema.index({ companyId: 1 });
 supervisorSchema.index({ isActive: 1 });

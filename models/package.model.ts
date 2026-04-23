@@ -943,7 +943,7 @@ packageSchema.pre('save', function(next) {
   next();
 });
 
-packageSchema.index({ trackingNumber: 1 });
+// packageSchema.index({ trackingNumber: 1 }); // duplicate: trackingNumber already indexed via `unique: true`
 packageSchema.index({ companyId: 1, status: 1 });
 packageSchema.index({ clientId: 1 });
 packageSchema.index({ originBranchId: 1, status: 1 });

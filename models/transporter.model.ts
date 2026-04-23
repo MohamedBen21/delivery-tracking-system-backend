@@ -42,6 +42,7 @@ export interface ITransporter extends Document {
   averageDeliveryTime: number; 
   
   isActive: boolean;
+  isOnline: boolean;
   isSuspended: boolean;
   suspensionReason?: string;
   suspensionEndDate?: Date;
@@ -232,6 +233,10 @@ const transporterSchema = new Schema<ITransporter>({
     default: true,
     index: true,
   },
+  isOnline: {
+    type: Boolean,
+    default: false,
+  },
   isSuspended: {
     type: Boolean,
     default: false,
@@ -389,8 +394,8 @@ transporterSchema.pre('save', function(next) {
   next();
 });
 
-transporterSchema.index({ userId: 1 });
-transporterSchema.index({ companyId: 1 });
+// transporterSchema.index({ userId: 1 }); 
+// transporterSchema.index({ companyId: 1 }); 
 transporterSchema.index({ verificationStatus: 1, availabilityStatus: 1 });
 transporterSchema.index({ rating: -1 });
 transporterSchema.index({ lastActiveAt: -1 });

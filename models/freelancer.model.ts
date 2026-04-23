@@ -178,7 +178,7 @@ freelancerSchema.methods.updateStatistics = function(updates: Partial<IFreelance
   return this.save();
 };
 
-freelancerSchema.index({ userId: 1 });
+// freelancerSchema.index({ userId: 1 }); // duplicate: userId already indexed via `unique: true`
 freelancerSchema.index({ companyId: 1 });
 freelancerSchema.index({ status: 1 });
 freelancerSchema.index({ companyId: 1, status: 1 });

@@ -289,7 +289,7 @@ managerSchema.pre('save', function(next) {
   next();
 });
 
-managerSchema.index({ userId: 1 });
+// managerSchema.index({ userId: 1 }); // duplicate: userId already indexed via `unique: true`
 managerSchema.index({ companyId: 1 });
 managerSchema.index({ isActive: 1 });
 managerSchema.index({ companyId: 1, isActive: 1 });

@@ -111,8 +111,8 @@ const companySchema: Schema<ICompany> = new Schema(
     registrationNumber: {
       type: String,
       trim: true,
-      unique: true,
-      sparse: true,
+      // unique: true,
+      // sparse: true,
       required: [
         function() {
           return this.businessType === "company";
@@ -191,12 +191,12 @@ companySchema.virtual("formattedAddress").get(function() {
 });
 
 
-companySchema.index({ name: 1 }); 
+// companySchema.index({ name: 1 }); // duplicate: name already indexed via `unique: true`
 companySchema.index({ userId: 1 });
 companySchema.index({ status: 1 });
 companySchema.index({ "headquarters.location": "2dsphere" });
 companySchema.index({ businessType: 1, status: 1 });
-companySchema.index({ registrationNumber: 1 }, { unique: true, sparse: true });
+companySchema.index({ registrationNumber: 1 }, { unique:true , sparse: true });
 
 
 companySchema.pre("save", function(next) {

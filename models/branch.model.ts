@@ -252,7 +252,7 @@ branchSchema.virtual('availableCapacity').get(function() {
 });
 
 branchSchema.index({ companyId: 1, status: 1 });
-branchSchema.index({ code: 1 });
+// branchSchema.index({ code: 1 }); // duplicate: code already indexed via `unique: true`
 branchSchema.index({ location: '2dsphere' });
 branchSchema.index({ status: 1 });
 branchSchema.index({ 'address.city': 1 });
