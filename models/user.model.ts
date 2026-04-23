@@ -119,8 +119,8 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
   { timestamps: true }
 );
 
-userSchema.index({ email: 1 });
-userSchema.index({ phone: 1 });
+// userSchema.index({ email: 1 }); // duplicate: email already indexed via `unique: true`
+// userSchema.index({ phone: 1 }); // duplicate: phone already indexed via `unique: true`
 userSchema.index({ role: 1, status: 1 });
 
 

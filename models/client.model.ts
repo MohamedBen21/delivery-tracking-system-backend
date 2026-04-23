@@ -110,7 +110,7 @@ const clientSchema: Schema<IClient> = new mongoose.Schema(
 );
 
 
-clientSchema.index({ userId: 1 });
+// clientSchema.index({ userId: 1 }); // duplicate: userId already indexed via `unique: true`
 clientSchema.index({ currentLocation: '2dsphere' });
 
 

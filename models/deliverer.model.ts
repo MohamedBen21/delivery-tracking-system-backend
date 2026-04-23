@@ -54,6 +54,7 @@ export interface IDeliverer extends Document {
   performance: IPerformance;
 
   isActive: boolean;
+  isOnline: boolean;
   isSuspended: boolean;
   suspensionReason?: string;
   
@@ -308,6 +309,10 @@ const delivererSchema = new Schema<IDeliverer>({
     default: true,
     index: true,
   },
+  isOnline: {
+    type: Boolean,
+    default: false,
+  },
   isSuspended: {
     type: Boolean,
     default: false,
@@ -479,9 +484,9 @@ delivererSchema.pre('save', function(next) {
   next();
 });
 
-delivererSchema.index({ userId: 1 });
-delivererSchema.index({ companyId: 1 });
-delivererSchema.index({ branchId: 1 });
+// delivererSchema.index({ userId: 1 }); 
+// delivererSchema.index({ companyId: 1 }); 
+// delivererSchema.index({ branchId: 1 }); 
 delivererSchema.index({ verificationStatus: 1, availabilityStatus: 1 });
 delivererSchema.index({ rating: -1 });
 delivererSchema.index({ currentLocation: '2dsphere' }); 
