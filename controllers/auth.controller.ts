@@ -64,7 +64,7 @@ export const register = catchAsyncError(
         });
 
         await Mail.sendMail({
-          from: `Fennec Wear <${process.env.SMTP_MAIL}>`,
+          from: `Delivery Tracking Dz Wear <${process.env.SMTP_MAIL}>`,
           to: email,
           subject: `Activation Code is ${activation_number}`,
           html,
@@ -176,7 +176,7 @@ export const resendActivation = catchAsyncError(
         });
 
         await Mail.sendMail({
-          from: `Fennec Wear <${process.env.SMTP_MAIL}>`,
+          from: `Delivery Tracking Dz Wear <${process.env.SMTP_MAIL}>`,
           to: tokenEmail,
           subject: `Your new Activation Code is ${activation_number}`,
           html,
@@ -463,7 +463,7 @@ export const updateUser = catchAsyncError(
           });
 
           await Mail.sendMail({
-            from: `Fennec Wear <${process.env.SMTP_MAIL}>`,
+            from: `Delivery Tracking Dz Wear <${process.env.SMTP_MAIL}>`,
             to: email,
             subject: `Activation Code is ${activation_number}`,
             html,
@@ -586,7 +586,7 @@ export const passwordRecovery = catchAsyncError(
       const html = ejs.render(template, { resetUrl, email });
 
       await Mail.sendMail({
-        from: `FENNEC <${process.env.SMTP_MAIL}>`,
+        from: `Delivery Tracking Dz <${process.env.SMTP_MAIL}>`,
         to: email,
         subject: "Password Recovery Request",
         html,
