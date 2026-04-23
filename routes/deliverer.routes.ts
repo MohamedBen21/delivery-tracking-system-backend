@@ -4,6 +4,7 @@ import {
   arrivedAtBranchOutForDelivery,
   deliverPackageFail,
   deliveryReturnPackage,
+  toggleOnlineStatus,
 } from "../controllers/supervisor.controller";
 
 const delivererRouter = Router();
@@ -25,5 +26,6 @@ delivererRouter.post(
   ...chain,
   deliveryReturnPackage,
 );
+delivererRouter.patch("/online/toggle", ...chain, toggleOnlineStatus);
 
 export default delivererRouter;

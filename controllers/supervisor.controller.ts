@@ -9459,3 +9459,58 @@ export const getPackagesPaginated = catchAsyncError(
     }
   },
 );
+
+
+
+// TOGGLE ONLINE STATUS (Deliverer/Transporter)
+export const toggleOnlineStatus = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+    const role = req.user?.role;
+
+    if (!userId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!role || (role !== "transporter" && role !== "deliverer")) {
+      return next(
+        new ErrorHandler(
+          "Only transporter or deliverer can access this functionality",
+          403,
+        ),
+      );
+    }
+
+    if (role === "transporter") {
+      const transporter = await TransporterModel.findOne({ userId });
+      if (!transporter) {
+        return next(new ErrorHandler("Transporter profile not found.", 404));
+      }
+
+      transporter.isOnline = !transporter.isOnline;
+      transporter.lastActiveAt = new Date();
+      await transporter.save();
+
+      return res.status(200).json({
+        success: true,
+        message: `Transporter is now ${transporter.isOnline ? "online" : "offline"}`,
+        data: { isOnline: transporter.isOnline },
+      });
+    }
+
+    const deliverer = await DelivererModel.findOne({ userId });
+    if (!deliverer) {
+      return next(new ErrorHandler("Deliverer profile not found.", 404));
+    }
+
+    deliverer.isOnline = !deliverer.isOnline;
+    deliverer.lastActiveAt = new Date();
+    await deliverer.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `Deliverer is now ${deliverer.isOnline ? "online" : "offline"}`,
+      data: { isOnline: deliverer.isOnline },
+    });
+  },
+);
