@@ -11,6 +11,7 @@ import delivererModel from "../models/deliverer.model";
 import transporterModel from "../models/transporter.model";
 import SupervisorModel from "../models/supervisor.model";
 import freelancerModel from "../models/freelancer.model";
+import ManagerModel from "../models/manager.model";
 
 dotenv.config();
 
@@ -165,7 +166,7 @@ export const sendToken = async (
        associated = adminModel.findOne({user_id:user._id});
 
      case "manager":
-       associated = adminModel.findOne({user_id:user._id});
+       associated = ManagerModel.findOne({user_id:user._id});
 
      case "client":
        associated = clientModel.findOne({user_id:user._id});
@@ -181,6 +182,9 @@ export const sendToken = async (
 
      case "freelancer":
        associated = freelancerModel.findOne({user_id:user._id});
+
+      default:
+       associated = null;
 
     }
     // Set cookies
