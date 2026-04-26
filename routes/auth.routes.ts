@@ -7,6 +7,7 @@ import {
   googleLogin,
   login,
   logout,
+  meUser,
   passwordRecovery,
   refreshTokens,
   register,
@@ -57,5 +58,7 @@ authRouter.delete("/profile-picture", isAuthenticated, deleteProfilePicture);
 authRouter.post("/reset-password/request",    requestPasswordReset);
 authRouter.post("/reset-password/verify-otp", verifyOTP);
 authRouter.post("/reset-password/confirm",    confirmPasswordReset);
+
+authRouter.get("/me/user", isAuthenticated, meUser);
 
 export default authRouter;

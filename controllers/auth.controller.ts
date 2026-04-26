@@ -27,6 +27,14 @@ import { getRedisClient } from "../databases/Redis.database";
 import jwt from "jsonwebtoken";
 import twilio from "twilio";
 import sendSMS from "../utils/sendSMS";
+import mongoose from "mongoose";
+import adminModel from "../models/admin.model";
+import ManagerModel from "../models/manager.model";
+import clientModel from "../models/client.model";
+import delivererModel from "../models/deliverer.model";
+import transporterModel from "../models/transporter.model";
+import SupervisorModel from "../models/supervisor.model";
+import freelancerModel from "../models/freelancer.model";
 
 
 export const register = catchAsyncError(
@@ -1148,3 +1156,65 @@ export const confirmPasswordReset = catchAsyncError(
     }
   },
 );
+
+
+
+export const meUser = catchAsyncError(
+  async(req:Request,res:Response,next:NextFunction)=>{
+
+  try{
+
+    const userId = req.user?._id;
+
+    if(!userId || mongoose.Types.ObjectId.isValid(userId) === false){
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    const user = await userModel.findById(userId).select("-passwordHash").lean();
+
+    if(!user){
+      return next(new ErrorHandler("User not found.", 404));
+    }
+
+    let associated = null;
+
+      switch (user.role){
+        
+     case "admin":
+       associated = adminModel.findOne({user_id:user._id});
+
+     case "manager":
+       associated = ManagerModel.findOne({user_id:user._id});
+
+     case "client":
+       associated = clientModel.findOne({user_id:user._id});
+
+     case "deliverer":
+       associated = delivererModel.findOne({user_id:user._id});
+       
+     case "transporter":
+      associated = transporterModel.findOne({user_id:user._id});
+
+     case "supervisor":
+      associated = SupervisorModel.findOne({user_id:user._id});
+
+     case "freelancer":
+       associated = freelancerModel.findOne({user_id:user._id});
+
+      default:
+       associated = null;
+
+    }
+    
+    res.sendStatus(200).json({
+      success:true,
+      user,
+      associated,
+      role : user.role
+    })
+
+  }catch(error:any){
+    return next(new ErrorHandler(error.message || "Error fetching user data.", 500));
+  }
+
+});
