@@ -708,6 +708,10 @@ interface ICreateBranch {
   email: string;
   operatingHours?: Record<string, IOperatingHoursBody>;
   capacityLimit?: number;
+
+  branchType?: 'local_branch' | 'regional_main_hub';
+  parentHubId?: string ;
+  servesBranches?: string[];
 }
 
 interface IUpdateBranch {
@@ -718,6 +722,10 @@ interface IUpdateBranch {
   email?: string;
   operatingHours?: Record<string, IOperatingHoursBody>;
   capacityLimit?: number;
+
+  branchType?: 'local_branch' | 'regional_main_hub';
+  parentHubId?: string | null;
+  servesBranches?: string[];
 }
 
 type BranchStatus = "active" | "inactive" | "maintenance" | "pending";
@@ -757,6 +765,9 @@ export const createBranch = catchAsyncError(
         email,
         operatingHours,
         capacityLimit,
+        branchType,
+        parentHubId,
+        servesBranches,
       } = req.body as ICreateBranch;
 
       if (!name || !code || !address || !location || !phone || !email) {
@@ -799,6 +810,7 @@ export const createBranch = catchAsyncError(
         typeof location.coordinates[0] !== "number" ||
         typeof location.coordinates[1] !== "number"
       ) {
+
         await session.abortTransaction();
         session.endSession();
         return next(
@@ -813,11 +825,83 @@ export const createBranch = catchAsyncError(
         capacityLimit !== undefined &&
         (typeof capacityLimit !== "number" || capacityLimit < 1)
       ) {
+        
         await session.abortTransaction();
         session.endSession();
         return next(
           new ErrorHandler("capacityLimit must be a positive number", 400),
         );
+      }
+
+
+
+      if (branchType && !['local_branch', 'regional_main_hub'].includes(branchType)) {
+
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("branchType must be 'local_branch' or 'regional_main_hub'", 400),
+        );
+    } 
+
+
+      if (branchType === 'local_branch' && !parentHubId) {
+
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("parentHubId is required for local branches", 400),
+        );
+      }
+
+
+      if (parentHubId && !mongoose.Types.ObjectId.isValid(parentHubId)) {
+
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid parentHubId", 400));
+      }
+
+
+      if (parentHubId) {
+
+        const parentHub = await BranchModel.findOne({
+
+          _id: parentHubId,
+          companyId,
+          branchType: 'regional_main_hub',
+        }).session(session);
+
+        if (!parentHub) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("Parent hub not found or is not a regional main hub", 404),
+          );
+        }
+      }
+
+
+      if (servesBranches && branchType !== 'regional_main_hub') {
+
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Only regional_main_hub can serve other branches", 400),
+        );
+      }
+
+
+      if (servesBranches) {
+        for (const servedBranchId of servesBranches) {
+
+          if (!mongoose.Types.ObjectId.isValid(servedBranchId)) {
+
+            await session.abortTransaction();
+            session.endSession();
+            return next(new ErrorHandler(`Invalid branch ID in servesBranches: ${servedBranchId}`, 400));
+          }
+        }
       }
 
       const [company, manager] = await Promise.all([
@@ -886,10 +970,24 @@ export const createBranch = catchAsyncError(
             ...(operatingHours && { operatingHours }),
             ...(capacityLimit !== undefined && { capacityLimit }),
             status: "active",
+
+            ...(branchType && { branchType }),
+            ...(parentHubId && { parentHubId }),
+            ...(servesBranches && { servesBranches }),
           },
         ],
         { session },
       );
+
+
+      if (servesBranches && servesBranches.length > 0) {
+        
+        await BranchModel.updateMany(
+          { _id: { $in: servesBranches }, companyId },
+          { parentHubId: branch[0]._id },
+          { session },
+        );
+      }
 
       await session.commitTransaction();
       session.endSession();
