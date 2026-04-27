@@ -4,6 +4,8 @@ import mongoose, { Document, Model, Schema } from "mongoose";
 export type WeekDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 
 'friday' | 'saturday' | 'sunday';
 
+export type BranchType = 'local_branch' | 'regional_main_hub';
+
 
 export interface IOperatingHours {
   open: string;  
@@ -58,10 +60,31 @@ export interface IBranch extends Document {
   createdAt: Date;
   updatedAt: Date;
 
+  isHub: boolean;
   isFull: boolean;
   isOpen: boolean;
   isAvailable: boolean;
   fullAddress: string;
+  availableCapacity: number;
+
+  branchType: BranchType;
+  parentHubId?: mongoose.Types.ObjectId; //put if branchType is local_branch
+
+  servesBranches?: mongoose.Types.ObjectId[];  // Array of branch IDs this hub serves
+
+  updateDayHours(day: WeekDay, hours: IOperatingHours): Promise<IBranch>;
+  canAcceptPackages(count?: number): boolean;
+
+}
+
+export interface IBranchModel extends Model<IBranch> {
+
+  findActiveByCompany(companyId: string): Promise<IBranch[]>;
+  findWithAvailableCapacity(companyId?: string): Promise<IBranch[]>;
+  findNearLocation(coordinates: [number, number], maxDistance?: number): Promise<IBranch[]>;
+
+  findHubs(companyId?: string): Promise<IBranch[]>;
+  findByParentHub(hubId: string): Promise<IBranch[]>;
 }
 
 const branchAddressSchema = new Schema<IBranchAddress>({
@@ -107,7 +130,7 @@ const operatingHoursSchema = new Schema<IOperatingHours>({
 }, { _id: false });
 
 
-const branchSchema = new Schema<IBranch>({
+const branchSchema = new Schema<IBranch, IBranchModel>({
   companyId: {
     type: Schema.Types.ObjectId,
     ref: 'Company',
@@ -208,12 +231,41 @@ const branchSchema = new Schema<IBranch>({
     },
     default: 'active',
   },
+
+
+  branchType: {
+
+    type: String,
+    enum: {
+      values: ['local_branch', 'regional_main_hub'],
+      message: 'Branch type must be one of local branch or regional main hub',
+    },
+    default: 'local_branch',
+    required: true,
+  },
+
+  parentHubId: {
+    
+    type: Schema.Types.ObjectId,
+    ref: 'Branch',
+    default: null,
+  },
+
+  servesBranches: [{
+
+    type: Schema.Types.ObjectId,
+    ref: 'Branch',
+  }],
+
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true },
 });
 
+branchSchema.virtual('isHub').get(function() {
+  return this.branchType !== 'local_branch';
+});
 
 branchSchema.virtual('isFull').get(function() {
   if (!this.capacityLimit) return false;
@@ -270,6 +322,22 @@ branchSchema.pre('save', function(next) {
       }
     });
   }
+
+
+  if (this.branchType === 'local_branch' && !this.parentHubId) {
+
+    return next(new Error('Local branches must have a parent hub'));
+  }
+  
+  if (this.branchType === 'regional_main_hub' && this.parentHubId) {
+
+    return next(new Error('Regional main hubs cannot have a parent hub'));
+  }
+  
+  if (this.branchType === 'local_branch' && this.servesBranches && this.servesBranches.length > 0) {
+
+    return next(new Error('Local branches cannot serve other branches'));
+  }
   
   next();
 });
@@ -323,7 +391,23 @@ branchSchema.methods.canAcceptPackages = function(count: number = 1) {
   return true;
 };
 
-const BranchModel: Model<IBranch> = mongoose.models.Branch || 
-  mongoose.model<IBranch>('Branch', branchSchema);
+
+branchSchema.statics.findHubs = function(companyId?: string) {
+
+  const query: any = {
+
+    branchType: 'regional_main_hub' ,
+  };
+  if (companyId) query.companyId = companyId;
+  return this.find(query);
+};
+
+branchSchema.statics.findByParentHub = function(hubId: string) {
+
+  return this.find({ parentHubId: hubId });
+};
+
+const BranchModel: Model<IBranch> = (mongoose.models.Branch || 
+  mongoose.model<IBranch, IBranchModel>('Branch', branchSchema)) as IBranchModel;
 
 export default BranchModel;
