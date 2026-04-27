@@ -1218,3 +1218,207 @@ export const meUser = catchAsyncError(
   }
 
 });
+
+
+
+
+// export const createManager = catchAsyncError(
+//   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+//     try {
+//       const {
+//         firstName,
+//         lastName,
+//         email,
+//         phone,
+//         password,
+//         companyId,
+//         accessLevel = 'full',
+//         permissions,
+//         branchAccess
+//       } = req.body;
+
+//       // Simple verification
+//       // 1. Check required fields
+//       if (!firstName || !lastName || !email || !phone || !password || !companyId) {
+//         return next(new ErrorHandler("Missing required fields: firstName, lastName, email, phone, password, companyId", 400));
+//       }
+
+//       // 2. Check if user already exists with this email or phone
+//       const existingUser = await userModel.findOne({
+//         $or: [{ email: email.toLowerCase() }, { phone }]
+//       });
+
+//       if (existingUser) {
+//         return next(new ErrorHandler("User already exists with this email or phone number", 409));
+//       }
+
+//       // 3. Create the user
+//       const user = await userModel.create({
+//         firstName,
+//         lastName,
+//         email: email.toLowerCase(),
+//         phone,
+//         passwordHash: password,
+//         role: "manager",
+//         status: "active"
+//       });
+
+//       // 4. Create the manager record
+//       const managerData: any = {
+//         userId: user._id,
+//         companyId,
+//         accessLevel,
+//         isActive: true
+//       };
+
+//       // Add permissions if provided, otherwise use defaults based on accessLevel
+//       if (permissions && Array.isArray(permissions) && permissions.length > 0) {
+//         managerData.permissions = permissions;
+//       }
+
+//       // Add branch access if provided
+//       if (branchAccess) {
+//         managerData.branchAccess = branchAccess;
+//       }
+
+//       const manager = await ManagerModel.create(managerData);
+
+//       // 5. Return response (excluding sensitive data)
+//       res.status(201).json({
+//         success: true,
+//         message: "Manager created successfully",
+//         data: {
+//           user: {
+//             id: user._id,
+//             firstName: user.firstName,
+//             lastName: user.lastName,
+//             email: user.email,
+//             phone: user.phone,
+//             role: user.role,
+//             status: user.status
+//           },
+//           manager: {
+//             id: manager._id,
+//             accessLevel: manager.accessLevel,
+//             permissions: manager.permissions,
+//             branchAccess: manager.branchAccess,
+//             isActive: manager.isActive
+//           }
+//         }
+//       });
+
+//     } catch (err: any) {
+//       // Handle duplicate key errors from MongoDB
+//       if (err.code === 11000) {
+//         return next(new ErrorHandler("Duplicate field value: email or phone already exists", 409));
+//       }
+      
+//       // Handle validation errors from mongoose
+//       if (err.name === 'ValidationError') {
+//         const messages = Object.values(err.errors).map((e: any) => e.message).join(', ');
+//         return next(new ErrorHandler(messages, 400));
+//       }
+      
+//       return next(new ErrorHandler(err.message || "Error creating manager.", 500));
+//     }
+//   }
+// );
+
+
+
+
+
+export const createManager = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const {
+        firstName,
+        lastName,
+        email,
+        phone,
+        password,
+        accessLevel = 'full'
+      } = req.body;
+
+      // Simple verification
+      // 1. Check required fields
+      if (!firstName || !lastName || !email || !phone || !password) {
+        return next(new ErrorHandler("Missing required fields: firstName, lastName, email, phone, password", 400));
+      }
+
+      // 2. Check if user already exists with this email or phone
+      const existingUser = await userModel.findOne({
+        $or: [{ email: email.toLowerCase() }, { phone }]
+      });
+
+      if (existingUser) {
+        return next(new ErrorHandler("User already exists with this email or phone number", 409));
+      }
+
+      // 3. Create the user
+      const user = await userModel.create({
+        firstName,
+        lastName,
+        email: email.toLowerCase(),
+        phone,
+        passwordHash: password,
+        role: "manager",
+        status: "active"
+      });
+
+      // 4. Create a temporary companyId (you might want to create a default company or make this optional)
+      // For testing, we'll create a dummy ObjectId or you can modify the schema to allow null temporarily
+      const dummyCompanyId = new mongoose.Types.ObjectId();
+      
+      // 5. Create the manager record with allBranches access by default
+      const manager = await ManagerModel.create({
+        userId: user._id,
+        companyId: dummyCompanyId, // You'll need to replace this with a real company ID later
+        accessLevel,
+        isActive: true,
+        branchAccess: {
+          allBranches: true,
+          specificBranches: []
+        }
+      });
+
+      // 6. Return response (excluding sensitive data)
+      res.status(201).json({
+        success: true,
+        message: "Manager created successfully",
+        data: {
+          user: {
+            id: user._id,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            email: user.email,
+            phone: user.phone,
+            role: user.role,
+            status: user.status
+          },
+          manager: {
+            id: manager._id,
+            accessLevel: manager.accessLevel,
+            permissions: manager.permissions,
+            branchAccess: manager.branchAccess,
+            isActive: manager.isActive
+          }
+        }
+      });
+
+    } catch (err: any) {
+      // Handle duplicate key errors from MongoDB
+      if (err.code === 11000) {
+        return next(new ErrorHandler("Duplicate field value: email or phone already exists", 409));
+      }
+      
+      // Handle validation errors from mongoose
+      if (err.name === 'ValidationError') {
+        const messages = Object.values(err.errors).map((e: any) => e.message).join(', ');
+        return next(new ErrorHandler(messages, 400));
+      }
+      
+      return next(new ErrorHandler(err.message || "Error creating manager.", 500));
+    }
+  }
+);
