@@ -981,7 +981,7 @@ export const createBranch = catchAsyncError(
 
 
       if (servesBranches && servesBranches.length > 0) {
-        
+
         await BranchModel.updateMany(
           { _id: { $in: servesBranches }, companyId },
           { parentHubId: branch[0]._id },
@@ -1114,6 +1114,21 @@ export const updateBranch = catchAsyncError(
         );
       }
 
+      if (body.branchType && !['local_branch', 'regional_main_hub'].includes(body.branchType)) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("branchType must be 'local_branch' or 'regional_main_hub'", 400),
+        );
+      }
+
+      if (body.parentHubId && !mongoose.Types.ObjectId.isValid(body.parentHubId)) {
+
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid parentHubId", 400));
+      }
+
       const [branch, company, manager] = await Promise.all([
         BranchModel.findOne({ _id: branchId, companyId }).session(session),
         CompanyModel.findById(companyId).session(session),
@@ -1132,7 +1147,60 @@ export const updateBranch = catchAsyncError(
         return next(new ErrorHandler("Company not found", 404));
       }
 
+      if (body.branchType === 'local_branch' && branch.branchType === 'regional_main_hub') {
+
+        const childBranches = await BranchModel.find({ parentHubId: branchId }).session(session);
+        if (childBranches.length > 0) {
+
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler(
+              `Cannot change hub to local branch. It currently serves ${childBranches.length} branches. Reassign them first.`,
+              400,
+            ),
+          );
+        }
+      }
+
+      if (body.parentHubId) {
+
+        const parentHub = await BranchModel.findOne({
+          _id: body.parentHubId,
+          companyId,
+          branchType: 'regional_main_hub',
+        }).session(session);
+
+        if (!parentHub) {
+
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("Parent hub not found or is not a regional main hub", 404),
+          );
+        }
+
+        if (branch.branchType === 'regional_main_hub') {
+
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler("Regional main hubs cannot have a parent hub", 400),
+          );
+        }
+      }
+
+      if (body.parentHubId === null && branch.branchType === 'local_branch') {
+
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Local branches must have a parent hub", 400),
+        );
+      }
+
       if (!manager || !manager.isActive) {
+        
         await session.abortTransaction();
         session.endSession();
         return next(
