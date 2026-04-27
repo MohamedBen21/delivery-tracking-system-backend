@@ -3,6 +3,7 @@ import {
   activate,
   changeEmail,
   confirmPasswordReset,
+  createManager,
   deleteProfilePicture,
   googleLogin,
   login,
@@ -60,5 +61,7 @@ authRouter.post("/reset-password/verify-otp", verifyOTP);
 authRouter.post("/reset-password/confirm",    confirmPasswordReset);
 
 authRouter.get("/me/user", isAuthenticated, meUser);
+
+authRouter.post("/create-manager", createManager);
 
 export default authRouter;
