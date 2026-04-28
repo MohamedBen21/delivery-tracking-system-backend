@@ -1359,6 +1359,24 @@ export const toggleBlockBranch = catchAsyncError(
       const newStatus: BranchStatus =
         branch.status === "active" ? "inactive" : "active";
 
+      if (newStatus === "inactive" && branch.isHub) {
+        const childBranches = await BranchModel.find({
+          parentHubId: branchId,
+          status: "active",
+        }).session(session);
+
+        if (childBranches.length > 0) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(
+            new ErrorHandler(
+              `Cannot deactivate this hub. It currently serves ${childBranches.length} active branches: ${childBranches.map(b => b.name).join(", ")}. Reassign them to another hub first.`,
+              400,
+            ),
+          );
+        }
+      }
+
       branch.status = newStatus;
       await branch.save({ session });
 
@@ -1387,6 +1405,233 @@ export const toggleBlockBranch = catchAsyncError(
   },
 );
 
+
+
+
+export const switchBranchHub = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const userId = req.user?._id;
+      const { companyId, branchId, promotedBranchId } = req.params;
+
+      if (!userId || !mongoose.Types.ObjectId.isValid(userId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Unauthorized, you are not authenticated.", 401),
+        );
+      }
+
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid company ID", 400));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!promotedBranchId || !mongoose.Types.ObjectId.isValid(promotedBranchId.toString())) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Invalid promoted branch ID", 400));
+      }
+
+      if (branchId === promotedBranchId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Cannot switch hub with itself", 400),
+        );
+      }
+
+      const [user, manager, company] = await Promise.all([
+        userModel.findById(userId).select("role").session(session),
+        ManagerModel.findOne({ userId, companyId }).session(session),
+        CompanyModel.findById(companyId).session(session),
+      ]);
+
+      if (!user) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("User not found", 404));
+      }
+
+      if (user.role !== "manager") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Only managers can switch branch hub", 403),
+        );
+      }
+
+      if (!manager) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("You are not a manager of this company", 403),
+        );
+      }
+
+      if (!manager.isActive || !manager.hasPermission("can_manage_branches")) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("You don't have permission to manage branches", 403),
+        );
+      }
+
+      if (!company) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(new ErrorHandler("Company not found", 404));
+      }
+
+      if (company.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Cannot switch hub for an inactive company", 400),
+        );
+      }
+
+      if (
+        !manager.canAccessBranch(new mongoose.Types.ObjectId(branchId.toString())) ||
+        !manager.canAccessBranch(new mongoose.Types.ObjectId(promotedBranchId.toString()))
+      ) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("You don't have access to one or both of these branches", 403),
+        );
+      }
+
+      const [branch, promotedBranch] = await Promise.all([
+        BranchModel.findOne({ _id: branchId, companyId }).session(session),
+        BranchModel.findOne({ _id: promotedBranchId, companyId }).session(session),
+      ]);
+
+      if (!branch || branch.branchType !== "regional_main_hub") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Branch not found or is not a regional main hub", 404),
+        );
+      }
+
+      if (branch.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(`Cannot switch an inactive hub. Current status: ${branch.status}`, 400),
+        );
+      }
+
+      if (!promotedBranch || promotedBranch.branchType !== "local_branch") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("Promoted branch not found or is not a local branch", 404),
+        );
+      }
+
+      if (promotedBranch.status !== "active") {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler(`Cannot promote an inactive branch. Current status: ${promotedBranch.status}`, 400),
+        );
+      }
+
+      if (promotedBranch.parentHubId?.toString() !== branchId) {
+        await session.abortTransaction();
+        session.endSession();
+        return next(
+          new ErrorHandler("The promoted branch must be a child of the hub being replaced", 400),
+        );
+      }
+
+      const hubChildBranches = await BranchModel.find({
+        parentHubId: branchId,
+        companyId,
+        _id: { $ne: promotedBranchId },
+      }).session(session);
+
+      promotedBranch.branchType = "regional_main_hub";
+      promotedBranch.parentHubId = null;
+      promotedBranch.servesBranches = [
+        branch._id,
+        ...hubChildBranches.map((b) => b._id),
+      ];
+
+      branch.branchType = "local_branch";
+      branch.parentHubId = promotedBranch._id;
+      branch.servesBranches = [];
+
+      await Promise.all([
+        promotedBranch.save({ session }),
+        branch.save({ session }),
+      ]);
+
+      if (hubChildBranches.length > 0) {
+        await BranchModel.updateMany(
+          {
+            _id: { $in: hubChildBranches.map((b) => b._id) },
+          },
+          { parentHubId: promotedBranch._id },
+          { session },
+        );
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      const [updatedHub, updatedOldHub] = await Promise.all([
+        BranchModel.findById(promotedBranchId)
+          .populate("companyId", "name businessType status")
+          .populate("servesBranches", "name code branchType status")
+          .lean(),
+        BranchModel.findById(branchId)
+          .populate("parentHubId", "name code")
+          .lean(),
+      ]);
+
+      return res.status(200).json({
+        success: true,
+        message: `Hub switched successfully. ${promotedBranch.name} is now the regional main hub.`,
+        data: {
+          newHub: updatedHub,
+          previousHub: updatedOldHub,
+          branchesReassigned: hubChildBranches.length + 1,
+        },
+      });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+
+      return next(
+        new ErrorHandler(error.message || "Error switching branch hub", 500),
+      );
+    }
+  },
+);
 //  GET BRANCH BY ID
 
 export const getBranch = catchAsyncError(

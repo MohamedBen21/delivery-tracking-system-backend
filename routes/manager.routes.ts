@@ -11,6 +11,7 @@ import {
   getMyBranches,
   getMyCompany,
   getMySupervisors,
+  switchBranchHub,
   toggleBlockBranch,
   toggleBlockCompany,
   toggleBlockSupervisor,
@@ -88,6 +89,12 @@ managerRouter.patch(
   ...managerOrAdmin,
   toggleBlockTransporter,
 );
+
+
+managerRouter.post(
+  "/companies/:companyId/branch/:branchId/promoted-branch/:promotedBranchId"
+  , ...managerOrAdmin,
+  switchBranchHub);
 
 export default managerRouter;
 

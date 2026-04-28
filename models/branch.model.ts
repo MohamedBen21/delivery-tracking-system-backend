@@ -68,7 +68,7 @@ export interface IBranch extends Document {
   availableCapacity: number;
 
   branchType: BranchType;
-  parentHubId?: mongoose.Types.ObjectId; //put if branchType is local_branch
+  parentHubId?: mongoose.Types.ObjectId | null; //put if branchType is local_branch
 
   servesBranches?: mongoose.Types.ObjectId[];  // Array of branch IDs this hub serves
 

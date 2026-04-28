@@ -163,25 +163,32 @@ export const sendToken = async (
     let associated ;
     switch (user.role){
      case "admin":
-       associated = adminModel.findOne({user_id:user._id});
+       associated = await adminModel.findOne({user_id:userId});
+       break;
 
      case "manager":
-       associated = ManagerModel.findOne({user_id:user._id});
+       associated = await ManagerModel.findOne({userId});
+       break;
 
      case "client":
-       associated = clientModel.findOne({user_id:user._id});
+       associated = await clientModel.findOne({userId});
+       break;
 
      case "deliverer":
-       associated = delivererModel.findOne({user_id:user._id});
+       associated = await delivererModel.findOne({userId});
+       break;
        
      case "transporter":
-      associated = transporterModel.findOne({user_id:user._id});
+      associated = await transporterModel.findOne({userId});
+      break;
 
      case "supervisor":
-      associated = SupervisorModel.findOne({user_id:user._id});
+      associated = await SupervisorModel.findOne({userId});
+      break;
 
      case "freelancer":
-       associated = freelancerModel.findOne({user_id:user._id});
+       associated = await freelancerModel.findOne({userId});
+       break;
 
       default:
        associated = null;
