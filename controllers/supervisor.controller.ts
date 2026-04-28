@@ -74,13 +74,13 @@ export const createDeliverer = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
@@ -98,7 +98,7 @@ export const createDeliverer = catchAsyncError(
 
       if (!email || !phone || !username || !password || !firstName || !lastName) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("email, phone, username, password, firstName, and lastName are required", 400)
         );
@@ -113,7 +113,7 @@ export const createDeliverer = catchAsyncError(
         typeof lastName !== "string"
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("All required fields must be strings", 400));
       }
 
@@ -126,7 +126,7 @@ export const createDeliverer = catchAsyncError(
           typeof currentLocation.coordinates[1] !== "number"
         ) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Invalid location format. Expected GeoJSON Point", 400));
         }
       }
@@ -138,25 +138,25 @@ export const createDeliverer = catchAsyncError(
 
       if (!supervisor || !supervisor.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_manage_deliverers")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to manage deliverers", 403));
       }
 
       if (!branch) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Branch not found", 404));
       }
 
       if (branch.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Cannot create deliverer for an inactive branch", 400));
       }
 
@@ -168,19 +168,19 @@ export const createDeliverer = catchAsyncError(
 
       if (existingEmail) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Email already exists", 400));
       }
 
       if (existingPhone) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Phone number already exists", 400));
       }
 
       if (existingUsername) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Username already exists", 400));
       }
 
@@ -218,8 +218,7 @@ export const createDeliverer = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedDeliverer = await DelivererModel.findById(deliverer[0]._id)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("branchId", "name code address status")
@@ -233,8 +232,7 @@ export const createDeliverer = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -265,19 +263,19 @@ export const updateDeliverer = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!delivererId || !mongoose.Types.ObjectId.isValid(delivererId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid deliverer ID", 400));
       }
 
@@ -285,25 +283,25 @@ export const updateDeliverer = catchAsyncError(
 
       if (Object.keys(body).length === 0) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("No update data provided", 400));
       }
 
       if (body.email !== undefined && typeof body.email !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("email must be a string", 400));
       }
 
       if (body.phone !== undefined && typeof body.phone !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("phone must be a string", 400));
       }
 
       if (body.username !== undefined && typeof body.username !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("username must be a string", 400));
       }
 
@@ -316,7 +314,7 @@ export const updateDeliverer = catchAsyncError(
           typeof body.currentLocation.coordinates[1] !== "number"
         ) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Invalid location format. Expected GeoJSON Point", 400));
         }
       }
@@ -328,19 +326,19 @@ export const updateDeliverer = catchAsyncError(
 
       if (!deliverer) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Deliverer not found", 404));
       }
 
       if (!supervisor || !supervisor.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_manage_deliverers")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to manage deliverers", 403));
       }
 
@@ -369,7 +367,7 @@ export const updateDeliverer = catchAsyncError(
 
       if (duplicateResults.some((result) => result !== null)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Email, phone, or username already exists", 400));
       }
 
@@ -398,8 +396,7 @@ export const updateDeliverer = catchAsyncError(
       await deliverer.save({ session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedDeliverer = await DelivererModel.findById(delivererId)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("branchId", "name code address status")
@@ -413,8 +410,7 @@ export const updateDeliverer = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -445,19 +441,19 @@ export const toggleBlockDeliverer = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!delivererId || !mongoose.Types.ObjectId.isValid(delivererId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid deliverer ID", 400));
       }
 
@@ -469,7 +465,7 @@ export const toggleBlockDeliverer = catchAsyncError(
 
       if (!deliverer) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Deliverer not found", 404));
       }
 
@@ -479,7 +475,7 @@ export const toggleBlockDeliverer = catchAsyncError(
 
       if (!isAdmin && !isAuthorizedSupervisor) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Not authorized to change this deliverer's status", 403));
       }
 
@@ -495,8 +491,7 @@ export const toggleBlockDeliverer = catchAsyncError(
       ]);
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedDeliverer = await DelivererModel.findById(delivererId)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("branchId", "name code address status")
@@ -512,7 +507,7 @@ export const toggleBlockDeliverer = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error toggling deliverer status", 500));
     }
   }
@@ -705,13 +700,13 @@ export const createTransporter = catchAsyncError(
 
       if (!managerId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
@@ -729,7 +724,7 @@ export const createTransporter = catchAsyncError(
 
       if (!email || !phone || !username || !password || !firstName || !lastName) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("email, phone, username, password, firstName, and lastName are required", 400)
         );
@@ -745,7 +740,7 @@ export const createTransporter = catchAsyncError(
         typeof lastName !== "string"
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("All required fields must be strings", 400));
       }
 
@@ -757,25 +752,25 @@ export const createTransporter = catchAsyncError(
 
       if (!manager || !manager.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active manager of this company", 403));
       }
 
       if (!manager.hasPermission("can_manage_users")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to manage transporters", 403));
       }
 
       if (!company) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Company not found", 404));
       }
 
       if (company.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Cannot create transporter for an inactive company", 400));
       }
 
@@ -788,19 +783,19 @@ export const createTransporter = catchAsyncError(
 
       if (existingEmail) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Email already exists", 400));
       }
 
       if (existingPhone) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Phone number already exists", 400));
       }
 
       if (existingUsername) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Username already exists", 400));
       }
 
@@ -837,8 +832,7 @@ export const createTransporter = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedTransporter = await TransporterModel.findById(transporter[0]._id)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("companyId", "name businessType status")
@@ -851,8 +845,7 @@ export const createTransporter = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -884,19 +877,19 @@ export const updateTransporter = catchAsyncError(
 
       if (!managerId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!transporterId || !mongoose.Types.ObjectId.isValid(transporterId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid transporter ID", 400));
       }
 
@@ -904,32 +897,32 @@ export const updateTransporter = catchAsyncError(
 
       if (Object.keys(body).length === 0) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("No update data provided", 400));
       }
 
 
       if (body.email !== undefined && typeof body.email !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("email must be a string", 400));
       }
 
       if (body.phone !== undefined && typeof body.phone !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("phone must be a string", 400));
       }
 
       if (body.username !== undefined && typeof body.username !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("username must be a string", 400));
       }
 
       if (body.currentBranchId !== undefined && !mongoose.Types.ObjectId.isValid(body.currentBranchId)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
@@ -941,19 +934,19 @@ export const updateTransporter = catchAsyncError(
 
       if (!transporter) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Transporter not found", 404));
       }
 
       if (!manager || !manager.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active manager of this company", 403));
       }
 
       if (!manager.hasPermission("can_manage_users")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to manage transporters", 403));
       }
 
@@ -981,7 +974,7 @@ export const updateTransporter = catchAsyncError(
 
       if (duplicateResults.some((result) => result !== null)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Email, phone, or username already exists", 400));
       }
 
@@ -1012,8 +1005,7 @@ export const updateTransporter = catchAsyncError(
       await transporter.save({ session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedTransporter = await TransporterModel.findById(transporterId)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("companyId", "name businessType status")
@@ -1027,8 +1019,7 @@ export const updateTransporter = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -1059,19 +1050,19 @@ export const toggleBlockTransporter = catchAsyncError(
 
       if (!managerId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!transporterId || !mongoose.Types.ObjectId.isValid(transporterId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid transporter ID", 400));
       }
 
@@ -1083,7 +1074,7 @@ export const toggleBlockTransporter = catchAsyncError(
 
       if (!transporter) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Transporter not found", 404));
       }
 
@@ -1092,7 +1083,7 @@ export const toggleBlockTransporter = catchAsyncError(
 
       if (!isAdmin && !isAuthorizedManager) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Not authorized to change this transporter's status", 403));
       }
 
@@ -1109,8 +1100,7 @@ export const toggleBlockTransporter = catchAsyncError(
       ]);
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedTransporter = await TransporterModel.findById(transporterId)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("companyId", "name businessType status")
@@ -1127,7 +1117,7 @@ export const toggleBlockTransporter = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error toggling transporter status", 500));
     }
   }
@@ -1650,13 +1640,13 @@ export const createPackage = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
@@ -1683,7 +1673,7 @@ export const createPackage = catchAsyncError(
 
       if (!senderId || !senderType || !weight || !type || !destination || !deliveryType || !totalPrice) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "senderId, senderType, weight, type, destination, deliveryType, and totalPrice are required",
@@ -1694,7 +1684,7 @@ export const createPackage = catchAsyncError(
 
       if (!recipient || (!recipient.clientId && !recipient.phone)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Recipient info is required (either clientId or phone)", 400)
         );
@@ -1703,7 +1693,7 @@ export const createPackage = catchAsyncError(
 
       if (!mongoose.Types.ObjectId.isValid(senderId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid sender ID", 400));
       }
 
@@ -1718,65 +1708,65 @@ export const createPackage = catchAsyncError(
 
       if (!supervisor || !supervisor.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_manage_packages")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to manage packages", 403));
       }
 
 
       if (!branch) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Branch not found", 404));
       }
 
       if (branch.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Cannot create package for an inactive branch", 400));
       }
 
 
       if (!sender) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Sender not found", 404));
       }
 
 
       if(sender.role !== "freelancer"){
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Freelancer not found", 404));
       }
 
       if (!freelancer) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Freelancer not found", 404));
       }
 
       if (freelancer.status !== 'active') {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Freelancer account is not active", 403));
       }
 
       if (freelancer.defaultOriginBranchId.toString() !== branchId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Package origin must be freelancer's default branch", 400));
       }
       
 
       if (deliveryType === "branch_pickup" && !destinationBranchId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Destination branch is required for branch pickup", 400));
       }
 
@@ -1784,7 +1774,7 @@ export const createPackage = catchAsyncError(
         const destinationBranch = await BranchModel.findById(destinationBranchId).session(session);
         if (!destinationBranch) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Destination branch not found", 404));
         }
       }
@@ -1795,7 +1785,7 @@ export const createPackage = catchAsyncError(
         clientId = await getOrCreateClient(recipient, destination, session);
       } catch (error: any) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler(error.message || "Error processing recipient info", 400));
       }
 
@@ -1874,8 +1864,7 @@ export const createPackage = catchAsyncError(
       // }
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedPackage = await PackageModel.findById(packageData[0]._id)
         .populate("senderId", "firstName lastName email phone role")
         .populate("clientId", "firstName lastName email phone")
@@ -1893,8 +1882,7 @@ export const createPackage = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -1929,19 +1917,19 @@ export const updatePackage = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid package ID", 400));
       }
 
@@ -1949,7 +1937,7 @@ export const updatePackage = catchAsyncError(
 
       if (Object.keys(body).length === 0) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("No update data provided", 400));
       }
 
@@ -1963,25 +1951,25 @@ export const updatePackage = catchAsyncError(
 
       if (!packageDoc) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Package not found in this branch", 404));
       }
 
       if (!supervisor || !supervisor.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_manage_packages")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to manage packages", 403));
       }
 
       if (["delivered", "cancelled", "returned", "lost", "damaged"].includes(packageDoc.status)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler(`Cannot update package in ${packageDoc.status} status`, 400));
       }
 
@@ -1989,7 +1977,7 @@ export const updatePackage = catchAsyncError(
         const destinationBranch = await BranchModel.findById(body.destinationBranchId).session(session);
         if (!destinationBranch) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Destination branch not found", 404));
         }
       }
@@ -2003,13 +1991,13 @@ export const updatePackage = catchAsyncError(
 
         if (!deliverer) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Deliverer not found or not active in this branch", 404));
         }
 
         if (deliverer.availabilityStatus !== "available") {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Deliverer is not available", 400));
         }
       }
@@ -2093,8 +2081,7 @@ export const updatePackage = catchAsyncError(
       }
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedPackage = await PackageModel.findById(packageId)
         .populate("senderId", "firstName lastName email phone role")
         .populate("clientId", "firstName lastName email phone")
@@ -2112,8 +2099,7 @@ export const updatePackage = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -2144,19 +2130,19 @@ export const toggleCancelPackage = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid package ID", 400));
       }
 
@@ -2171,7 +2157,7 @@ export const toggleCancelPackage = catchAsyncError(
 
       if (!packageDoc) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Package not found", 404));
       }
 
@@ -2181,19 +2167,19 @@ export const toggleCancelPackage = catchAsyncError(
 
       if (!isAdmin && !isAuthorizedSupervisor) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Not authorized to change this package's status", 403));
       }
 
       if (packageDoc.status === "delivered") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Cannot cancel a delivered package", 400));
       }
 
       if (packageDoc.status === "returned") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Cannot cancel a returned package", 400));
       }
 
@@ -2225,8 +2211,7 @@ export const toggleCancelPackage = catchAsyncError(
       }
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedPackage = await PackageModel.findById(packageId)
         .populate("clientId", "firstName lastName email phone username")
         .populate("originBranchId", "name code address")
@@ -2241,7 +2226,7 @@ export const toggleCancelPackage = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error toggling package status", 500));
     }
   }
@@ -2438,25 +2423,25 @@ export const addPackageIssue = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid package ID", 400));
       }
 
       if (!type || !description) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Issue type and description are required", 400));
       }
 
@@ -2470,25 +2455,25 @@ export const addPackageIssue = catchAsyncError(
 
       if (!packageDoc) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Package not found", 404));
       }
 
       if (!supervisor || !supervisor.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_handle_complaints")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to handle complaints", 403));
       }
 
       if (packageDoc.status === "delivered" || packageDoc.status === "cancelled") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler(`Cannot add issue to ${packageDoc.status} package`, 400));
       }
 
@@ -2527,8 +2512,7 @@ export const addPackageIssue = catchAsyncError(
       await PackageModel.findByIdAndUpdate(packageId, statusUpdate, { session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedPackage = await PackageModel.findById(packageId)
         .populate("clientId", "firstName lastName email phone username")
         .lean();
@@ -2540,7 +2524,7 @@ export const addPackageIssue = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error reporting issue", 500));
     }
   }
@@ -2559,31 +2543,31 @@ export const resolvePackageIssue = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid package ID", 400));
       }
 
       if (!issueIndex || isNaN(parseInt(issueIndex as string))) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid issue index", 400));
       }
 
       if (!resolution) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Resolution description is required", 400));
       }
 
@@ -2597,19 +2581,19 @@ export const resolvePackageIssue = catchAsyncError(
 
       if (!packageDoc) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Package not found", 404));
       }
 
       if (!supervisor || !supervisor.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_handle_complaints")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to handle complaints", 403));
       }
 
@@ -2618,14 +2602,14 @@ export const resolvePackageIssue = catchAsyncError(
       
       if (!packageDoc.issues || index >= packageDoc.issues.length) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Issue not found", 404));
       }
 
       const issue = packageDoc.issues[index];
       if (issue.resolved) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Issue is already resolved", 400));
       }
 
@@ -2657,8 +2641,7 @@ export const resolvePackageIssue = catchAsyncError(
       await PackageModel.findByIdAndUpdate(packageId, updateQuery, { session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedPackage = await PackageModel.findById(packageId)
         .populate("clientId", "firstName lastName email phone username")
         .lean();
@@ -2670,7 +2653,7 @@ export const resolvePackageIssue = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error resolving issue", 500));
     }
   }
@@ -2721,13 +2704,13 @@ export const createFreelancer = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
@@ -2746,7 +2729,7 @@ export const createFreelancer = catchAsyncError(
 
       if (!email || !phone || !username || !password || !firstName || !lastName) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("email, phone, username, password, firstName, and lastName are required", 400)
         );
@@ -2762,7 +2745,7 @@ export const createFreelancer = catchAsyncError(
         typeof lastName !== "string"
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("All required fields must be strings", 400));
       }
 
@@ -2774,25 +2757,25 @@ export const createFreelancer = catchAsyncError(
 
       if (!supervisor || !supervisor.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_manage_deliverers")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to manage freelancers", 403));
       }
 
       if (!branch) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Branch not found", 404));
       }
 
       if (branch.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Cannot create freelancer for an inactive branch", 400));
       }
 
@@ -2805,19 +2788,19 @@ export const createFreelancer = catchAsyncError(
 
       if (existingEmail) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Email already exists", 400));
       }
 
       if (existingPhone) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Phone number already exists", 400));
       }
 
       if (existingUsername) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Username already exists", 400));
       }
 
@@ -2855,8 +2838,7 @@ export const createFreelancer = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedFreelancer = await FreelancerModel.findById(freelancer[0]._id)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("defaultOriginBranchId", "name code address status")
@@ -2870,8 +2852,7 @@ export const createFreelancer = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -2902,19 +2883,19 @@ export const updateFreelancer = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!freelancerId || !mongoose.Types.ObjectId.isValid(freelancerId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid freelancer ID", 400));
       }
 
@@ -2922,26 +2903,26 @@ export const updateFreelancer = catchAsyncError(
 
       if (Object.keys(body).length === 0) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("No update data provided", 400));
       }
 
 
       if (body.email !== undefined && typeof body.email !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("email must be a string", 400));
       }
 
       if (body.phone !== undefined && typeof body.phone !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("phone must be a string", 400));
       }
 
       if (body.username !== undefined && typeof body.username !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("username must be a string", 400));
       }
 
@@ -2953,19 +2934,19 @@ export const updateFreelancer = catchAsyncError(
 
       if (!freelancer) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Freelancer not found in this branch", 404));
       }
 
       if (!supervisor || !supervisor.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_manage_deliverers")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to manage freelancers", 403));
       }
 
@@ -2994,7 +2975,7 @@ export const updateFreelancer = catchAsyncError(
 
       if (duplicateResults.some((result) => result !== null)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Email, phone, or username already exists", 400));
       }
 
@@ -3022,8 +3003,7 @@ export const updateFreelancer = catchAsyncError(
       await freelancer.save({ session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedFreelancer = await FreelancerModel.findById(freelancerId)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("defaultOriginBranchId", "name code address status")
@@ -3037,8 +3017,7 @@ export const updateFreelancer = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -3069,19 +3048,19 @@ export const toggleBlockFreelancer = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!freelancerId || !mongoose.Types.ObjectId.isValid(freelancerId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid freelancer ID", 400));
       }
 
@@ -3093,7 +3072,7 @@ export const toggleBlockFreelancer = catchAsyncError(
 
       if (!freelancer) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Freelancer not found in this branch", 404));
       }
 
@@ -3103,7 +3082,7 @@ export const toggleBlockFreelancer = catchAsyncError(
 
       if (!isAdmin && !isAuthorizedSupervisor) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Not authorized to change this freelancer's status", 403));
       }
 
@@ -3116,7 +3095,7 @@ export const toggleBlockFreelancer = catchAsyncError(
         newStatus = 'active';
       } else {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Cannot toggle freelancer with current status", 400));
       }
 
@@ -3131,8 +3110,7 @@ export const toggleBlockFreelancer = catchAsyncError(
       ]);
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedFreelancer = await FreelancerModel.findById(freelancerId)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("defaultOriginBranchId", "name code address status")
@@ -3148,7 +3126,7 @@ export const toggleBlockFreelancer = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error toggling freelancer status", 500));
     }
   }
@@ -3296,7 +3274,7 @@ export const assignDeliverer = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
@@ -3304,7 +3282,7 @@ export const assignDeliverer = catchAsyncError(
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
@@ -3312,19 +3290,19 @@ export const assignDeliverer = catchAsyncError(
 
       if (!userId || !branchId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("userId and branchId are required", 400));
       }
 
       if (typeof userId !== "string" || typeof branchId !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("userId and branchId must be strings", 400));
       }
 
       if (!mongoose.Types.ObjectId.isValid(userId) || !mongoose.Types.ObjectId.isValid(branchId)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid userId or branchId format", 400));
       }
 
@@ -3337,7 +3315,7 @@ export const assignDeliverer = catchAsyncError(
           typeof currentLocation.coordinates[1] !== "number"
         ) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Invalid location format. Expected GeoJSON Point", 400));
         }
       }
@@ -3351,31 +3329,31 @@ export const assignDeliverer = catchAsyncError(
 
       if (!supervisor || !supervisor.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_manage_deliverers")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to manage deliverers", 403));
       }
 
       if (!branch) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Branch not found", 404));
       }
 
       if (branch.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Cannot assign deliverer to an inactive branch", 400));
       }
 
       if (!userToAssign) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User not found", 404));
       }
 
@@ -3385,21 +3363,21 @@ export const assignDeliverer = catchAsyncError(
 
       if (existingDeliverer) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User is already a deliverer", 400));
       }
 
       const existingFreelancer = await FreelancerModel.findOne({ userId }).session(session);
       if (existingFreelancer) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User is already a freelancer, cannot assign as deliverer", 400));
       }
 
       const existingTransporter = await TransporterModel.findOne({ userId }).session(session);
       if (existingTransporter) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User is already a transporter, cannot assign as deliverer", 400));
       }
 
@@ -3426,8 +3404,7 @@ export const assignDeliverer = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedDeliverer = await DelivererModel.findById(deliverer[0]._id)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("branchId", "name code address status")
@@ -3442,8 +3419,7 @@ export const assignDeliverer = catchAsyncError(
 
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -3486,13 +3462,13 @@ export const assignTransporter = catchAsyncError(
 
       if (!managerId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
@@ -3500,25 +3476,25 @@ export const assignTransporter = catchAsyncError(
 
       if (!userId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("userId is required", 400));
       }
 
       if (typeof userId !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("userId must be a string", 400));
       }
 
       if (!mongoose.Types.ObjectId.isValid(userId)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid userId format", 400));
       }
 
       if (currentBranchId && !mongoose.Types.ObjectId.isValid(currentBranchId)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID format", 400));
       }
 
@@ -3531,51 +3507,51 @@ export const assignTransporter = catchAsyncError(
 
       if (!manager || !manager.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active manager of this company", 403));
       }
 
       if (!manager.hasPermission("can_manage_users")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to manage transporters", 403));
       }
 
       if (!company) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Company not found", 404));
       }
 
       if (company.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Cannot assign transporter to an inactive company", 400));
       }
 
       if (!userToAssign) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User not found", 404));
       }
 
       if (existingTransporter) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User is already a transporter", 400));
       }
 
       const existingDeliverer = await DelivererModel.findOne({ userId }).session(session);
       if (existingDeliverer) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User is already a deliverer, cannot assign as transporter", 400));
       }
 
       const existingFreelancer = await FreelancerModel.findOne({ userId }).session(session);
       if (existingFreelancer) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User is already a freelancer, cannot assign as transporter", 400));
       }
 
@@ -3583,7 +3559,7 @@ export const assignTransporter = catchAsyncError(
         const branch = await BranchModel.findOne({ _id: currentBranchId, companyId }).session(session);
         if (!branch) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Branch not found in this company", 404));
         }
       }
@@ -3610,8 +3586,7 @@ export const assignTransporter = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedTransporter = await TransporterModel.findById(transporter[0]._id)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("companyId", "name businessType status")
@@ -3626,8 +3601,7 @@ export const assignTransporter = catchAsyncError(
 
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -3669,13 +3643,13 @@ export const assignFreelancer = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
@@ -3683,19 +3657,19 @@ export const assignFreelancer = catchAsyncError(
 
       if (!userId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("userId is required", 400));
       }
 
       if (typeof userId !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("userId must be a string", 400));
       }
 
       if (!mongoose.Types.ObjectId.isValid(userId)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid userId format", 400));
       }
 
@@ -3708,51 +3682,51 @@ export const assignFreelancer = catchAsyncError(
 
       if (!supervisor || !supervisor.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_manage_deliverers")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to manage freelancers", 403));
       }
 
       if (!branch) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Branch not found", 404));
       }
 
       if (branch.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Cannot assign freelancer to an inactive branch", 400));
       }
 
       if (!userToAssign) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User not found", 404));
       }
 
       if (existingFreelancer) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User is already a freelancer", 400));
       }
 
       const existingDeliverer = await DelivererModel.findOne({ userId }).session(session);
       if (existingDeliverer) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User is already a deliverer, cannot assign as freelancer", 400));
       }
 
       const existingTransporter = await TransporterModel.findOne({ userId }).session(session);
       if (existingTransporter) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User is already a transporter, cannot assign as freelancer", 400));
       }
 
@@ -3778,8 +3752,7 @@ export const assignFreelancer = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedFreelancer = await FreelancerModel.findById(freelancer[0]._id)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("defaultOriginBranchId", "name code address status")
@@ -3794,8 +3767,7 @@ export const assignFreelancer = catchAsyncError(
 
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -5202,19 +5174,19 @@ export const cancelPackage = catchAsyncError(
 
       if (!supervisorUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid package ID", 400));
       }
 
@@ -5222,7 +5194,7 @@ export const cancelPackage = catchAsyncError(
 
       if ((reason !== undefined && typeof reason !== "string") || (reason && reason.trim().length > 200)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("reason must be a string and must not exceed 200 characters.", 400));
       }
 
@@ -5236,31 +5208,31 @@ export const cancelPackage = catchAsyncError(
 
       if (!packageDoc) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Package not found in this branch", 404));
       }
 
       if (!supervisor || !supervisor.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_manage_packages")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You don't have permission to manage packages", 403));
       }
 
       if (packageDoc.status === "cancelled") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Package is already cancelled", 400));
       }
 
       if (NON_CANCELLABLE_STATUSES.includes(packageDoc.status)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             `Cannot cancel a package with status '${packageDoc.status}'`,
@@ -5296,8 +5268,7 @@ export const cancelPackage = catchAsyncError(
       ]);
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedPackage = await PackageModel.findById(packageId)
         .populate("senderId", "firstName lastName email phone role")
         .populate("originBranchId", "name code address")
@@ -5312,8 +5283,7 @@ export const cancelPackage = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -6245,13 +6215,13 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
 
       if (!transporterUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!routeId || !mongoose.Types.ObjectId.isValid(routeId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid route ID", 400));
       }
 
@@ -6263,38 +6233,38 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
 
       if (!transporter || !transporter.isActive || transporter.isSuspended) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Transporter account is not active", 403));
       }
 
       if (transporter.verificationStatus !== "verified") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Transporter is not verified", 403));
       }
 
       if (!route) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Route not found", 404));
       }
 
 
       if (!route.assignedTransporterId?.equals(transporter._id)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not assigned to this route", 403));
       }
 
       if (route.status === "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Route is already active", 400));
       }
 
       if (!["planned", "assigned"].includes(route.status)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             `Cannot start a route with status '${route.status}'`,
@@ -6310,7 +6280,7 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
 
       if (allPackageIds.length === 0) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Route has no packages assigned", 400));
       }
 
@@ -6376,8 +6346,7 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
       ]);
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       return res.status(200).json({
         success: true,
         message: `Route started — ${allPackageIds.length} package(s) marked in transit`,
@@ -6391,7 +6360,7 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error starting transport", 500));
     }
   },
@@ -6423,19 +6392,19 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
 
       if (!transporterUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!routeId || !mongoose.Types.ObjectId.isValid(routeId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid route ID", 400));
       }
 
       if (!stopId || !mongoose.Types.ObjectId.isValid(stopId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid stop ID", 400));
       }
 
@@ -6447,25 +6416,25 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
 
       if (!transporter || !transporter.isActive || transporter.isSuspended) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Transporter account is not active", 403));
       }
 
       if (!route) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Route not found", 404));
       }
 
       if (!route.assignedTransporterId?.equals(transporter._id)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not assigned to this route", 403));
       }
 
       if (route.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             `Route must be active to mark arrivals (current: ${route.status})`,
@@ -6481,7 +6450,7 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
 
       if (stopIndex === -1) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Stop not found in this route", 404));
       }
 
@@ -6489,19 +6458,19 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
 
       if (!stop.branchId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Stop has no branch associated", 400));
       }
 
       if (stop.status === "completed") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("This stop is already completed", 400));
       }
 
       if (stop.packageIds.length === 0) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("No packages assigned to this stop", 400));
       }
 
@@ -6665,8 +6634,7 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
       }
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       return res.status(200).json({
         success: true,
         message: `Arrived at branch — ${finalPackageIds.length} package(s) at destination, ${intermediatePackageIds.length} intermediate`,
@@ -6692,7 +6660,7 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(
         new ErrorHandler(error.message || "Error marking packages arrived", 500),
       );
@@ -6721,13 +6689,13 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
 
       if (!delivererUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
@@ -6738,7 +6706,7 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
 
       if (!rawIds || (Array.isArray(rawIds) && rawIds.length === 0)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("packageIds is required", 400));
       }
 
@@ -6750,7 +6718,7 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
       );
       if (invalidIds.length) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             `Invalid package ID(s): ${invalidIds.join(", ")}`,
@@ -6775,7 +6743,7 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
 
       if (!deliverer || !deliverer.isActive || deliverer.isSuspended) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Deliverer account is not active in this branch", 403),
         );
@@ -6783,20 +6751,20 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
 
       if (deliverer.verificationStatus !== "verified") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Deliverer is not verified", 403));
       }
 
       if (deliverer.availabilityStatus === "off_duty") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Deliverer is off duty", 403));
       }
 
 
       if (packages.length !== packageOids.length) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "One or more packages not found",
@@ -6830,7 +6798,7 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
 
       if (invalidPackages.length) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             `Invalid package(s):\n${invalidPackages.join("\n")}`,
@@ -6889,8 +6857,7 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       return res.status(200).json({
         success: true,
         message: `${packageOids.length} package(s) marked out for delivery`,
@@ -6904,7 +6871,7 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(
         new ErrorHandler(error.message || "Error marking packages out for delivery", 500),
       );
@@ -6933,19 +6900,19 @@ export const deliverPackageFail = catchAsyncError(
 
       if (!delivererUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid package ID", 400));
       }
 
@@ -6953,7 +6920,7 @@ export const deliverPackageFail = catchAsyncError(
 
       if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("reason is required — explain why delivery failed", 400),
         );
@@ -6973,7 +6940,7 @@ export const deliverPackageFail = catchAsyncError(
 
       if (!deliverer || !deliverer.isActive || deliverer.isSuspended) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Deliverer account is not active in this branch", 403),
         );
@@ -6981,14 +6948,14 @@ export const deliverPackageFail = catchAsyncError(
 
       if (!packageDoc) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Package not found or not assigned to this branch", 404));
       }
 
 
       if (!packageDoc.assignedDelivererId?.equals(deliverer._id)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("This package is not assigned to you", 403),
         );
@@ -6996,7 +6963,7 @@ export const deliverPackageFail = catchAsyncError(
 
       if (packageDoc.status !== "out_for_delivery") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             `Package must be 'out_for_delivery' to mark as failed (is '${packageDoc.status}')`,
@@ -7077,8 +7044,7 @@ export const deliverPackageFail = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       return res.status(200).json({
         success: true,
         message: maxReached
@@ -7096,7 +7062,7 @@ export const deliverPackageFail = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(
         new ErrorHandler(error.message || "Error marking delivery as failed", 500),
       );
@@ -7121,19 +7087,19 @@ export const deliveryReturnPackage = catchAsyncError(
 
       if (!delivererUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid package ID", 400));
       }
 
@@ -7155,7 +7121,7 @@ export const deliveryReturnPackage = catchAsyncError(
 
       if (!deliverer || !deliverer.isActive || deliverer.isSuspended) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Deliverer account is not active in this branch", 403),
         );
@@ -7163,7 +7129,7 @@ export const deliveryReturnPackage = catchAsyncError(
 
       if (!packageDoc) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Package not found at this branch", 404),
         );
@@ -7176,7 +7142,7 @@ export const deliveryReturnPackage = catchAsyncError(
 
       if (!returnableStatuses.includes(packageDoc.status)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             `Cannot return a package with status '${packageDoc.status}'. ` +
@@ -7192,7 +7158,7 @@ export const deliveryReturnPackage = catchAsyncError(
         !packageDoc.assignedDelivererId.equals(deliverer._id)
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("This package is not assigned to you", 403),
         );
@@ -7257,8 +7223,7 @@ export const deliveryReturnPackage = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       return res.status(200).json({
         success: true,
         message: "Package returned to branch successfully",
@@ -7272,7 +7237,7 @@ export const deliveryReturnPackage = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(
         new ErrorHandler(error.message || "Error returning package", 500),
       );
@@ -7503,8 +7468,7 @@ export const updateRoute = catchAsyncError(
       await RouteModel.findByIdAndUpdate(routeId, { $set }, { session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updated = await RouteModel.findById(routeId)
         .populate(ROUTE_POPULATE as any)
         .lean();
@@ -7516,7 +7480,7 @@ export const updateRoute = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error updating route", 500));
     }
   },
@@ -7973,8 +7937,7 @@ export const toggleCancelRoute = catchAsyncError(
 
       await Promise.all(sideEffects);
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       return res.status(200).json({
         success: true,
         message: isCancelling
@@ -7988,7 +7951,7 @@ export const toggleCancelRoute = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error toggling route status", 500));
     }
   },

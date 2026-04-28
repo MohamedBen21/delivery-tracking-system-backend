@@ -508,13 +508,13 @@ export const cancelPackage = catchAsyncError(
 
       if (!freelancerUserId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid package ID", 400));
       }
 
@@ -522,7 +522,7 @@ export const cancelPackage = catchAsyncError(
 
       if (reason !== undefined && typeof reason !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("reason must be a string", 400));
       }
 
@@ -538,25 +538,25 @@ export const cancelPackage = catchAsyncError(
 
       if (!freelancer || freelancer.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Freelancer account is not active", 403));
       }
 
       if (!packageDoc) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Package not found or does not belong to you", 404));
       }
 
       if (packageDoc.status === "cancelled") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Package is already cancelled", 400));
       }
 
       if (!FREELANCER_CANCELLABLE_STATUSES.includes(packageDoc.status)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             `Cannot cancel a package with status '${packageDoc.status}'. ` +
@@ -632,8 +632,7 @@ export const cancelPackage = catchAsyncError(
       ]);
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       return res.status(200).json({
         success: true,
         message: "Package cancelled successfully",
@@ -647,7 +646,7 @@ export const cancelPackage = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error cancelling package", 500));
     }
   },

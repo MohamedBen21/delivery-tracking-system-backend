@@ -15,8 +15,9 @@ import VehicleModel, { AssignedUserRole, IVehicleDocuments, VehicleStatus, Vehic
 type CompanyBusinessType = "solo" | "company";
 
 interface IHeadquarters {
-  address: string;
+  street: string;
   city: string;
+  state:string;
   postalCode?: string;
   location: {
     type: "Point";
@@ -51,7 +52,7 @@ export const createCompany = catchAsyncError(
 
       if (!userId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Unauthorized - User not authenticated", 401),
         );
@@ -69,7 +70,7 @@ export const createCompany = catchAsyncError(
 
       if (!name || !businessType) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Name and business type are required", 400),
         );
@@ -80,10 +81,10 @@ export const createCompany = catchAsyncError(
       if (
         !businessType ||
         typeof name !== "string" ||
-        companyType.includes(businessType)
+        !companyType.includes(businessType)
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Name and business type does not meet the requirements",
@@ -94,7 +95,7 @@ export const createCompany = catchAsyncError(
 
       if (registrationNumber && typeof registrationNumber !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Registration number must be a string", 400),
         );
@@ -102,7 +103,7 @@ export const createCompany = catchAsyncError(
 
       if (businessType === "company" && !registrationNumber) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Registration number is required for company business type",
@@ -113,20 +114,20 @@ export const createCompany = catchAsyncError(
 
       if (email && typeof email !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("email must be a string", 400));
       }
 
       if (phone && typeof phone !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("phone number must be a string", 400));
       }
 
       if (headquarters) {
         const hq = headquarters;
 
-        if (typeof hq.address !== "string" || typeof hq.city !== "string") {
+        if (typeof hq.street !== "string" || typeof hq.city !== "string" || typeof hq.state !== "string") {
           return next(
             new ErrorHandler("Invalid headquarters address data", 400),
           );
@@ -150,7 +151,7 @@ export const createCompany = catchAsyncError(
 
       if (existingCompany) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Company with this name already exists.", 400),
         );
@@ -165,7 +166,7 @@ export const createCompany = catchAsyncError(
 
         if (companyWithSameRegistration) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler(
               "Company with this registration number already exists.",
@@ -182,13 +183,13 @@ export const createCompany = catchAsyncError(
 
       if (!user) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User Not found", 400));
       }
 
       if (companyWithSameRegistration) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Company with this registration number already exists.",
@@ -215,8 +216,7 @@ export const createCompany = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedCompany = await CompanyModel.findById(company[0]._id)
         .populate("userId", "firstName lastName email phone username")
         .lean();
@@ -232,8 +232,7 @@ export const createCompany = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -278,7 +277,7 @@ export const updateCompany = catchAsyncError(
 
       if (!userId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Unauthorized, you are not authenticated", 401),
         );
@@ -289,7 +288,7 @@ export const updateCompany = catchAsyncError(
         !mongoose.Types.ObjectId.isValid(companyId.toString())
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
@@ -297,13 +296,13 @@ export const updateCompany = catchAsyncError(
 
       if (Object.keys(body).length === 0) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("No update data provided", 400));
       }
 
       if (body.name && typeof body.name !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Company name must be a string", 400));
       }
 
@@ -312,7 +311,7 @@ export const updateCompany = catchAsyncError(
         !["solo", "company"].includes(body.businessType)
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid business type", 400));
       }
 
@@ -321,7 +320,7 @@ export const updateCompany = catchAsyncError(
         typeof body.registrationNumber !== "string"
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Registration number must be a string", 400),
         );
@@ -329,22 +328,22 @@ export const updateCompany = catchAsyncError(
 
       if (body.email && typeof body.email !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Email must be a string", 400));
       }
 
       if (body.phone && typeof body.phone !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Phone must be a string", 400));
       }
 
       if (body.headquarters) {
         const hq = body.headquarters;
 
-        if (typeof hq.address !== "string" || typeof hq.city !== "string") {
+        if (typeof hq.street !== "string" || typeof hq.city !== "string") {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("Invalid headquarters address data", 400),
           );
@@ -357,7 +356,7 @@ export const updateCompany = catchAsyncError(
           hq.location.coordinates.length !== 2
         ) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("Invalid headquarters location format", 400),
           );
@@ -372,19 +371,19 @@ export const updateCompany = catchAsyncError(
 
       if (!company) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Company not found", 404));
       }
 
       if (!user) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User not found", 404));
       }
 
       if (!manager) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "You are not authorized to update this company",
@@ -395,7 +394,7 @@ export const updateCompany = catchAsyncError(
 
       if (!manager.hasPermission("can_manage_settings")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "You don't have permission to update company settings",
@@ -410,7 +409,7 @@ export const updateCompany = catchAsyncError(
 
       if (finalBusinessType === "company" && !finalRegistration) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Registration number is required for company business type",
@@ -427,7 +426,7 @@ export const updateCompany = catchAsyncError(
 
         if (nameExists) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Company name already exists", 400));
         }
       }
@@ -440,7 +439,7 @@ export const updateCompany = catchAsyncError(
 
         if (regExists) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler(
               "Company with this registration number already exists",
@@ -454,8 +453,7 @@ export const updateCompany = catchAsyncError(
       await company.save({ session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedCompany = await CompanyModel.findById(companyId)
         .populate("userId", "firstName lastName email phone username")
         .lean();
@@ -469,8 +467,7 @@ export const updateCompany = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -503,7 +500,7 @@ export const toggleBlockCompany = catchAsyncError(
 
       if (!userId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Unauthorized, you are not authenticated.", 401),
         );
@@ -514,7 +511,7 @@ export const toggleBlockCompany = catchAsyncError(
         !mongoose.Types.ObjectId.isValid(companyId.toString())
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
@@ -526,7 +523,7 @@ export const toggleBlockCompany = catchAsyncError(
 
       if (!company) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Company not found", 404));
       }
 
@@ -536,7 +533,7 @@ export const toggleBlockCompany = catchAsyncError(
 
       if (!isAdmin && !isAuthorizedManager) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Not authorized to change company status", 403),
         );
@@ -544,7 +541,7 @@ export const toggleBlockCompany = catchAsyncError(
 
       if (!["active", "suspended"].includes(company.status)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(`Invalid company status: ${company.status}`, 400),
         );
@@ -557,8 +554,7 @@ export const toggleBlockCompany = catchAsyncError(
       await company.save({ session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedCompany = await CompanyModel.findById(companyId)
         .populate("userId", "firstName lastName email phone username")
         .lean();
@@ -573,7 +569,7 @@ export const toggleBlockCompany = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(
         new ErrorHandler(error.message || "Error toggling company status", 500),
       );
@@ -741,7 +737,7 @@ export const createBranch = catchAsyncError(
 
       if (!userId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Unauthorized, you are not authenticated.", 401),
         );
@@ -752,7 +748,7 @@ export const createBranch = catchAsyncError(
         !mongoose.Types.ObjectId.isValid(companyId.toString())
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
@@ -772,7 +768,7 @@ export const createBranch = catchAsyncError(
 
       if (!name || !code || !address || !location || !phone || !email) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "name, code, address, location, phone and email are required",
@@ -783,7 +779,7 @@ export const createBranch = catchAsyncError(
 
       if (typeof name !== "string" || typeof code !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("name and code must be strings", 400));
       }
 
@@ -796,7 +792,7 @@ export const createBranch = catchAsyncError(
         typeof address.state !== "string"
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("address must include street, city and state", 400),
         );
@@ -812,7 +808,7 @@ export const createBranch = catchAsyncError(
       ) {
 
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Invalid location format. Expected GeoJSON Point with [lng, lat]",
@@ -827,7 +823,7 @@ export const createBranch = catchAsyncError(
       ) {
         
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("capacityLimit must be a positive number", 400),
         );
@@ -838,7 +834,7 @@ export const createBranch = catchAsyncError(
       if (branchType && !['local_branch', 'regional_main_hub'].includes(branchType)) {
 
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("branchType must be 'local_branch' or 'regional_main_hub'", 400),
         );
@@ -848,7 +844,7 @@ export const createBranch = catchAsyncError(
       if (branchType === 'local_branch' && !parentHubId) {
 
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("parentHubId is required for local branches", 400),
         );
@@ -858,7 +854,7 @@ export const createBranch = catchAsyncError(
       if (parentHubId && !mongoose.Types.ObjectId.isValid(parentHubId)) {
 
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid parentHubId", 400));
       }
 
@@ -874,7 +870,7 @@ export const createBranch = catchAsyncError(
 
         if (!parentHub) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("Parent hub not found or is not a regional main hub", 404),
           );
@@ -885,7 +881,7 @@ export const createBranch = catchAsyncError(
       if (servesBranches && branchType !== 'regional_main_hub') {
 
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Only regional_main_hub can serve other branches", 400),
         );
@@ -898,7 +894,7 @@ export const createBranch = catchAsyncError(
           if (!mongoose.Types.ObjectId.isValid(servedBranchId)) {
 
             await session.abortTransaction();
-            session.endSession();
+            await session.endSession();
             return next(new ErrorHandler(`Invalid branch ID in servesBranches: ${servedBranchId}`, 400));
           }
         }
@@ -911,13 +907,13 @@ export const createBranch = catchAsyncError(
 
       if (!company) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Company not found", 404));
       }
 
       if (!manager || !manager.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "You are not an active manager of this company",
@@ -928,7 +924,7 @@ export const createBranch = catchAsyncError(
 
       if (!manager.hasPermission("can_manage_branches")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("You don't have permission to manage branches", 403),
         );
@@ -936,7 +932,7 @@ export const createBranch = catchAsyncError(
 
       if (company.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Cannot create branch for an inactive or suspended company",
@@ -951,7 +947,7 @@ export const createBranch = catchAsyncError(
 
       if (existingBranch) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("A branch with this code already exists", 400),
         );
@@ -990,8 +986,7 @@ export const createBranch = catchAsyncError(
       }
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedBranch = await BranchModel.findById(branch[0]._id)
         .populate("companyId", "name businessType status")
         .lean();
@@ -1003,8 +998,7 @@ export const createBranch = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -1036,7 +1030,7 @@ export const updateBranch = catchAsyncError(
 
       if (!userId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Unauthorized, you are not authenticated.", 401),
         );
@@ -1047,13 +1041,13 @@ export const updateBranch = catchAsyncError(
         !mongoose.Types.ObjectId.isValid(companyId.toString())
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
@@ -1061,13 +1055,13 @@ export const updateBranch = catchAsyncError(
 
       if (Object.keys(body).length === 0) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("No update data provided", 400));
       }
 
       if (body.name !== undefined && typeof body.name !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("name must be a string", 400));
       }
 
@@ -1079,7 +1073,7 @@ export const updateBranch = catchAsyncError(
           (state !== undefined && typeof state !== "string")
         ) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("address fields must be strings", 400));
         }
       }
@@ -1093,7 +1087,7 @@ export const updateBranch = catchAsyncError(
           typeof body.location.coordinates[1] !== "number"
         ) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler(
               "Invalid location format. Expected GeoJSON Point with [lng, lat]",
@@ -1108,7 +1102,7 @@ export const updateBranch = catchAsyncError(
         (typeof body.capacityLimit !== "number" || body.capacityLimit < 1)
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("capacityLimit must be a positive number", 400),
         );
@@ -1116,7 +1110,7 @@ export const updateBranch = catchAsyncError(
 
       if (body.branchType && !['local_branch', 'regional_main_hub'].includes(body.branchType)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("branchType must be 'local_branch' or 'regional_main_hub'", 400),
         );
@@ -1125,7 +1119,7 @@ export const updateBranch = catchAsyncError(
       if (body.parentHubId && !mongoose.Types.ObjectId.isValid(body.parentHubId)) {
 
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid parentHubId", 400));
       }
 
@@ -1137,13 +1131,13 @@ export const updateBranch = catchAsyncError(
 
       if (!branch) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Branch not found", 404));
       }
 
       if (!company) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Company not found", 404));
       }
 
@@ -1153,7 +1147,7 @@ export const updateBranch = catchAsyncError(
         if (childBranches.length > 0) {
 
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler(
               `Cannot change hub to local branch. It currently serves ${childBranches.length} branches. Reassign them first.`,
@@ -1174,7 +1168,7 @@ export const updateBranch = catchAsyncError(
         if (!parentHub) {
 
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("Parent hub not found or is not a regional main hub", 404),
           );
@@ -1183,7 +1177,7 @@ export const updateBranch = catchAsyncError(
         if (branch.branchType === 'regional_main_hub') {
 
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("Regional main hubs cannot have a parent hub", 400),
           );
@@ -1193,7 +1187,7 @@ export const updateBranch = catchAsyncError(
       if (body.parentHubId === null && branch.branchType === 'local_branch') {
 
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Local branches must have a parent hub", 400),
         );
@@ -1202,7 +1196,7 @@ export const updateBranch = catchAsyncError(
       if (!manager || !manager.isActive) {
         
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "You are not an active manager of this company",
@@ -1213,7 +1207,7 @@ export const updateBranch = catchAsyncError(
 
       if (!manager.hasPermission("can_manage_branches")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("You don't have permission to manage branches", 403),
         );
@@ -1225,7 +1219,7 @@ export const updateBranch = catchAsyncError(
         )
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("You don't have access to this branch", 403),
         );
@@ -1236,7 +1230,7 @@ export const updateBranch = catchAsyncError(
         body.capacityLimit < branch.currentLoad
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             `Capacity limit cannot be less than current load (${branch.currentLoad})`,
@@ -1249,8 +1243,7 @@ export const updateBranch = catchAsyncError(
       await branch.save({ session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedBranch = await BranchModel.findById(branchId)
         .populate("companyId", "name businessType status")
         .lean();
@@ -1262,8 +1255,7 @@ export const updateBranch = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -1295,7 +1287,7 @@ export const toggleBlockBranch = catchAsyncError(
 
       if (!userId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Unauthorized, you are not authenticated.", 401),
         );
@@ -1306,13 +1298,13 @@ export const toggleBlockBranch = catchAsyncError(
         !mongoose.Types.ObjectId.isValid(companyId.toString())
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
@@ -1324,7 +1316,7 @@ export const toggleBlockBranch = catchAsyncError(
 
       if (!branch) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Branch not found", 404));
       }
 
@@ -1339,7 +1331,7 @@ export const toggleBlockBranch = catchAsyncError(
 
       if (!isAdmin && !isAuthorizedManager) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Not authorized to change this branch status", 403),
         );
@@ -1347,7 +1339,7 @@ export const toggleBlockBranch = catchAsyncError(
 
       if (!["active", "inactive"].includes(branch.status)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             `Cannot toggle a branch with status "${branch.status}". Only active/inactive branches can be toggled`,
@@ -1367,7 +1359,7 @@ export const toggleBlockBranch = catchAsyncError(
 
         if (childBranches.length > 0) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler(
               `Cannot deactivate this hub. It currently serves ${childBranches.length} active branches: ${childBranches.map(b => b.name).join(", ")}. Reassign them to another hub first.`,
@@ -1381,8 +1373,7 @@ export const toggleBlockBranch = catchAsyncError(
       await branch.save({ session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedBranch = await BranchModel.findById(branchId)
         .populate("companyId", "name businessType status")
         .lean();
@@ -1397,7 +1388,7 @@ export const toggleBlockBranch = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(
         new ErrorHandler(error.message || "Error toggling branch status", 500),
       );
@@ -1419,7 +1410,7 @@ export const switchBranchHub = catchAsyncError(
 
       if (!userId || !mongoose.Types.ObjectId.isValid(userId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Unauthorized, you are not authenticated.", 401),
         );
@@ -1427,25 +1418,25 @@ export const switchBranchHub = catchAsyncError(
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!promotedBranchId || !mongoose.Types.ObjectId.isValid(promotedBranchId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid promoted branch ID", 400));
       }
 
       if (branchId === promotedBranchId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Cannot switch hub with itself", 400),
         );
@@ -1459,13 +1450,13 @@ export const switchBranchHub = catchAsyncError(
 
       if (!user) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("User not found", 404));
       }
 
       if (user.role !== "manager") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Only managers can switch branch hub", 403),
         );
@@ -1473,7 +1464,7 @@ export const switchBranchHub = catchAsyncError(
 
       if (!manager) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("You are not a manager of this company", 403),
         );
@@ -1481,7 +1472,7 @@ export const switchBranchHub = catchAsyncError(
 
       if (!manager.isActive || !manager.hasPermission("can_manage_branches")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("You don't have permission to manage branches", 403),
         );
@@ -1489,13 +1480,13 @@ export const switchBranchHub = catchAsyncError(
 
       if (!company) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Company not found", 404));
       }
 
       if (company.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Cannot switch hub for an inactive company", 400),
         );
@@ -1506,7 +1497,7 @@ export const switchBranchHub = catchAsyncError(
         !manager.canAccessBranch(new mongoose.Types.ObjectId(promotedBranchId.toString()))
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("You don't have access to one or both of these branches", 403),
         );
@@ -1519,7 +1510,7 @@ export const switchBranchHub = catchAsyncError(
 
       if (!branch || branch.branchType !== "regional_main_hub") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Branch not found or is not a regional main hub", 404),
         );
@@ -1527,7 +1518,7 @@ export const switchBranchHub = catchAsyncError(
 
       if (branch.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(`Cannot switch an inactive hub. Current status: ${branch.status}`, 400),
         );
@@ -1535,7 +1526,7 @@ export const switchBranchHub = catchAsyncError(
 
       if (!promotedBranch || promotedBranch.branchType !== "local_branch") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Promoted branch not found or is not a local branch", 404),
         );
@@ -1543,7 +1534,7 @@ export const switchBranchHub = catchAsyncError(
 
       if (promotedBranch.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(`Cannot promote an inactive branch. Current status: ${promotedBranch.status}`, 400),
         );
@@ -1551,7 +1542,7 @@ export const switchBranchHub = catchAsyncError(
 
       if (promotedBranch.parentHubId?.toString() !== branchId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("The promoted branch must be a child of the hub being replaced", 400),
         );
@@ -1590,8 +1581,7 @@ export const switchBranchHub = catchAsyncError(
       }
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const [updatedHub, updatedOldHub] = await Promise.all([
         BranchModel.findById(promotedBranchId)
           .populate("companyId", "name businessType status")
@@ -1613,8 +1603,7 @@ export const switchBranchHub = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -1795,7 +1784,7 @@ export const createSupervisor = catchAsyncError(
 
       if (!managerId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Unauthorized, user not authenticated.", 401),
         );
@@ -1806,7 +1795,7 @@ export const createSupervisor = catchAsyncError(
         !mongoose.Types.ObjectId.isValid(companyId.toString())
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
@@ -1830,7 +1819,7 @@ export const createSupervisor = catchAsyncError(
         !password
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("All required fields must be provided", 400),
         );
@@ -1845,7 +1834,7 @@ export const createSupervisor = catchAsyncError(
         typeof password !== "string"
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "All required fields must be in their proper types.",
@@ -1856,20 +1845,20 @@ export const createSupervisor = catchAsyncError(
 
       if (!mongoose.Types.ObjectId.isValid(branchId)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (permissions !== undefined) {
         if (!Array.isArray(permissions)) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Permissions must be an array", 400));
         }
 
         if (new Set(permissions).size !== permissions.length) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("Duplicate permissions are not allowed", 400),
           );
@@ -1885,13 +1874,13 @@ export const createSupervisor = catchAsyncError(
 
       if (!manager || !manager.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active manager", 403));
       }
 
       if (!manager.hasPermission("can_manage_supervisors")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("No permission to manage supervisors", 403),
         );
@@ -1899,13 +1888,13 @@ export const createSupervisor = catchAsyncError(
 
       if (!branch || branch.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid or inactive branch", 400));
       }
 
       if (existingUser) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("User with this email already exists", 400),
         );
@@ -1940,8 +1929,7 @@ export const createSupervisor = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const populatedSupervisor = await SupervisorModel.findById(
         supervisor[0]._id,
       )
@@ -1957,8 +1945,7 @@ export const createSupervisor = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -1989,7 +1976,7 @@ export const updateSupervisor = catchAsyncError(
 
       if (!managerId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Unauthorized, user is not authenticated", 401),
         );
@@ -2000,7 +1987,7 @@ export const updateSupervisor = catchAsyncError(
         !mongoose.Types.ObjectId.isValid(supervisorId.toString())
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid supervisor ID", 400));
       }
 
@@ -2014,7 +2001,7 @@ export const updateSupervisor = catchAsyncError(
         userData === undefined
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("No update data provided", 400));
       }
 
@@ -2023,7 +2010,7 @@ export const updateSupervisor = catchAsyncError(
 
       if (!supervisor) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Supervisor not found", 404));
       }
 
@@ -2034,7 +2021,7 @@ export const updateSupervisor = catchAsyncError(
 
       if (!manager || !manager.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("You are not authorized to update supervisors", 403),
         );
@@ -2042,20 +2029,20 @@ export const updateSupervisor = catchAsyncError(
 
       if (!manager.hasPermission("can_manage_supervisors")) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Permission denied", 403));
       }
 
       if (permissions !== undefined) {
         if (!Array.isArray(permissions)) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("permissions must be an array", 400));
         }
 
         if (new Set(permissions).size !== permissions.length) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("Duplicate permissions are not allowed", 400),
           );
@@ -2084,14 +2071,14 @@ export const updateSupervisor = catchAsyncError(
 
         if (!user) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Linked user not found", 404));
         }
 
         if (userData.firstName !== undefined) {
           if (typeof userData.firstName !== "string") {
             await session.abortTransaction();
-            session.endSession();
+            await session.endSession();
             return next(new ErrorHandler("firstName must be string", 400));
           }
           user.firstName = userData.firstName;
@@ -2100,7 +2087,7 @@ export const updateSupervisor = catchAsyncError(
         if (userData.lastName !== undefined) {
           if (typeof userData.lastName !== "string") {
             await session.abortTransaction();
-            session.endSession();
+            await session.endSession();
             return next(new ErrorHandler("lastName must be string", 400));
           }
           user.lastName = userData.lastName;
@@ -2109,7 +2096,7 @@ export const updateSupervisor = catchAsyncError(
         if (userData.phone !== undefined) {
           if (typeof userData.phone !== "string") {
             await session.abortTransaction();
-            session.endSession();
+            await session.endSession();
             return next(new ErrorHandler("phone must be string", 400));
           }
           user.phone = userData.phone;
@@ -2120,8 +2107,7 @@ export const updateSupervisor = catchAsyncError(
       }
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedSupervisor = await SupervisorModel.findById(supervisorId)
         .populate("userId", "firstName lastName email phone username imageUrl")
         .populate("branchId", "name code address status")
@@ -2134,8 +2120,7 @@ export const updateSupervisor = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -2166,7 +2151,7 @@ export const toggleBlockSupervisor = catchAsyncError(
 
       if (!managerId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Unauthorized, you are not authenticated.", 401),
         );
@@ -2177,7 +2162,7 @@ export const toggleBlockSupervisor = catchAsyncError(
         !mongoose.Types.ObjectId.isValid(companyId.toString())
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
@@ -2186,7 +2171,7 @@ export const toggleBlockSupervisor = catchAsyncError(
         !mongoose.Types.ObjectId.isValid(supervisorId.toString())
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid supervisor ID", 400));
       }
 
@@ -2200,7 +2185,7 @@ export const toggleBlockSupervisor = catchAsyncError(
 
       if (!supervisor) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Supervisor not found", 404));
       }
 
@@ -2213,7 +2198,7 @@ export const toggleBlockSupervisor = catchAsyncError(
 
       if (!isAdmin && !isAuthorizedManager) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Not authorized to change this supervisor's status",
@@ -2234,8 +2219,7 @@ export const toggleBlockSupervisor = catchAsyncError(
       ]);
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedSupervisor = await SupervisorModel.findById(supervisorId)
         .populate("userId", "firstName lastName email phone username imageUrl")
         .populate("branchId", "name code address status")
@@ -2251,7 +2235,7 @@ export const toggleBlockSupervisor = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(
         new ErrorHandler(
           error.message || "Error toggling supervisor status",
