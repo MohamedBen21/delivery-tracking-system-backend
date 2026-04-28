@@ -161,7 +161,7 @@ export const createVehicle = catchAsyncError(
 
       if (!managerId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Unauthorized, you are not authenticated.", 401),
         );
@@ -169,7 +169,7 @@ export const createVehicle = catchAsyncError(
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
@@ -190,13 +190,13 @@ export const createVehicle = catchAsyncError(
 
       if (!type) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Vehicle type is required", 400));
       }
 
       if (!VEHICLE_TYPES.includes(type)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             `Invalid vehicle type. Must be one of: ${VEHICLE_TYPES.join(", ")}`,
@@ -207,7 +207,7 @@ export const createVehicle = catchAsyncError(
 
       if (!registrationNumber) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Registration number is required", 400),
         );
@@ -215,7 +215,7 @@ export const createVehicle = catchAsyncError(
 
       if (typeof registrationNumber !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Registration number must be a string", 400),
         );
@@ -225,7 +225,7 @@ export const createVehicle = catchAsyncError(
 
       if (!REGISTRATION_NUMBER_REGEX.test(normalizedRegNum)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Registration number must be 5–20 characters and contain only letters, numbers, spaces, or hyphens",
@@ -236,19 +236,19 @@ export const createVehicle = catchAsyncError(
 
       if (maxWeight === undefined || maxWeight === null) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("maxWeight is required", 400));
       }
 
       if (typeof maxWeight !== "number" || isNaN(maxWeight)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("maxWeight must be a number", 400));
       }
 
       if (maxWeight < 1 || maxWeight > 50000) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("maxWeight must be between 1 and 50 000 kg", 400),
         );
@@ -256,19 +256,19 @@ export const createVehicle = catchAsyncError(
 
       if (maxVolume === undefined || maxVolume === null) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("maxVolume is required", 400));
       }
 
       if (typeof maxVolume !== "number" || isNaN(maxVolume)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("maxVolume must be a number", 400));
       }
 
       if (maxVolume < 0.1 || maxVolume > 100) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "maxVolume must be between 0.1 and 100 cubic meters",
@@ -280,14 +280,14 @@ export const createVehicle = catchAsyncError(
       if (brand !== undefined) {
         if (typeof brand !== "string" || brand.trim().length === 0) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("brand must be a non-empty string", 400),
           );
         }
         if (brand.trim().length > 50) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("brand cannot exceed 50 characters", 400),
           );
@@ -297,14 +297,14 @@ export const createVehicle = catchAsyncError(
       if (modelName !== undefined) {
         if (typeof modelName !== "string" || modelName.trim().length === 0) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("modelName must be a non-empty string", 400),
           );
         }
         if (modelName.trim().length > 50) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("modelName cannot exceed 50 characters", 400),
           );
@@ -314,13 +314,13 @@ export const createVehicle = catchAsyncError(
       if (year !== undefined) {
         if (!Number.isInteger(year)) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("year must be an integer", 400));
         }
         const maxYear = new Date().getFullYear() + 1;
         if (year < 1900 || year > maxYear) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler(
               `year must be between 1900 and ${maxYear}`,
@@ -332,13 +332,13 @@ export const createVehicle = catchAsyncError(
 
       if (color !== undefined && typeof color !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("color must be a string", 400));
       }
 
       if (supportsFragile !== undefined && typeof supportsFragile !== "boolean") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("supportsFragile must be a boolean", 400),
         );
@@ -347,7 +347,7 @@ export const createVehicle = catchAsyncError(
       if (currentBranchId !== undefined) {
         if (!mongoose.Types.ObjectId.isValid(currentBranchId)) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Invalid currentBranchId", 400));
         }
       }
@@ -355,12 +355,12 @@ export const createVehicle = catchAsyncError(
       if (notes !== undefined) {
         if (typeof notes !== "string") {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("notes must be a string", 400));
         }
         if (notes.trim().length > 500) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("notes cannot exceed 500 characters", 400),
           );
@@ -370,7 +370,7 @@ export const createVehicle = catchAsyncError(
       if (documents !== undefined) {
         if (typeof documents !== "object" || Array.isArray(documents)) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("documents must be an object", 400),
           );
@@ -378,7 +378,7 @@ export const createVehicle = catchAsyncError(
         const docsValid = validateDocuments(documents, next);
         if (!docsValid) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return;
         }
       }
@@ -397,13 +397,13 @@ export const createVehicle = catchAsyncError(
 
       if (!company) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Company not found", 404));
       }
 
       if (company.status !== "active") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Cannot add vehicles to an inactive company", 400),
         );
@@ -417,7 +417,7 @@ export const createVehicle = catchAsyncError(
 
       if (!isAdmin && !isAuthorizedManager) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Not authorized to manage vehicles for this company",
@@ -428,7 +428,7 @@ export const createVehicle = catchAsyncError(
 
       if (existingVehicle) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "A vehicle with this registration number already exists",
@@ -479,8 +479,7 @@ export const createVehicle = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const [populatedVehicle] = await VehicleModel.aggregate([
         { $match: { _id: vehicle._id } },
         {
@@ -517,8 +516,7 @@ export const createVehicle = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -564,7 +562,7 @@ export const updateVehicle = catchAsyncError(
 
       if (!managerId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Unauthorized, you are not authenticated.", 401),
         );
@@ -573,13 +571,13 @@ export const updateVehicle = catchAsyncError(
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!vehicleId || !mongoose.Types.ObjectId.isValid(vehicleId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid vehicle ID", 400));
       }
 
@@ -606,7 +604,7 @@ export const updateVehicle = catchAsyncError(
         (req.body as any).assignedUserRole !== undefined
       ) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Use the dedicated assign/release endpoint to manage vehicle assignment",
@@ -617,7 +615,7 @@ export const updateVehicle = catchAsyncError(
 
       if (type !== undefined && !VEHICLE_TYPES.includes(type)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             `Invalid vehicle type. Must be one of: ${VEHICLE_TYPES.join(", ")}`,
@@ -630,7 +628,7 @@ export const updateVehicle = catchAsyncError(
       if (registrationNumber !== undefined) {
         if (typeof registrationNumber !== "string") {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("Registration number must be a string", 400),
           );
@@ -638,7 +636,7 @@ export const updateVehicle = catchAsyncError(
         normalizedRegNum = registrationNumber.trim().toUpperCase();
         if (!REGISTRATION_NUMBER_REGEX.test(normalizedRegNum)) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler(
               "Registration number must be 5–20 characters and contain only letters, numbers, spaces, or hyphens",
@@ -651,12 +649,12 @@ export const updateVehicle = catchAsyncError(
       if (maxWeight !== undefined) {
         if (typeof maxWeight !== "number" || isNaN(maxWeight)) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("maxWeight must be a number", 400));
         }
         if (maxWeight < 1 || maxWeight > 50000) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("maxWeight must be between 1 and 50 000 kg", 400),
           );
@@ -666,12 +664,12 @@ export const updateVehicle = catchAsyncError(
       if (maxVolume !== undefined) {
         if (typeof maxVolume !== "number" || isNaN(maxVolume)) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("maxVolume must be a number", 400));
         }
         if (maxVolume < 0.1 || maxVolume > 100) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler(
               "maxVolume must be between 0.1 and 100 cubic meters",
@@ -684,14 +682,14 @@ export const updateVehicle = catchAsyncError(
       if (brand !== undefined) {
         if (typeof brand !== "string" || brand.trim().length === 0) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("brand must be a non-empty string", 400),
           );
         }
         if (brand.trim().length > 50) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("brand cannot exceed 50 characters", 400),
           );
@@ -701,14 +699,14 @@ export const updateVehicle = catchAsyncError(
       if (modelName !== undefined) {
         if (typeof modelName !== "string" || modelName.trim().length === 0) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("modelName must be a non-empty string", 400),
           );
         }
         if (modelName.trim().length > 50) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("modelName cannot exceed 50 characters", 400),
           );
@@ -718,13 +716,13 @@ export const updateVehicle = catchAsyncError(
       if (year !== undefined) {
         if (!Number.isInteger(year)) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("year must be an integer", 400));
         }
         const maxYear = new Date().getFullYear() + 1;
         if (year < 1900 || year > maxYear) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler(`year must be between 1900 and ${maxYear}`, 400),
           );
@@ -733,13 +731,13 @@ export const updateVehicle = catchAsyncError(
 
       if (color !== undefined && typeof color !== "string") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("color must be a string", 400));
       }
 
       if (supportsFragile !== undefined && typeof supportsFragile !== "boolean") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("supportsFragile must be a boolean", 400),
         );
@@ -748,7 +746,7 @@ export const updateVehicle = catchAsyncError(
       if (currentBranchId !== undefined) {
         if (!mongoose.Types.ObjectId.isValid(currentBranchId)) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("Invalid currentBranchId", 400));
         }
       }
@@ -756,7 +754,7 @@ export const updateVehicle = catchAsyncError(
       if (status !== undefined) {
         if (status === "in_use") {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler(
               "Cannot manually set status to 'in_use'. Use the assign endpoint instead.",
@@ -766,7 +764,7 @@ export const updateVehicle = catchAsyncError(
         }
         if (!VEHICLE_STATUSES.includes(status)) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler(
               `Invalid status. Must be one of: ${VEHICLE_STATUSES.filter((s) => s !== "in_use").join(", ")}`,
@@ -779,12 +777,12 @@ export const updateVehicle = catchAsyncError(
       if (notes !== undefined) {
         if (typeof notes !== "string") {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("notes must be a string", 400));
         }
         if (notes.trim().length > 500) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler("notes cannot exceed 500 characters", 400),
           );
@@ -794,13 +792,13 @@ export const updateVehicle = catchAsyncError(
       if (documents !== undefined) {
         if (typeof documents !== "object" || Array.isArray(documents)) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(new ErrorHandler("documents must be an object", 400));
         }
         const docsValid = validateDocuments(documents, next);
         if (!docsValid) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return;
         }
       }
@@ -814,7 +812,7 @@ export const updateVehicle = catchAsyncError(
 
       if (!vehicle) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Vehicle not found or does not belong to this company",
@@ -831,7 +829,7 @@ export const updateVehicle = catchAsyncError(
 
       if (!isAdmin && !isAuthorizedManager) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Not authorized to manage vehicles for this company",
@@ -843,7 +841,7 @@ export const updateVehicle = catchAsyncError(
 
       if (vehicle.status === "in_use" && status) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(
             "Cannot change status of a vehicle currently in use. Release the vehicle first.",
@@ -866,7 +864,7 @@ export const updateVehicle = catchAsyncError(
 
         if (duplicate) {
           await session.abortTransaction();
-          session.endSession();
+          await session.endSession();
           return next(
             new ErrorHandler(
               "A vehicle with this registration number already exists",
@@ -922,9 +920,7 @@ export const updateVehicle = catchAsyncError(
       );
 
       await session.commitTransaction();
-      session.endSession();
-
-
+      await session.endSession();
       const [populatedVehicle] = await VehicleModel.aggregate([
         { $match: { _id: updatedVehicle!._id } },
         {
@@ -980,8 +976,7 @@ export const updateVehicle = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
-
+      await session.endSession();
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -1025,19 +1020,19 @@ export const toggleVehicleStatus = catchAsyncError(
 
       if (!userId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!vehicleId || !mongoose.Types.ObjectId.isValid(vehicleId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid vehicle ID", 400));
       }
 
@@ -1049,13 +1044,13 @@ export const toggleVehicleStatus = catchAsyncError(
 
       if (!vehicle) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Vehicle not found", 404));
       }
 
       if (vehicle.status === "in_use") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler("Cannot toggle status of a vehicle that is currently in use", 400)
         );
@@ -1066,7 +1061,7 @@ export const toggleVehicleStatus = catchAsyncError(
 
       if (!isAdmin && !isAuthorizedManager) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Not authorized to change this vehicle's status", 403));
       }
 
@@ -1077,8 +1072,7 @@ export const toggleVehicleStatus = catchAsyncError(
       await vehicle.save({ session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedVehicle = await VehicleModel.findById(vehicleId)
         .populate("companyId", "name businessType status")
         .populate("currentBranchId", "name code address status")
@@ -1094,7 +1088,7 @@ export const toggleVehicleStatus = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error toggling vehicle status", 500));
     }
   }
@@ -1469,38 +1463,38 @@ export const assignVehicle = catchAsyncError(
 
       if (!userId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!vehicleId || !mongoose.Types.ObjectId.isValid(vehicleId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid vehicle ID", 400));
       }
 
       if (!assignedUserId || !mongoose.Types.ObjectId.isValid(assignedUserId)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid assigned user ID", 400));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       const validRoles = ["transporter", "deliverer", "driver"];
       if (assignedUserRole && !validRoles.includes(assignedUserRole)) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(`assignedUserRole must be one of: ${validRoles.join(", ")}`, 400)
         );
@@ -1515,31 +1509,31 @@ export const assignVehicle = catchAsyncError(
 
       if (!vehicle) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Vehicle not found", 404));
       }
 
       if (!manager || !manager.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active manager of this company", 403));
       }
 
       if (!assignedUser) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Assigned user not found", 404));
       }
 
       if (!branch) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Branch not found or does not belong to this company", 404));
       }
 
       if (vehicle.status !== "available") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(
           new ErrorHandler(`Vehicle cannot be assigned. Current status: ${vehicle.status}`, 400)
         );
@@ -1553,8 +1547,7 @@ export const assignVehicle = catchAsyncError(
       await vehicle.save({ session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedVehicle = await VehicleModel.findById(vehicleId)
         .populate("companyId", "name businessType status")
         .populate("currentBranchId", "name code address status")
@@ -1568,7 +1561,7 @@ export const assignVehicle = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error assigning vehicle", 500));
     }
   }
@@ -1589,19 +1582,19 @@ export const releaseVehicle = catchAsyncError(
 
       if (!userId) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!vehicleId || !mongoose.Types.ObjectId.isValid(vehicleId.toString())) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Invalid vehicle ID", 400));
       }
 
@@ -1612,19 +1605,19 @@ export const releaseVehicle = catchAsyncError(
 
       if (!vehicle) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Vehicle not found", 404));
       }
 
       if (!manager || !manager.isActive) {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("You are not an active manager of this company", 403));
       }
 
       if (vehicle.status !== "in_use") {
         await session.abortTransaction();
-        session.endSession();
+        await session.endSession();
         return next(new ErrorHandler("Vehicle is not currently in use", 400));
       }
 
@@ -1634,8 +1627,7 @@ export const releaseVehicle = catchAsyncError(
       await vehicle.save({ session });
 
       await session.commitTransaction();
-      session.endSession();
-
+      await session.endSession();
       const updatedVehicle = await VehicleModel.findById(vehicleId)
         .populate("companyId", "name businessType status")
         .populate("currentBranchId", "name code address status")
@@ -1648,7 +1640,7 @@ export const releaseVehicle = catchAsyncError(
       });
     } catch (error: any) {
       await session.abortTransaction();
-      session.endSession();
+      await session.endSession();
       return next(new ErrorHandler(error.message || "Error releasing vehicle", 500));
     }
   }
