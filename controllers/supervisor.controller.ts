@@ -17,6 +17,7 @@ import RouteModel, { RouteStatus, RouteType } from "../models/route.model";
 import VehicleModel from "../models/vehicle.model";
 import { deleteImage } from "../utils/Multer.util";
 import { buildUserFieldUpdates } from "./manager.controller";
+import PaymentModel from "../models/payment.model";
 
 
 interface ILocationBody {
@@ -1847,6 +1848,46 @@ export const createPackage = catchAsyncError(
         { session }
       );
 
+
+      // Create payment record
+      if (deliveryType === 'home') {
+        await PaymentModel.create(
+          [{
+
+            companyId: branch.companyId,
+            packageId: packageData[0]._id,
+            trackingNumber: trackingNumber,
+            delivererId: undefined,
+            branchId: branchId,
+            clientId: clientId,
+            collectionMethod: 'home_delivery',
+            amount: totalPrice,
+            paymentMethod: (paymentMethod as any) || 'cod',
+            status: 'pending',
+          }],
+
+          { session }
+        );
+      } else if (deliveryType === 'branch_pickup') {
+        await PaymentModel.create(
+
+          [{
+            companyId: branch.companyId,
+            packageId: packageData[0]._id,
+            trackingNumber: trackingNumber,
+            branchId: branchId,
+            processedById: supervisorUserId,
+            clientId: clientId,
+            collectionMethod: 'branch_pickup',
+            amount: totalPrice,
+            paymentMethod: (paymentMethod as any) || 'branch_payment',
+            status: 'pending',
+          }],
+
+          { session }
+        );
+      }
+
       // // Update freelancer statistics if sender is freelancer --- i will use it later
       // if (senderType === 'freelancer' && freelancer) {
       //   await FreelancerModel.findByIdAndUpdate(
@@ -2052,6 +2093,33 @@ export const updatePackage = catchAsyncError(
       //   }
       // }
 
+      // Update payment record when payment status changes
+      if (body.paymentStatus && body.paymentStatus !== packageDoc.paymentStatus) {
+        const payment = await PaymentModel.findOne({ packageId: packageDoc._id }).session(session);
+        
+        if (payment) {
+          switch (body.paymentStatus) {
+            case 'paid':
+              payment.status = 'collected';
+              // If home delivery and deliverer is assigned, set delivererId
+              if (payment.collectionMethod === 'home_delivery' && body.assignedDelivererId) {
+                payment.delivererId = new mongoose.Types.ObjectId(body.assignedDelivererId);
+              }
+              break;
+            case 'pending':
+              payment.status = 'pending';
+              break;
+            case 'refunded':
+              payment.status = 'refunded';
+              break;
+            case 'failed':
+              payment.status = 'disputed';
+              break;
+          }
+          await payment.save({ session });
+        }
+      }
+
       await PackageModel.findByIdAndUpdate(
         packageId,
         { $set: packageUpdates },
@@ -2202,10 +2270,30 @@ export const toggleCancelPackage = catchAsyncError(
         { session }
       );
 
+
+      const payment = await PaymentModel.findOne({ packageId: packageDoc._id }).session(session);
+      
+      if (payment) {
+        if (newStatus === "cancelled") {
+          payment.status = 'cancelled';
+          await payment.save({ session });
+        } else {
+
+          payment.status = packageDoc.paymentStatus === 'paid' ? 'collected' : 'pending';
+          await payment.save({ session });
+        }
+      }
+
       if (newStatus === "cancelled") {
         await BranchModel.findByIdAndUpdate(
           branchId,
           { $inc: { currentLoad: -1 } },
+          { session }
+        );
+      } else {
+        await BranchModel.findByIdAndUpdate(
+          branchId,
+          { $inc: { currentLoad: 1 } },
           { session }
         );
       }
