@@ -182,6 +182,78 @@ const paymentSchema = new Schema<IPayment>({
   toObject: { virtuals: true },
 });
 
+
+paymentSchema.virtual('isOverdue').get(function() {
+  if (this.isSettled || !this.settlementDeadline) return false;
+  return new Date() > this.settlementDeadline;
+});
+
+
+paymentSchema.virtual('daysUntilDeadline').get(function() {
+  if (!this.settlementDeadline || this.isSettled) return 0;
+  const now = new Date();
+  const diffMs = this.settlementDeadline.getTime() - now.getTime();
+  return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+});
+
+
+paymentSchema.methods.setSettlementDeadline = function() {
+  if (this.collectionMethod === 'home_delivery' && !this.settlementDeadline && this.status === 'collected') {
+    const deadline = new Date();
+    deadline.setDate(deadline.getDate() + 7);
+    this.settlementDeadline = deadline;
+  }
+  return this.save();
+};
+
+
+paymentSchema.methods.markAsSettled = function(
+  processedBy: mongoose.Types.ObjectId
+) {
+  this.isSettled = true;
+  this.status = 'settled';
+  this.settledAt = new Date();
+  this.verifiedBy = processedBy;
+  this.verifiedAt = new Date();
+  
+  return this.save();
+};
+
+
+paymentSchema.methods.markAsDisputed = function(
+  reason: string,
+  reportedBy: mongoose.Types.ObjectId
+) {
+  this.status = 'disputed';
+  this.notes = reason;
+  
+  return this.save();
+};
+
+
+paymentSchema.methods.verifyPayment = function(
+  verifiedBy: mongoose.Types.ObjectId
+) {
+  this.verifiedBy = verifiedBy;
+  this.verifiedAt = new Date();
+  
+  return this.save();
+};
+
+
+paymentSchema.methods.markAsRefunded = function(
+  reason: string,
+  processedBy: mongoose.Types.ObjectId
+) {
+  this.status = 'refunded';
+  this.notes = reason;
+  this.verifiedBy = processedBy;
+  this.verifiedAt = new Date();
+  
+  return this.save();
+};
+
+
 paymentSchema.pre('save', function(next) {
   if (this.isNew) {
     
@@ -230,6 +302,96 @@ paymentSchema.index({ collectedAt: -1 });
 paymentSchema.index({ settlementDeadline: 1 }, { sparse: true });
 paymentSchema.index({ receiptNumber: 1 });
 
+
+paymentSchema.statics.findByDeliverer = function(
+  delivererId: string,
+  isSettled?: boolean
+) {
+  const query: any = { delivererId };
+  if (isSettled !== undefined) query.isSettled = isSettled;
+  return this.find(query).sort({ collectedAt: -1 });
+};
+
+paymentSchema.statics.findPendingSettlements = function(companyId?: string) {
+  const query: any = {
+    isSettled: false,
+    collectionMethod: 'home_delivery',
+    status: 'collected',
+    settlementDeadline: { $ne: null },
+  };
+  if (companyId) query.companyId = companyId;
+  return this.find(query).sort({ settlementDeadline: 1 });
+};
+
+paymentSchema.statics.findOverdueSettlements = function(companyId?: string) {
+  const query: any = {
+    isSettled: false,
+    collectionMethod: 'home_delivery',
+    settlementDeadline: { $lt: new Date(), $ne: null },
+    status: 'collected',
+  };
+  if (companyId) query.companyId = companyId;
+  return this.find(query);
+};
+
+paymentSchema.statics.getDelivererBalance = async function(
+  delivererId: string
+) {
+  const result = await this.aggregate([
+    {
+      $match: {
+        delivererId: new mongoose.Types.ObjectId(delivererId),
+        collectionMethod: 'home_delivery',
+        isSettled: false,
+        status: 'collected',
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        totalOwed: { $sum: '$amount' },
+        paymentsCount: { $sum: 1 },
+        oldestPayment: { $min: '$collectedAt' },
+      },
+    },
+  ]);
+  
+  return result[0] || { totalOwed: 0, paymentsCount: 0, oldestPayment: null };
+};
+
+paymentSchema.statics.getBranchPaymentSummary = async function(
+  branchId: string,
+  startDate?: Date,
+  endDate?: Date
+) {
+  const matchStage: any = {
+    branchId: new mongoose.Types.ObjectId(branchId),
+  };
+  
+  if (startDate || endDate) {
+    matchStage.collectedAt = {};
+    if (startDate) matchStage.collectedAt.$gte = startDate;
+    if (endDate) matchStage.collectedAt.$lte = endDate;
+  }
+  
+  return this.aggregate([
+    { $match: matchStage },
+    {
+      $group: {
+        _id: {
+          collectionMethod: '$collectionMethod',
+          status: '$status',
+        },
+        totalAmount: { $sum: '$amount' },
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+};
+
+paymentSchema.statics.findByPackage = function(packageId: string) {
+  return this.findOne({ packageId });
+};
 
 const PaymentModel: Model<IPayment> = mongoose.model<IPayment>('Payment', paymentSchema);
 
