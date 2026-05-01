@@ -2685,7 +2685,7 @@ export const resolvePackageIssue = catchAsyncError(
         return next(new ErrorHandler("You don't have permission to handle complaints", 403));
       }
 
-      // 👇 FIX: cast to string and parse
+
       const index = parseInt(issueIndex as string, 10);
       
       if (!packageDoc.issues || index >= packageDoc.issues.length) {
@@ -5329,7 +5329,7 @@ export const cancelPackage = catchAsyncError(
         );
       }
 
-      await Promise.all([
+            await Promise.all([
         PackageModel.findByIdAndUpdate(
           packageId,
           {
@@ -5352,6 +5352,11 @@ export const cancelPackage = catchAsyncError(
           branchId,
           { $inc: { currentLoad: -1 } },
           { session },
+        ),
+        PaymentModel.findOneAndUpdate(
+          { packageId: packageDoc._id },
+          { $set: { status: 'cancelled' } },
+          { session }
         ),
       ]);
 
@@ -7099,7 +7104,14 @@ export const deliverPackageFail = catchAsyncError(
         },
       };
 
-      await PackageModel.findByIdAndUpdate(packageId, packageUpdate, { session });
+      await Promise.all([
+        PackageModel.findByIdAndUpdate(packageId, packageUpdate, { session }),
+        PaymentModel.findOneAndUpdate(
+          { packageId: packageDoc._id },
+          { $set: { status: maxReached ? 'cancelled' : 'failed' } },
+          { session }
+        ),
+      ]);
 
       await writeHistory(
         [
@@ -7261,28 +7273,34 @@ export const deliveryReturnPackage = catchAsyncError(
 
       const noteText = [returnReason, notes?.trim()].filter(Boolean).join(" | ");
 
-      await PackageModel.findByIdAndUpdate(
-        packageId,
-        {
-          $set: {
-            status: "returned",
-            "returnInfo.isReturn": true,
-            "returnInfo.reason": returnReason,
-            "returnInfo.returnDate": now,
-
-          },
-          $push: {
-            trackingHistory: {
+            await Promise.all([
+        PackageModel.findByIdAndUpdate(
+          packageId,
+          {
+            $set: {
               status: "returned",
-              branchId: branchOid,
-              userId: delivererUserId,
-              notes: noteText,
-              timestamp: now,
+              "returnInfo.isReturn": true,
+              "returnInfo.reason": returnReason,
+              "returnInfo.returnDate": now,
+            },
+            $push: {
+              trackingHistory: {
+                status: "returned",
+                branchId: branchOid,
+                userId: delivererUserId,
+                notes: noteText,
+                timestamp: now,
+              },
             },
           },
-        },
-        { session },
-      );
+          { session },
+        ),
+        PaymentModel.findOneAndUpdate(
+          { packageId: packageDoc._id },
+          { $set: { status: 'cancelled' } },
+          { session }
+        ),
+      ]);
 
       await writeHistory(
         [

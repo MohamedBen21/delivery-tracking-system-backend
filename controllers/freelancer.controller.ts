@@ -8,6 +8,7 @@ import FreelancerModel from "../models/freelancer.model";
 import BranchModel from "../models/branch.model";
 import userModel from "../models/user.model";
 import { buildUserFieldUpdates } from "./manager.controller";
+import PaymentModel from "../models/payment.model";
 
 
 
@@ -572,8 +573,8 @@ export const cancelPackage = catchAsyncError(
         ? `Cancelled by freelancer. Reason: ${reason.trim()}`
         : "Cancelled by freelancer";
 
-      await Promise.all([
-        // Update package
+        await Promise.all([
+
         PackageModel.findByIdAndUpdate(
           packageId,
           {
@@ -591,6 +592,12 @@ export const cancelPackage = catchAsyncError(
           { session },
         ),
 
+
+        PaymentModel.findOneAndUpdate(
+          { packageId: packageDoc._id },
+          { $set: { status: 'cancelled' } },
+          { session }
+        ),
 
         PackageHistoryModel.create(
           [
@@ -620,7 +627,6 @@ export const cancelPackage = catchAsyncError(
           {
             $inc: {
               "statistics.packagesCancelled": 1,
-              // Subtract from inTransit only if it was already counted there
               ...(["at_origin_branch", "accepted"].includes(packageDoc.status) && {
                 "statistics.packagesInTransit": -1,
               }),
