@@ -1,7 +1,7 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 
 export type PaymentType = 'cod' | 'branch_payment' | 'online' | 'wallet' | 'bank_transfer';
-export type PaymentStatus = 'pending' | 'collected' | 'settled' | 'disputed' | 'refunded';
+export type PaymentStatus = 'pending' | 'collected' | 'settled' | 'disputed' | 'refunded' | 'failed' | 'cancelled';
 export type PaymentCollectionMethod = 'home_delivery' | 'branch_pickup';
 
 export interface IPayment extends Document {
@@ -120,7 +120,7 @@ const paymentSchema = new Schema<IPayment>({
   
   status: {
     type: String,
-    enum: ['pending', 'collected', 'settled', 'disputed', 'refunded'],
+    enum: ['pending', 'collected', 'settled', 'disputed', 'refunded', 'failed','cancelled'],
     default: 'pending',
     index: true,
   },
