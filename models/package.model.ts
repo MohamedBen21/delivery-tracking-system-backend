@@ -14,6 +14,8 @@ export type PackageStatus =
   | 'out_for_delivery'
   | 'delivered'
   | 'failed_delivery'
+
+  | 'failed_delivery_attempt'
   | 'rescheduled'
   | 'returned'
   | 'cancelled'
@@ -553,7 +555,7 @@ const packageSchema = new Schema<IPackage>({
     type: String,
     enum: ['pending', 'accepted', 'at_origin_branch', 'in_transit_to_branch', 
            'at_destination_branch', 'out_for_delivery', 'delivered', 
-           'failed_delivery', 'rescheduled', 'returned', 'cancelled', 
+           'failed_delivery', 'failed_delivery_attempt' , 'rescheduled', 'returned', 'cancelled', 
            'lost', 'damaged', 'on_hold'],
     default: 'pending',
     
@@ -696,6 +698,8 @@ packageSchema.virtual('isAtBranch').get(function() {
 packageSchema.virtual('needsAttention').get(function() {
   const attentionStatuses: PackageStatus[] = [
     'failed_delivery',
+
+    'failed_delivery_attempt',
     'damaged',
     'lost',
     'on_hold',
@@ -715,6 +719,8 @@ packageSchema.virtual('deliveryProgress').get(function() {
     'out_for_delivery': 80,
     'delivered': 100,
     'failed_delivery': 80,
+
+    'failed_delivery_attempt':75,
     'rescheduled': 70,
     'returned': 100,
     'cancelled': 0,
@@ -934,10 +940,12 @@ packageSchema.pre('save', function(next) {
     this.paymentStatus = 'paid';
   }
   
-  if (this.attemptCount >= this.maxAttempts && this.status === 'failed_delivery') {
-    this.status = 'returned';
-    this.returnInfo.isReturn = true;
-    this.returnInfo.reason = 'Maximum delivery attempts exceeded';
+  if (this.attemptCount >= this.maxAttempts && this.status === 'failed_delivery_attempt') {
+
+  this.status = 'failed_delivery';
+  this.returnInfo.isReturn = true;
+  this.returnInfo.reason = 'Maximum delivery attempts exceeded';
+  
   }
   
   next();

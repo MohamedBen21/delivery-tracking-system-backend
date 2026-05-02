@@ -4482,6 +4482,7 @@ const PACKAGE_STATUSES: PackageStatus[] = [
   "out_for_delivery",
   "delivered",
   "failed_delivery",
+  "failed_delivery_attempt",
   "rescheduled",
   "returned",
   "cancelled",
@@ -5955,6 +5956,8 @@ const READABLE_STATUS: Record<PackageStatus, string> = {
   out_for_delivery:       "Out for Delivery",
   delivered:              "Delivered",
   failed_delivery:        "Delivery Failed",
+  
+  failed_delivery_attempt: "Failed Delivery Attempt",
   rescheduled:            "Rescheduled",
   returned:               "Returned",
   cancelled:              "Cancelled",
@@ -7074,8 +7077,8 @@ export const deliverPackageFail = catchAsyncError(
       // write the correct history status and include it in the response.
 
       const newStatus: PackageStatus = maxReached
-        ? "returned"
-        : "failed_delivery";
+        ? "failed_delivery"
+        : "failed_delivery_attempt";
 
       const nextAttemptDate = !maxReached
         ? new Date(now.getTime() + 24 * 60 * 60 * 1000)
@@ -7108,7 +7111,8 @@ export const deliverPackageFail = catchAsyncError(
         PackageModel.findByIdAndUpdate(packageId, packageUpdate, { session }),
         PaymentModel.findOneAndUpdate(
           { packageId: packageDoc._id },
-          { $set: { status: maxReached ? 'cancelled' : 'failed' } },
+
+          { $set: { status: maxReached ? 'failed' : 'pending' } },
           { session }
         ),
       ]);

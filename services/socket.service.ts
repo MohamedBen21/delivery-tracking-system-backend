@@ -11,6 +11,7 @@ import PackageModel from "../models/package.model";
 import RouteModel from "../models/route.model";
 import { IUser } from "../models/user.model";
 import sendSMS from "../utils/sendSMS";
+import PaymentModel from "../models/payment.model";
 
 
 
@@ -1278,6 +1279,19 @@ export class SocketService {
 
             await pkg.markAsDelivered(deliverer.userId, data.notes);
 
+            // Update payment status to collected
+
+            await PaymentModel.findOneAndUpdate(
+
+              { packageId: packageId },
+              
+              { 
+                $set: { 
+                  status: 'collected',
+                  delivererId: deliverer.userId 
+                } 
+              }
+            );
             // Complete the stop
             await route.completeStop(
               data.stopIndex,
@@ -1469,11 +1483,27 @@ export class SocketService {
 
             // Add issue to package and update status to failed_delivery
             // The model's updateStatus increments attemptCount and sets nextAttemptDate
-            await pkg.updateStatus(
-              "failed_delivery",
+           await pkg.updateStatus(
+              "failed_delivery_attempt",
               deliverer.userId,
               pkg.currentBranchId,
               data.reason
+            );
+
+            // Update payment status
+            const updatedPkgAfterFail = await PackageModel.findById(packageId).lean();
+            const attemptsExhausted = (updatedPkgAfterFail?.attemptCount ?? 0) >= (updatedPkgAfterFail?.maxAttempts ?? 3);
+
+            await PaymentModel.findOneAndUpdate(
+
+              { packageId: packageId },
+
+              { 
+                $set: { 
+                  status: attemptsExhausted ? 'failed' : 'pending',
+                  delivererId: deliverer.userId
+                } 
+              }
             );
 
             if (data.issueType) {
