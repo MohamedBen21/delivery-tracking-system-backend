@@ -69,7 +69,7 @@ export interface IDeliverer extends Document {
   canAcceptDeliveries: boolean;
   hasValidLicense: boolean;
   documentStatus: 'complete' | 'incomplete' | 'expired';
-  efficiencyScore: number;
+  // efficiencyScore: number;
 }
 
 const locationSchema = new Schema<ILocation>({

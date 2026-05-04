@@ -380,7 +380,7 @@ export const googleLogin = catchAsyncError(
 export const refreshTokens = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const refreshToken = req.cookies.refresh_token;
+      const refreshToken = req.cookies.refreshToken;
       if (!refreshToken) {
         res.status(401).json({ message: "Refresh token not found" });
         return;
@@ -394,11 +394,11 @@ export const refreshTokens = catchAsyncError(
         return;
       }
 
-      const userId = decoded.userId;
+      const userId = decoded.id;
       const user = await User.findById(userId);
 
       if (!user) {
-        return next(new ErrorHandler(`ser not found.`, 404));
+        return next(new ErrorHandler(`user not found.`, 404));
       }
 
       if (user.status === "suspended" || user.status === "inactive") {
@@ -1178,35 +1178,42 @@ export const meUser = catchAsyncError(
 
     let associated = null;
 
-      switch (user.role){
-        
+    switch (user.role){
+
      case "admin":
-       associated = adminModel.findOne({user_id:user._id});
+       associated = await adminModel.findOne({user_id:userId});
+       break;
 
      case "manager":
-       associated = ManagerModel.findOne({user_id:user._id});
+       associated = await ManagerModel.findOne({userId});
+       break;
 
      case "client":
-       associated = clientModel.findOne({user_id:user._id});
+       associated = await clientModel.findOne({userId});
+       break;
 
      case "deliverer":
-       associated = delivererModel.findOne({user_id:user._id});
+       associated = await delivererModel.findOne({userId});
+       break;
        
      case "transporter":
-      associated = transporterModel.findOne({user_id:user._id});
+      associated = await transporterModel.findOne({userId});
+      break;
 
      case "supervisor":
-      associated = SupervisorModel.findOne({user_id:user._id});
+      associated = await SupervisorModel.findOne({userId});
+      break;
 
      case "freelancer":
-       associated = freelancerModel.findOne({user_id:user._id});
+       associated = await freelancerModel.findOne({userId});
+       break;
 
       default:
        associated = null;
 
     }
     
-    res.sendStatus(200).json({
+    res.status(200).json({
       success:true,
       user,
       associated,

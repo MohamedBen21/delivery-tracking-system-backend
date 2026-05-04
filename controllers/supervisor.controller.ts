@@ -38,7 +38,7 @@ interface IDelivererDocumentsBody {
 interface ICreateDeliverer {
   email: string;
   phone: string;
-  username: string;
+  // username: string;
   password: string;
   firstName: string;
   lastName: string;
@@ -88,7 +88,7 @@ export const createDeliverer = catchAsyncError(
       const {
         email,
         phone,
-        username,
+        // username,
         password,
         firstName,
         lastName,
@@ -97,7 +97,7 @@ export const createDeliverer = catchAsyncError(
         documents,
       } = req.body as ICreateDeliverer;
 
-      if (!email || !phone || !username || !password || !firstName || !lastName) {
+      if (!email || !phone  || !password || !firstName || !lastName) {
         await session.abortTransaction();
         await session.endSession();
         return next(
@@ -108,7 +108,7 @@ export const createDeliverer = catchAsyncError(
       if (
         typeof email !== "string" ||
         typeof phone !== "string" ||
-        typeof username !== "string" ||
+        // typeof username !== "string" ||
         typeof password !== "string" ||
         typeof firstName !== "string" ||
         typeof lastName !== "string"
@@ -137,6 +137,8 @@ export const createDeliverer = catchAsyncError(
         BranchModel.findById(branchId).session(session),
       ]);
 
+      console.log("Supervisor:", supervisor);
+
       if (!supervisor || !supervisor.isActive) {
         await session.abortTransaction();
         await session.endSession();
@@ -161,10 +163,10 @@ export const createDeliverer = catchAsyncError(
         return next(new ErrorHandler("Cannot create deliverer for an inactive branch", 400));
       }
 
-      const [existingEmail, existingPhone, existingUsername] = await Promise.all([
+      const [existingEmail, existingPhone] = await Promise.all([
         userModel.findOne({ email }).session(session),
         userModel.findOne({ phone }).session(session),
-        userModel.findOne({ username }).session(session),
+        // userModel.findOne({ username }).session(session),
       ]);
 
       if (existingEmail) {
@@ -179,18 +181,18 @@ export const createDeliverer = catchAsyncError(
         return next(new ErrorHandler("Phone number already exists", 400));
       }
 
-      if (existingUsername) {
-        await session.abortTransaction();
-        await session.endSession();
-        return next(new ErrorHandler("Username already exists", 400));
-      }
+      // if (existingUsername) {
+      //   await session.abortTransaction();
+      //   await session.endSession();
+      //   return next(new ErrorHandler("Username already exists", 400));
+      // }
 
       const user = await userModel.create(
         [
           {
             email,
             phone,
-            username,
+            // username,
             passwordHash: password,
             firstName,
             lastName,
@@ -9583,7 +9585,7 @@ export const toggleOnlineStatus = catchAsyncError(
     return res.status(200).json({
       success: true,
       message: `Deliverer is now ${deliverer.isOnline ? "online" : "offline"}`,
-      data: { isOnline: deliverer.isOnline },
+      isOnline: deliverer.isOnline ,
     });
   },
 );

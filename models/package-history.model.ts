@@ -19,6 +19,8 @@ export interface IPackageHistory extends Document {
   handlerName?: string; 
   handlerRole?: HandlerRole;
   
+  manifestId?: mongoose.Types.ObjectId;
+  
   notes?: string;  
   timestamp: Date;
   
@@ -143,6 +145,7 @@ packageHistorySchema.virtual('readableStatus').get(function() {
     'out_for_delivery': 'Out for Delivery',
     'delivered': 'Delivered',
     'failed_delivery': 'Delivery Failed',
+    'failed_delivery_attempt': 'Delivery Failed attempt',
     'rescheduled': 'Rescheduled',
     'returned': 'Returned',
     'cancelled': 'Cancelled',

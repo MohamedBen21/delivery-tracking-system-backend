@@ -66,7 +66,7 @@ const paymentSchema = new Schema<IPayment>({
     type: Schema.Types.ObjectId,
     ref: 'Package',
     required: [true, 'Package reference is required'],
-    index: true,
+    // index: true,
   },
   
   trackingNumber: {
@@ -156,8 +156,8 @@ const paymentSchema = new Schema<IPayment>({
   
   receiptNumber: {
     type: String,
-    unique: true,
-    sparse: true,
+    // unique: true,
+    // sparse: true,
     trim: true,
   },
   
