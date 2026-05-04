@@ -1518,7 +1518,7 @@ export class SocketService {
             // Clean up OTP for this stop (they didn't use it)
             this.deliveryOTPs.delete(`delivery_otp_${packageId}`);
 
-            // Fail the stop on the route
+            // ── Fail the stop on the route (advances currentStopIndex) ──────────
             await route.failStop(
               data.stopIndex,
               data.reason,
@@ -1536,69 +1536,78 @@ export class SocketService {
             const attemptsLeft = (updatedPkg?.maxAttempts ?? 3) - (updatedPkg?.attemptCount ?? 0);
             const maxReached   = (updatedPkg?.attemptCount ?? 0) >= (updatedPkg?.maxAttempts ?? 3);
 
-            const isLastStop   = data.stopIndex === route.stops.length - 1;
-            const routeRoom    = this.getRouteRoom(data.routeId);
+            const routeRoom = this.getRouteRoom(data.routeId);
 
-            // Notify package tracking room
+            // ── REQUEUE: move failed stop to the end of the route ────────────────
+            //
+            // When attempts are NOT yet exhausted, we re-append the failed stop as a
+            // new stop at the end of the current route so the deliverer can retry it
+            // after completing all remaining stops, without wasting more km by
+            // backtracking immediately.
+            //
+            // What we do:
+            //   1. Clone the failed stop's data (same coords, package, client).
+            //   2. Reset its status to "pending" and clear arrival timestamps.
+            //   3. Push it to route.stops with a new order number (last position).
+            //   4. Save the route — currentStopIndex is already advanced by failStop().
+            //
+            // When attempts ARE exhausted: the package is already marked 'returned'
+            // by the package model's pre-save hook. We do NOT requeue it — the
+            // deliverer must bring it back to the branch at the end of the route.
+
+            let requeuedStopIndex: number | null = null;
+
+            if (!maxReached) {
+              // Snapshot the stop BEFORE failStop mutated it (we read stop object before
+              // failStop was called, stored above as `stop`). We need the original fields.
+              const requeuedStop = {
+
+                clientId:       stop.clientId,
+                location:       stop.location,
+                address:        stop.address,
+                packageIds:     stop.packageIds,
+                action:         stop.action,
+
+
+                status:         "pending" as const,
+                order:          route.stops.length + 1, 
+                expectedArrival: undefined,
+                actualArrival:   undefined,
+                completedPackages: [],
+                failedPackages:    [],
+                skippedPackages:   [],
+
+                ...(stop.branchId ? { branchId: stop.branchId } : {}),
+              };
+
+              route.stops.push(requeuedStop as any);
+              await route.save();
+
+              requeuedStopIndex = route.stops.length - 1;
+
+              console.log(
+                `[Socket] Deliverer ${userId} — failed stop ${data.stopIndex} requeued ` +
+                `as stop ${requeuedStopIndex} (package ${packageId}, ` +
+                `attempt ${updatedPkg?.attemptCount}/${updatedPkg?.maxAttempts})`
+              );
+            }
+
+            // ── Notify package tracking room ─────────────────────────────────────
             this.io.to(this.getPackageRoom(packageId)).emit("package_delivery_failed", {
               packageId,
-              attemptCount:  updatedPkg?.attemptCount,
-              maxAttempts:   updatedPkg?.maxAttempts,
+              attemptCount:     updatedPkg?.attemptCount,
+              maxAttempts:      updatedPkg?.maxAttempts,
               attemptsLeft,
-              nextAttemptDate: updatedPkg?.nextAttemptDate,
-              reason:        data.reason,
+              nextAttemptDate:  updatedPkg?.nextAttemptDate,
+              requeuedAtStop:   requeuedStopIndex,
+              reason:           data.reason,
               message: maxReached
                 ? "All delivery attempts exhausted. Package will be returned."
-                : `Delivery attempt failed. We will try again on ${updatedPkg?.nextAttemptDate?.toLocaleDateString()}.`,
+                : `Delivery attempt failed. Your deliverer will retry after completing remaining stops.`,
               timestamp: new Date(),
             });
 
-            if (maxReached) {
-              // Package exceeded max attempts — instruct deliverer to return it
-              // Note: the package model pre-save already flipped status to 'returned'
-              this.deliveryOTPs.delete(`delivery_otp_${packageId}`);
-
-              socket.emit("delivery_attempt_failed", {
-                routeId:       data.routeId,
-                stopIndex:     data.stopIndex,
-                packageId,
-                attemptCount:  updatedPkg?.attemptCount,
-                maxAttempts:   updatedPkg?.maxAttempts,
-                maxReached:    true,
-                requiresReturn: true,
-                distanceMeters: Math.round(distanceMeters),
-                message: "Maximum delivery attempts reached. Please return this package to your branch at the end of your route.",
-                timestamp: new Date(),
-              });
-
-              // Notify branch immediately
-              this.io.to(this.getBranchRoom(deliverer.branchId.toString())).emit("package_requires_return", {
-                packageId,
-                trackingNumber: updatedPkg?.trackingNumber,
-                delivererId:    deliverer._id,
-                attemptCount:   updatedPkg?.attemptCount,
-                reason:         data.reason,
-                timestamp: new Date(),
-              });
-            } else {
-              // Still has attempts left — package rescheduled for tomorrow
-              socket.emit("delivery_attempt_failed", {
-                routeId:        data.routeId,
-                stopIndex:      data.stopIndex,
-                packageId,
-                attemptCount:   updatedPkg?.attemptCount,
-                maxAttempts:    updatedPkg?.maxAttempts,
-                attemptsLeft,
-                maxReached:     false,
-                requiresReturn: false,
-                nextAttemptDate: updatedPkg?.nextAttemptDate,
-                distanceMeters: Math.round(distanceMeters),
-                message: `Attempt recorded. ${attemptsLeft} attempt${attemptsLeft === 1 ? "" : "s"} remaining. Package rescheduled.`,
-                timestamp: new Date(),
-              });
-            }
-
-            // Notify branch / supervisor room regardless
+            // ── Notify branch / supervisor ────────────────────────────────────────
             this.io.to(this.getBranchRoom(deliverer.branchId.toString())).emit("deliverer_delivery_failed", {
               routeId:       data.routeId,
               delivererId:   deliverer._id,
@@ -1607,59 +1616,147 @@ export class SocketService {
               attemptCount:  updatedPkg?.attemptCount,
               maxAttempts:   updatedPkg?.maxAttempts,
               maxReached,
+              requeuedAtStop: requeuedStopIndex,
               reason:        data.reason,
               timestamp: new Date(),
             });
 
-            if (isLastStop) {
-              // Last stop, route still completes
-              await route.completeRoute(`Last stop failed: ${data.reason}`);
-              await DelivererModel.findByIdAndUpdate(deliverer._id, {
-                availabilityStatus: maxReached ? "on_route" : "available", // keep on_route if has package to return
-                currentRouteId: maxReached ? route._id : null,
-                lastActiveAt: new Date(),
-              });
-              socket.emit("delivery_route_completed", {
-                routeId:    data.routeId,
-                routeNumber: route.routeNumber,
-                status:     "completed",
-                hasPackagesToReturn: maxReached,
-                message: maxReached
-                  ? "Route finished. Please return the failed package to your branch."
-                  : "Route completed.",
+            // ── Determine what comes next for the deliverer ───────────────────────
+            //
+            // After failStop(), route.currentStopIndex already points to the next
+            // real stop (or past the end if this was the last original stop before
+            // we re-appended). We now have three distinct cases:
+            //
+            //   A. maxReached → stop is NOT requeued. The package goes back to branch.
+            //      - If there are still other stops: move to next stop normally.
+            //      - If this WAS the last stop (and not requeued): route is done.
+            //
+            //   B. !maxReached + more original stops remain: move to next stop.
+            //      The requeued stop is at the very end — deliverer will reach it
+            //      after all other stops.
+            //
+            //   C. !maxReached + this was the ONLY or last original stop: the
+            //      requeued stop is now the only remaining stop, so currentStopIndex
+            //      points at it. Move to it immediately.
+            //
+            // In cases B and C the deliverer always gets a "next stop" to go to.
+
+            // Total stops after any re-append
+            const totalStopsNow = route.stops.length;
+
+            // Is there a next stop to go to right now?
+            // (currentStopIndex was already incremented by failStop)
+            const hasNextStop       = route.currentStopIndex < totalStopsNow;
+            const nextStop          = hasNextStop ? route.stops[route.currentStopIndex] : null;
+            const isNowTrulyLastStop = !hasNextStop; // only true when maxReached + was last stop
+
+            if (maxReached) {
+              // ── Case A: attempts exhausted, package must be returned ───────────
+              // Package model pre-save already flipped status → 'returned'.
+              this.deliveryOTPs.delete(`delivery_otp_${packageId}`);
+
+              // Notify branch to expect the returned package
+              this.io.to(this.getBranchRoom(deliverer.branchId.toString())).emit("package_requires_return", {
+                packageId,
+                trackingNumber: updatedPkg?.trackingNumber,
+                delivererId:    deliverer._id,
+                attemptCount:   updatedPkg?.attemptCount,
+                reason:         data.reason,
                 timestamp: new Date(),
               });
+
+              if (isNowTrulyLastStop) {
+                // No more stops at all — complete the route
+                await route.completeRoute(`Last stop failed (max attempts): ${data.reason}`);
+                await DelivererModel.findByIdAndUpdate(deliverer._id, {
+                  // Keep on_route so the deliverer knows to return the package first
+                  availabilityStatus: "on_route",
+                  currentRouteId:     route._id,
+                  lastActiveAt: new Date(),
+                });
+                socket.emit("delivery_route_completed", {
+                  routeId:             data.routeId,
+                  routeNumber:         route.routeNumber,
+                  status:              "completed",
+                  hasPackagesToReturn: true,
+                  message: "Route finished. Please return the failed package to your branch.",
+                  timestamp: new Date(),
+                });
+              } else {
+                // Still has stops to complete — OTP for next stop
+                if (nextStop) {
+                  await this.generateAndSendDeliveryOTP(route, route.currentStopIndex, data.routeId);
+                }
+                socket.emit("delivery_attempt_failed", {
+                  ...this.buildFailedStopPayload(data.routeId, data.stopIndex, packageId, data.reason, updatedPkg, distanceMeters),
+                  maxReached:    true,
+                  requiresReturn: true,
+                  requeuedAtStop: null,
+                  nextStop: nextStop ? {
+                    stopIndex:   route.currentStopIndex,
+                    stopId:      nextStop._id,
+                    clientId:    nextStop.clientId,
+                    packageId:   nextStop.packageIds[0],
+                    address:     nextStop.address,
+                    location:    nextStop.location.coordinates,
+                    otpSent:     true,
+                  } : null,
+                  remainingStops: totalStopsNow - route.currentStopIndex,
+                  message: "Maximum attempts reached. Package will be returned to branch. Continuing to next stop.",
+                  timestamp: new Date(),
+                });
+                this.io.to(routeRoom).emit("delivery_stop_failed", {
+                  routeId: data.routeId, stopIndex: data.stopIndex, packageId, reason: data.reason, timestamp: new Date(),
+                });
+              }
             } else {
-              // More stops remain — show next stop
-              const nextStop = route.stops[data.stopIndex + 1];
+              // ── Cases B & C: attempts remain, stop was requeued ───────────────
+              // Generate OTP for the next stop (could be the very next original stop
+              // OR the requeued stop itself if this was the last original one).
               if (nextStop) {
-                await this.generateAndSendDeliveryOTP(route, data.stopIndex + 1, data.routeId);
+                await this.generateAndSendDeliveryOTP(route, route.currentStopIndex, data.routeId);
               }
 
               socket.emit("delivery_attempt_failed", {
-                ...await this.buildFailedStopPayload(data.routeId, data.stopIndex, packageId, data.reason, updatedPkg, distanceMeters),
+                ...this.buildFailedStopPayload(data.routeId, data.stopIndex, packageId, data.reason, updatedPkg, distanceMeters),
+                maxReached:     false,
+                requiresReturn: false,
+                // Tell the deliverer exactly where the retry was placed
+                requeuedAtStop: requeuedStopIndex,
                 nextStop: nextStop ? {
-                  stopIndex:   data.stopIndex + 1,
+                  stopIndex:   route.currentStopIndex,
                   stopId:      nextStop._id,
                   clientId:    nextStop.clientId,
                   packageId:   nextStop.packageIds[0],
                   address:     nextStop.address,
                   location:    nextStop.location.coordinates,
-                  otpSent: true,
+                  // Is this next stop the requeued one itself? (Case C)
+                  isRetry:     route.currentStopIndex === requeuedStopIndex,
+                  otpSent:     true,
                 } : null,
-                remainingStops: route.stops.length - (data.stopIndex + 1),
+                remainingStops: totalStopsNow - route.currentStopIndex,
+                message: nextStop
+                  ? `Attempt recorded. ${attemptsLeft} attempt${attemptsLeft === 1 ? "" : "s"} remaining. ` +
+                    `This stop has been moved to position ${requeuedStopIndex! + 1}. Proceeding to next stop.`
+                  : "All stops complete.",
+                timestamp: new Date(),
               });
 
               this.io.to(routeRoom).emit("delivery_stop_failed", {
-                routeId:   data.routeId,
-                stopIndex: data.stopIndex,
+                routeId:        data.routeId,
+                stopIndex:      data.stopIndex,
                 packageId,
-                reason:    data.reason,
+                requeuedAtStop: requeuedStopIndex,
+                reason:         data.reason,
                 timestamp: new Date(),
               });
             }
 
-            console.log(`[Socket] Deliverer ${userId} failed delivery at stop ${data.stopIndex}. Attempts: ${updatedPkg?.attemptCount}/${updatedPkg?.maxAttempts}`);
+            console.log(
+              `[Socket] Deliverer ${userId} failed delivery at stop ${data.stopIndex}. ` +
+              `Attempts: ${updatedPkg?.attemptCount}/${updatedPkg?.maxAttempts}. ` +
+              (maxReached ? "Max reached — return required." : `Requeued at stop ${requeuedStopIndex}.`)
+            );
           } catch (err: any) {
             console.error("[Socket] fail_delivery_attempt failed:", err);
             socket.emit("route_error", { code: "FAIL_DELIVERY_FAILED", message: err.message || "Failed to record delivery failure." });
