@@ -113,6 +113,33 @@ export interface IManifestTransportLeg {
   notes?: string;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Manifest Event interface (separate collection)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface IManifestEvent extends Document {
+  manifestId: mongoose.Types.ObjectId;
+  manifestCode: string;               // denormalised for human-readable queries
+  eventType: ManifestEventType;
+
+  performedBy: mongoose.Types.ObjectId;
+  performerName?: string;
+  performerRole?: string;
+
+  branchId?: mongoose.Types.ObjectId; // branch where the event happened
+  packageId?: mongoose.Types.ObjectId;// relevant package (for per-package events)
+  packageTrackingNumber?: string;
+
+  previousStatus?: ManifestStatus;
+  newStatus?: ManifestStatus;
+
+  notes?: string;
+  metadata?: Record<string, unknown>; // flexible payload (e.g. vehicle plate, seal no.)
+  timestamp: Date;
+
+  // virtual
+  timeAgo: string;
+}
 
 
 export interface IManifest extends Document {
@@ -515,6 +542,8 @@ const manifestSchema = new Schema<IManifest, IManifestModel>(
   }
 );
 
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Hooks
 // ─────────────────────────────────────────────────────────────────────────────
@@ -544,6 +573,130 @@ manifestSchema.index({ status: 1, createdAt: -1 });
 manifestSchema.index({ 'packages.packageId': 1 });
 manifestSchema.index({ 'packages.trackingNumber': 1 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Manifest Event Schema  (separate collection — high-volume audit trail)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const manifestEventSchema = new Schema<IManifestEvent>(
+  {
+    manifestId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Manifest',
+      required: [true, 'Manifest reference is required'],
+      index: true,
+    },
+    manifestCode: {
+      type: String,
+      required: [true, 'Manifest code is required'],
+      trim: true,
+      uppercase: true,
+      index: true,
+    },
+    eventType: {
+      type: String,
+      required: [true, 'Event type is required'],
+      enum: {
+        values: [
+          'created', 'package_added', 'package_removed', 'sealed',
+          'loaded_on_vehicle', 'departed', 'arrived', 'unload_started',
+          'package_unloaded', 'package_remanifested', 'closed',
+          'discrepancy_flagged', 'discrepancy_resolved', 'cancelled', 'note_added',
+        ],
+        message: 'Event type must be one of the allowed values',
+      },
+      index: true,
+    },
+    performedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'Performer reference is required'],
+    },
+    performerName: {
+      type: String,
+      trim: true,
+      maxlength: [100, 'Performer name cannot exceed 100 characters'],
+    },
+    performerRole: {
+      type: String,
+      trim: true,
+      maxlength: [50, 'Performer role cannot exceed 50 characters'],
+    },
+    branchId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Branch',
+      index: true,
+    },
+    packageId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Package',
+    },
+    packageTrackingNumber: {
+      type: String,
+      trim: true,
+      uppercase: true,
+    },
+    previousStatus: {
+      type: String,
+      enum: {
+        values: [
+          'open', 'sealed', 'loaded', 'in_transit',
+          'arrived', 'unloading', 'closed', 'discrepancy', 'cancelled',
+        ],
+        message: 'Previous status must be one of the allowed values',
+      },
+    },
+    newStatus: {
+      type: String,
+      enum: {
+        values: [
+          'open', 'sealed', 'loaded', 'in_transit',
+          'arrived', 'unloading', 'closed', 'discrepancy', 'cancelled',
+        ],
+        message: 'New status must be one of the allowed values',
+      },
+    },
+    notes: {
+      type: String,
+      trim: true,
+      maxlength: [1000, 'Notes cannot exceed 1000 characters'],
+    },
+    metadata: {
+      type: Schema.Types.Mixed,
+    },
+    timestamp: {
+      type: Date,
+      default: Date.now,
+      index: true,
+    },
+  },
+  {
+    timestamps: false,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
+);
+
+manifestEventSchema.virtual('timeAgo').get(function () {
+  const seconds = Math.floor((Date.now() - this.timestamp.getTime()) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 4) return `${weeks}w ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(days / 365)}y ago`;
+});
+
+manifestEventSchema.index({ manifestId: 1, timestamp: -1 });
+manifestEventSchema.index({ eventType: 1, timestamp: -1 });
+manifestEventSchema.index({ performedBy: 1, timestamp: -1 });
+manifestEventSchema.index({ packageId: 1, timestamp: -1 });
+manifestEventSchema.index({ branchId: 1, eventType: 1, timestamp: -1 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Models
@@ -552,5 +705,9 @@ manifestSchema.index({ 'packages.trackingNumber': 1 });
 export const ManifestModel: IManifestModel =
   (mongoose.models.Manifest ||
     mongoose.model<IManifest, IManifestModel>('Manifest', manifestSchema)) as IManifestModel;
+
+export const ManifestEventModel: Model<IManifestEvent> =
+  mongoose.models.ManifestEvent ||
+  mongoose.model<IManifestEvent>('ManifestEvent', manifestEventSchema);
 
 export default ManifestModel;
