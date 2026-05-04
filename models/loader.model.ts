@@ -29,6 +29,12 @@ export type LoaderStatus = 'active' | 'inactive' | 'suspended';
 
 
 
+/**
+ * A single scan action logged in the loader's activity feed.
+ * This is a fast in-document log; a separate ScanLog collection
+ * can be used for high-volume analytics if needed.
+ */
+
 export interface ILoaderScanEntry {
   action: LoaderScanAction;
 
@@ -52,7 +58,10 @@ export interface ILoaderScanEntry {
   errorMessage?: string;
 }
 
-
+/**
+ * A work shift record.  Every login at a branch starts a shift;
+ * logout / end-of-day closes it.
+ */
 export interface ILoaderShift {
   branchId: mongoose.Types.ObjectId;
   startedAt: Date;
@@ -345,6 +354,160 @@ const loaderSchema = new Schema<ILoader, ILoaderModel>(
   }
 );
 
+
+
+loaderSchema.virtual('isCheckedIn').get(function () {
+  return !!this.currentShift && this.currentShift.status === 'active';
+});
+
+loaderSchema.virtual('activeBranchId').get(function () {
+  return this.temporaryBranchId ?? this.assignedBranchId;
+});
+
+loaderSchema.virtual('currentShiftDurationMinutes').get(function () {
+  if (!this.currentShift) return undefined;
+  return Math.round((Date.now() - this.currentShift.startedAt.getTime()) / 60000);
+});
+
+
+
+loaderSchema.methods.checkIn = function (
+  branchId: mongoose.Types.ObjectId
+): Promise<ILoader> {
+  if (this.status !== 'active') {
+    throw new Error(`Loader account is '${this.status}' and cannot check in`);
+  }
+  if (this.currentShift && this.currentShift.status === 'active') {
+    throw new Error('Loader already has an active shift');
+  }
+
+  this.currentShift = {
+    branchId,
+    startedAt: new Date(),
+    status: 'active',
+    packagesLoadedCount: 0,
+    packagesUnloadedCount: 0,
+    manifestsLoadedCount: 0,
+    manifestsUnloadedCount: 0,
+  };
+
+  this.stats.totalShifts += 1;
+  this.stats.lastActiveAt = new Date();
+
+  return this.save();
+};
+
+loaderSchema.methods.checkOut = function (notes?: string): Promise<ILoader> {
+  if (!this.currentShift || this.currentShift.status !== 'active') {
+    throw new Error('No active shift to end');
+  }
+
+  const now = new Date();
+  this.currentShift.endedAt = now;
+  this.currentShift.status = 'ended';
+  this.currentShift.durationMinutes = Math.round(
+    (now.getTime() - this.currentShift.startedAt.getTime()) / 60000
+  );
+  if (notes) this.currentShift.notes = notes;
+
+  // Push to recent shifts ring-buffer (keep last 30)
+  this.recentShifts.unshift(this.currentShift);
+  if (this.recentShifts.length > 30) {
+    this.recentShifts = this.recentShifts.slice(0, 30);
+  }
+
+  this.currentShift = null;
+
+  return this.save();
+};
+
+// need to revise later
+loaderSchema.methods.logScan = function (
+  entry: Omit<ILoaderScanEntry, 'timestamp'>
+): Promise<ILoader> {
+  const scanEntry: ILoaderScanEntry = { ...entry, timestamp: new Date() };
+
+  // Ring-buffer: keep last 200 scans
+  this.recentScans.unshift(scanEntry);
+  if (this.recentScans.length > 200) {
+    this.recentScans = this.recentScans.slice(0, 200);
+  }
+
+  this.stats.lastActiveAt = new Date();
+
+  // Update current shift counters
+  if (this.currentShift && entry.success) {
+    switch (entry.action) {
+      case 'scan_in_package':
+        this.currentShift.packagesLoadedCount += 1;
+        break;
+      case 'scan_out_package':
+        this.currentShift.packagesUnloadedCount += 1;
+        break;
+      case 'scan_manifest_on_truck':
+        this.currentShift.manifestsLoadedCount += 1;
+        break;
+      case 'scan_manifest_off_truck':
+        this.currentShift.manifestsUnloadedCount += 1;
+        break;
+    }
+  }
+
+  return this.save();
+};
+
+loaderSchema.methods.incrementStats = function (
+  action: LoaderScanAction
+): Promise<ILoader> {
+  switch (action) {
+    case 'scan_in_package':
+      this.stats.totalPackagesLoaded += 1;
+      break;
+    case 'scan_out_package':
+      this.stats.totalPackagesUnloaded += 1;
+      break;
+    case 'create_manifest':
+      this.stats.totalManifestsCreated += 1;
+      break;
+    case 'seal_manifest':
+      this.stats.totalManifestsSealed += 1;
+      break;
+    case 'scan_manifest_on_truck':
+      this.stats.totalManifestsLoaded += 1;
+      break;
+    case 'scan_manifest_off_truck':
+      this.stats.totalManifestsUnloaded += 1;
+      break;
+    case 'flag_discrepancy':
+      this.stats.totalDiscrepanciesFlagged += 1;
+      break;
+  }
+  return this.save();
+};
+
+
+
+loaderSchema.statics.findAvailableAtBranch = function (branchId: string) {
+  return this.find({
+    $or: [
+      { assignedBranchId: branchId, temporaryBranchId: null },
+      { temporaryBranchId: branchId },
+    ],
+    status: 'active',
+  });
+};
+
+loaderSchema.statics.findCheckedIn = function (companyId?: string) {
+  const query: Record<string, unknown> = {
+    'currentShift.status': 'active',
+    status: 'active',
+  };
+  if (companyId) query.companyId = companyId;
+  return this.find(query);
+};
+
+
+
 loaderSchema.pre('save', function (next) {
   if (
     this.temporaryBranchId &&
@@ -355,10 +518,14 @@ loaderSchema.pre('save', function (next) {
   next();
 });
 
+
+
 loaderSchema.index({ companyId: 1, status: 1 });
 loaderSchema.index({ assignedBranchId: 1, status: 1 });
 loaderSchema.index({ 'currentShift.status': 1 });
 loaderSchema.index({ 'stats.lastActiveAt': -1 });
+
+
 
 const LoaderModel: ILoaderModel =
   (mongoose.models.Loader ||
