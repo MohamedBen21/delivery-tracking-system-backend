@@ -1,6 +1,22 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 
 
+/**
+ * Every action a cashier can perform during package intake.
+ *
+ *  claim_package         → merchant hands over package; cashier scans & accepts it
+ *  reject_package        → package refused at intake (damaged, non-compliant, etc.)
+ *  weigh_package         → weight/dimensions recorded / verified
+ *  update_package        → data correction before acceptance
+ *  print_label           → barcode/tracking label printed
+ *  collect_payment       → COD or upfront fee collected
+ *  issue_receipt         → receipt issued to merchant
+ *  assign_to_manifest    → package assigned to an outbound manifest
+ *  hold_package          → package put on hold (pending info, payment issue, etc.)
+ *  release_hold          → hold removed; package re-enters workflow
+ */
+
+
 export type CashierScanAction =
   | 'claim_package'
   | 'reject_package'
@@ -17,7 +33,9 @@ export type CashierShiftStatus = 'active' | 'on_break' | 'ended';
 
 export type CashierStatus = 'active' | 'inactive' | 'suspended';
 
-
+/**
+ * Reason a package was rejected at intake.
+ */
 export type RejectionReason =
   | 'damaged_on_arrival'
   | 'prohibited_item'
@@ -55,7 +73,9 @@ export interface ICashierScanEntry {
   rejectionReason?: RejectionReason;
 }
 
-
+/**
+ * A work shift record per cashier session.
+ */
 export interface ICashierShift {
   branchId: mongoose.Types.ObjectId;
   startedAt: Date;
@@ -86,7 +106,11 @@ export interface ICashierStats {
   lastActiveAt?: Date;
 }
 
-
+/**
+ * Merchant interaction record.
+ * Keeps a lightweight log of every merchant (client / freelancer)
+ * that visited this cashier's counter — useful for audits.
+ */
 export interface IMerchantVisit {
   merchantId: mongoose.Types.ObjectId;      // User (client / freelancer)
   merchantName: string;                     // denormalised snapshot
@@ -108,7 +132,10 @@ export interface ICashier extends Document {
 
   assignedBranchId: mongoose.Types.ObjectId;
 
-
+  /**
+   * The counter/window number at the branch.
+   * A branch may have multiple cashiers at different counters.
+   */
   counterNumber?: number;
 
   employeeCode: string;   // e.g. CSH-ALG-0007
@@ -410,6 +437,164 @@ const cashierSchema = new Schema<ICashier, ICashierModel>(
     toObject: { virtuals: true },
   }
 );
+
+
+
+
+cashierSchema.virtual('isCheckedIn').get(function () {
+  return !!this.currentShift && this.currentShift.status === 'active';
+});
+
+cashierSchema.virtual('currentShiftDurationMinutes').get(function () {
+  if (!this.currentShift) return undefined;
+  return Math.round((Date.now() - this.currentShift.startedAt.getTime()) / 60000);
+});
+
+
+
+
+cashierSchema.methods.checkIn = function (
+  branchId: mongoose.Types.ObjectId
+): Promise<ICashier> {
+  if (this.status !== 'active') {
+    throw new Error(`Cashier account is '${this.status}' and cannot check in`);
+  }
+  if (this.currentShift && this.currentShift.status === 'active') {
+    throw new Error('Cashier already has an active shift');
+  }
+
+  this.currentShift = {
+    branchId,
+    startedAt: new Date(),
+    status: 'active',
+    packagesClaimedCount: 0,
+    packagesRejectedCount: 0,
+    labelsIssuedCount: 0,
+    paymentsCollectedCount: 0,
+    totalAmountCollected: 0,
+  };
+
+  this.stats.totalShifts += 1;
+  this.stats.lastActiveAt = new Date();
+
+  return this.save();
+};
+
+cashierSchema.methods.checkOut = function (notes?: string): Promise<ICashier> {
+  if (!this.currentShift || this.currentShift.status !== 'active') {
+    throw new Error('No active shift to end');
+  }
+
+  const now = new Date();
+  this.currentShift.endedAt = now;
+  this.currentShift.status = 'ended';
+  this.currentShift.durationMinutes = Math.round(
+    (now.getTime() - this.currentShift.startedAt.getTime()) / 60000
+  );
+  if (notes) this.currentShift.notes = notes;
+
+  // Ring-buffer: keep last 30 shifts
+  this.recentShifts.unshift(this.currentShift);
+  if (this.recentShifts.length > 30) {
+    this.recentShifts = this.recentShifts.slice(0, 30);
+  }
+
+  this.currentShift = null;
+
+  return this.save();
+};
+
+cashierSchema.methods.logScan = function (
+  entry: Omit<ICashierScanEntry, 'timestamp'>
+): Promise<ICashier> {
+  const scanEntry: ICashierScanEntry = { ...entry, timestamp: new Date() };
+
+  // Ring-buffer: keep last 200 scans
+  this.recentScans.unshift(scanEntry);
+  if (this.recentScans.length > 200) {
+    this.recentScans = this.recentScans.slice(0, 200);
+  }
+
+  this.stats.lastActiveAt = new Date();
+
+  // Update current shift counters
+  if (this.currentShift && entry.success) {
+    switch (entry.action) {
+      case 'claim_package':
+        this.currentShift.packagesClaimedCount += 1;
+        break;
+      case 'reject_package':
+        this.currentShift.packagesRejectedCount += 1;
+        break;
+      case 'print_label':
+        this.currentShift.labelsIssuedCount += 1;
+        break;
+      case 'collect_payment':
+        this.currentShift.paymentsCollectedCount += 1;
+        if (entry.amountCollected) {
+          this.currentShift.totalAmountCollected += entry.amountCollected;
+        }
+        break;
+    }
+  }
+
+  return this.save();
+};
+
+cashierSchema.methods.logMerchantVisit = function (
+  visit: IMerchantVisit
+): Promise<ICashier> {
+  // Ring-buffer: keep last 100 merchant visits
+  this.recentMerchantVisits.unshift(visit);
+  if (this.recentMerchantVisits.length > 100) {
+    this.recentMerchantVisits = this.recentMerchantVisits.slice(0, 100);
+  }
+  return this.save();
+};
+
+cashierSchema.methods.incrementStats = function (
+  action: CashierScanAction,
+  amount?: number
+): Promise<ICashier> {
+  switch (action) {
+    case 'claim_package':
+      this.stats.totalPackagesClaimed += 1;
+      break;
+    case 'reject_package':
+      this.stats.totalPackagesRejected += 1;
+      break;
+    case 'print_label':
+      this.stats.totalLabelsIssued += 1;
+      break;
+    case 'collect_payment':
+      this.stats.totalPaymentsCollected += 1;
+      if (amount) this.stats.totalAmountCollected += amount;
+      break;
+    case 'assign_to_manifest':
+      this.stats.totalManifestsAssigned += 1;
+      break;
+  }
+  return this.save();
+};
+
+
+
+cashierSchema.statics.findAvailableAtBranch = function (branchId: string) {
+  return this.find({
+    assignedBranchId: branchId,
+    status: 'active',
+  });
+};
+
+cashierSchema.statics.findCheckedIn = function (companyId?: string) {
+  const query: Record<string, unknown> = {
+    'currentShift.status': 'active',
+    status: 'active',
+  };
+  if (companyId) query.companyId = companyId;
+  return this.find(query);
+};
+
 
 
 cashierSchema.index({ companyId: 1, status: 1 });
