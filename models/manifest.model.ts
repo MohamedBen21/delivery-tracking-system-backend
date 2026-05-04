@@ -542,7 +542,322 @@ const manifestSchema = new Schema<IManifest, IManifestModel>(
   }
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Virtuals
+// ─────────────────────────────────────────────────────────────────────────────
 
+manifestSchema.virtual('isSealed').get(function () {
+  return ['sealed', 'loaded', 'in_transit', 'arrived', 'unloading', 'closed'].includes(this.status);
+});
+
+manifestSchema.virtual('isInTransit').get(function () {
+  return this.status === 'in_transit';
+});
+
+manifestSchema.virtual('isClosed').get(function () {
+  return this.status === 'closed' || this.status === 'cancelled';
+});
+
+manifestSchema.virtual('hasDiscrepancy').get(function () {
+  return this.status === 'discrepancy' || !!this.discrepancy;
+});
+
+manifestSchema.virtual('unloadedCount').get(function () {
+  return this.packages.filter(
+    (p) => p.entryStatus === 'unloaded' || p.entryStatus === 'remanifested'
+  ).length;
+});
+
+manifestSchema.virtual('remainingCount').get(function () {
+  return this.packages.filter((p) => p.entryStatus === 'in_manifest').length;
+});
+
+manifestSchema.virtual('durationMinutes').get(function () {
+  if (!this.departedAt || !this.arrivedAt) return undefined;
+  return Math.round((this.arrivedAt.getTime() - this.departedAt.getTime()) / 60000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Instance Methods
+// ─────────────────────────────────────────────────────────────────────────────
+
+manifestSchema.methods.addPackage = function (
+  packageId: mongoose.Types.ObjectId,
+  trackingNumber: string,
+  weight: number,
+  scannedBy: mongoose.Types.ObjectId
+): Promise<IManifest> {
+  if (this.status !== 'open') {
+    throw new Error(`Cannot add packages to a manifest with status '${this.status}'`);
+  }
+
+  const alreadyIn = this.packages.some(
+    (p: IManifestPackageEntry) => p.packageId.toString() === packageId.toString()
+  );
+  if (alreadyIn) {
+    throw new Error(`Package ${trackingNumber} is already in this manifest`);
+  }
+
+  const sequence = this.packages.length + 1;
+  this.packages.push({
+    packageId,
+    trackingNumber,
+    weight,
+    sequence,
+    scannedInBy: scannedBy,
+    scannedInAt: new Date(),
+    entryStatus: 'in_manifest',
+  });
+
+  this.packageCount = this.packages.length;
+  this.totalDeclaredWeight = parseFloat(
+    this.packages.reduce((sum: number, p: IManifestPackageEntry) => sum + p.weight, 0).toFixed(3)
+  );
+
+  return this.save();
+};
+
+manifestSchema.methods.removePackage = function (
+  packageId: mongoose.Types.ObjectId,
+  removedBy: mongoose.Types.ObjectId,
+  notes?: string
+): Promise<IManifest> {
+  if (this.status !== 'open') {
+    throw new Error(`Cannot remove packages from a manifest with status '${this.status}'`);
+  }
+
+  const idx = this.packages.findIndex(
+    (p: IManifestPackageEntry) => p.packageId.toString() === packageId.toString()
+  );
+  if (idx === -1) throw new Error('Package not found in this manifest');
+
+  this.packages.splice(idx, 1);
+
+  // Re-sequence remaining entries
+  this.packages.forEach((p: IManifestPackageEntry, i: number) => {
+    p.sequence = i + 1;
+  });
+
+  this.packageCount = this.packages.length;
+  this.totalDeclaredWeight = parseFloat(
+    this.packages.reduce((sum: number, p: IManifestPackageEntry) => sum + p.weight, 0).toFixed(3)
+  );
+
+  return this.save();
+};
+
+manifestSchema.methods.seal = function (
+  sealedBy: mongoose.Types.ObjectId,
+  sealNumber: string,
+  notes?: string
+): Promise<IManifest> {
+  if (this.status !== 'open') {
+    throw new Error(`Cannot seal a manifest with status '${this.status}'`);
+  }
+  if (this.packages.length === 0) {
+    throw new Error('Cannot seal an empty manifest');
+  }
+
+  this.sealInfo = {
+    sealedBy,
+    sealedAt: new Date(),
+    sealNumber,
+    totalWeight: this.totalDeclaredWeight,
+    packageCount: this.packageCount,
+    notes,
+  };
+  this.status = 'sealed';
+  this.sealedAt = new Date();
+
+  return this.save();
+};
+
+manifestSchema.methods.assignTransport = function (
+  transporterId: mongoose.Types.ObjectId,
+  vehicleId?: mongoose.Types.ObjectId,
+  estimatedArrival?: Date
+): Promise<IManifest> {
+  if (this.status !== 'sealed') {
+    throw new Error(`Cannot assign transport to a manifest with status '${this.status}'`);
+  }
+
+  this.transportLeg = {
+    transporterId,
+    vehicleId,
+    assignedAt: new Date(),
+    estimatedArrival,
+  };
+  this.status = 'loaded';
+  if (estimatedArrival) this.estimatedArrival = estimatedArrival;
+
+  return this.save();
+};
+
+manifestSchema.methods.markDeparted = function (
+  by: mongoose.Types.ObjectId
+): Promise<IManifest> {
+  if (this.status !== 'loaded') {
+    throw new Error(`Cannot mark departure for a manifest with status '${this.status}'`);
+  }
+
+  if (this.transportLeg) {
+    this.transportLeg.departedAt = new Date();
+  }
+  this.status = 'in_transit';
+  this.departedAt = new Date();
+
+  return this.save();
+};
+
+manifestSchema.methods.markArrived = function (
+  by: mongoose.Types.ObjectId
+): Promise<IManifest> {
+  if (this.status !== 'in_transit') {
+    throw new Error(`Cannot mark arrival for a manifest with status '${this.status}'`);
+  }
+
+  if (this.transportLeg) {
+    this.transportLeg.arrivedAt = new Date();
+  }
+  this.status = 'arrived';
+  this.arrivedAt = new Date();
+
+  return this.save();
+};
+
+manifestSchema.methods.unloadPackage = function (
+  packageId: mongoose.Types.ObjectId,
+  unloadedBy: mongoose.Types.ObjectId,
+  notes?: string
+): Promise<IManifest> {
+  const allowedStatuses: ManifestStatus[] = ['arrived', 'unloading'];
+  if (!allowedStatuses.includes(this.status)) {
+    throw new Error(`Cannot unload packages from a manifest with status '${this.status}'`);
+  }
+
+  const entry = this.packages.find(
+    (p: IManifestPackageEntry) => p.packageId.toString() === packageId.toString()
+  );
+  if (!entry) throw new Error('Package not found in this manifest');
+  if (entry.entryStatus !== 'in_manifest') {
+    throw new Error(`Package entry is already '${entry.entryStatus}'`);
+  }
+
+  entry.scannedOutBy = unloadedBy;
+  entry.scannedOutAt = new Date();
+  entry.entryStatus = 'unloaded';
+  if (notes) entry.notes = notes;
+
+  // Transition manifest status to 'unloading' on first scan-out
+  if (this.status === 'arrived') {
+    this.status = 'unloading';
+  }
+
+  return this.save();
+};
+
+manifestSchema.methods.remanifestPackage = function (
+  packageId: mongoose.Types.ObjectId,
+  newManifestId: mongoose.Types.ObjectId,
+  performedBy: mongoose.Types.ObjectId
+): Promise<IManifest> {
+  const entry = this.packages.find(
+    (p: IManifestPackageEntry) => p.packageId.toString() === packageId.toString()
+  );
+  if (!entry) throw new Error('Package not found in this manifest');
+  if (entry.entryStatus !== 'in_manifest' && entry.entryStatus !== 'unloaded') {
+    throw new Error(`Cannot re-manifest a package with entry status '${entry.entryStatus}'`);
+  }
+
+  entry.scannedOutBy = performedBy;
+  entry.scannedOutAt = new Date();
+  entry.entryStatus = 'remanifested';
+  entry.remanifestId = newManifestId;
+  entry.remanifestAt = new Date();
+
+  return this.save();
+};
+
+manifestSchema.methods.flagDiscrepancy = function (
+  reportedBy: mongoose.Types.ObjectId,
+  missingIds: mongoose.Types.ObjectId[],
+  extraIds: mongoose.Types.ObjectId[],
+  notes: string
+): Promise<IManifest> {
+  const allowedStatuses: ManifestStatus[] = ['arrived', 'unloading', 'closed'];
+  if (!allowedStatuses.includes(this.status)) {
+    throw new Error(`Cannot flag discrepancy on a manifest with status '${this.status}'`);
+  }
+
+  this.discrepancy = {
+    reportedBy,
+    reportedAt: new Date(),
+    expectedCount: this.packageCount,
+    actualCount: this.packageCount - missingIds.length + extraIds.length,
+    missingPackageIds: missingIds,
+    extraPackageIds: extraIds,
+    notes,
+  };
+  this.status = 'discrepancy';
+
+  return this.save();
+};
+
+manifestSchema.methods.close = function (
+  closedBy: mongoose.Types.ObjectId
+): Promise<IManifest> {
+  const allowedStatuses: ManifestStatus[] = ['unloading', 'arrived', 'discrepancy'];
+  if (!allowedStatuses.includes(this.status)) {
+    throw new Error(`Cannot close a manifest with status '${this.status}'`);
+  }
+
+  // Mark any remaining 'in_manifest' entries as 'missing'
+  this.packages.forEach((p: IManifestPackageEntry) => {
+    if (p.entryStatus === 'in_manifest') {
+      p.entryStatus = 'missing';
+    }
+  });
+
+  this.status = 'closed';
+  this.closedAt = new Date();
+
+  return this.save();
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Static Methods
+// ─────────────────────────────────────────────────────────────────────────────
+
+manifestSchema.statics.generateManifestCode = async function (
+  originCode: string,
+  destinationCode: string
+): Promise<string> {
+  const dateStr = new Date()
+    .toISOString()
+    .slice(0, 10)
+    .replace(/-/g, '');
+  const count = await this.countDocuments({
+    createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) },
+  });
+  const seq = String(count + 1).padStart(4, '0');
+  return `MAN-${originCode.toUpperCase()}-${destinationCode.toUpperCase()}-${dateStr}-${seq}`;
+};
+
+manifestSchema.statics.findActiveByBranch = function (branchId: string) {
+  return this.find({
+    $or: [{ originBranchId: branchId }, { destinationBranchId: branchId }],
+    status: { $nin: ['closed', 'cancelled'] },
+  }).sort({ createdAt: -1 });
+};
+
+manifestSchema.statics.findByStatus = function (
+  status: ManifestStatus,
+  companyId?: string
+) {
+  const query: Record<string, unknown> = { status };
+  if (companyId) query.companyId = companyId;
+  return this.find(query).sort({ createdAt: -1 });
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hooks
