@@ -500,30 +500,30 @@ export const getMyDeliveredPackages = catchAsyncError(
 //  moving and must be returned the same old way.
 export const cancelPackage = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+
     const session = await mongoose.startSession();
     session.startTransaction();
+
+    let transactionCommitted = false;
 
     try {
       const freelancerUserId = req.user?._id;
       const { packageId } = req.params;
 
       if (!freelancerUserId) {
-        await session.abortTransaction();
-        await session.endSession();
+
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!packageId || !mongoose.Types.ObjectId.isValid(packageId.toString())) {
-        await session.abortTransaction();
-        await session.endSession();
+
         return next(new ErrorHandler("Invalid package ID", 400));
       }
 
       const { reason } = req.body as { reason?: string };
 
       if (reason !== undefined && typeof reason !== "string") {
-        await session.abortTransaction();
-        await session.endSession();
+
         return next(new ErrorHandler("reason must be a string", 400));
       }
 
@@ -538,34 +538,28 @@ export const cancelPackage = catchAsyncError(
       ]);
 
       if (!freelancer || freelancer.status !== "active") {
-        await session.abortTransaction();
-        await session.endSession();
-        return next(new ErrorHandler("Freelancer account is not active", 403));
+
+        throw new ErrorHandler("Freelancer account is not active", 403);
       }
 
       if (!packageDoc) {
-        await session.abortTransaction();
-        await session.endSession();
-        return next(new ErrorHandler("Package not found or does not belong to you", 404));
+
+        throw new ErrorHandler("Package not found or does not belong to you", 404);
       }
 
       if (packageDoc.status === "cancelled") {
-        await session.abortTransaction();
-        await session.endSession();
-        return next(new ErrorHandler("Package is already cancelled", 400));
+
+        throw new ErrorHandler("Package is already cancelled", 400);
       }
 
       if (!FREELANCER_CANCELLABLE_STATUSES.includes(packageDoc.status)) {
-        await session.abortTransaction();
-        await session.endSession();
-        return next(
-          new ErrorHandler(
-            `Cannot cancel a package with status '${packageDoc.status}'. ` +
-              `Cancellation is only allowed while the package is: ${FREELANCER_CANCELLABLE_STATUSES.join(", ")}. ` +
-              `Contact your branch supervisor to cancel a shipment that is already in transit.`,
+
+        throw new ErrorHandler(
+          `Cannot cancel a package with status '${packageDoc.status}'. ` +
+            `Cancellation is only allowed while the package is: ${FREELANCER_CANCELLABLE_STATUSES.join(", ")}. ` +
+            `Contact your branch supervisor to cancel a shipment that is already in transit.`,
             400,
-          ),
-        );
+          )
       }
 
       const now = new Date();
@@ -638,7 +632,8 @@ export const cancelPackage = catchAsyncError(
       ]);
 
       await session.commitTransaction();
-      await session.endSession();
+      transactionCommitted = true;
+
       return res.status(200).json({
         success: true,
         message: "Package cancelled successfully",
@@ -651,9 +646,22 @@ export const cancelPackage = catchAsyncError(
         },
       });
     } catch (error: any) {
-      await session.abortTransaction();
+
+      if (error.name === "ValidationError") {
+        return next(new ErrorHandler(
+          Object.values(error.errors).map((e: any) => e.message).join(", "), 400
+        ));
+      }
+
+      return next(error);
+    }
+    finally {
+
+      if (!transactionCommitted) {
+        await session.abortTransaction().catch(() => {});
+      }
+      
       await session.endSession();
-      return next(new ErrorHandler(error.message || "Error cancelling package", 500));
     }
   },
 );
