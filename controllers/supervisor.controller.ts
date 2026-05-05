@@ -155,9 +155,11 @@ export const createDeliverer = catchAsyncError(
         throw new ErrorHandler("Cannot create deliverer for an inactive branch", 400);
       }
 
+      const normalizedPhone = userModel.normalizePhone(phone);
+
       const [existingEmail, existingPhone] = await Promise.all([
         userModel.findOne({ email }).session(session),
-        userModel.findOne({ phone }).session(session),
+        userModel.findOne({ phone: normalizedPhone }).session(session),
         // userModel.findOne({ username }).session(session),
       ]);
 
@@ -338,8 +340,11 @@ export const updateDeliverer = catchAsyncError(
       }
 
       if (body.phone) {
+
+        const normalizedPhone = userModel.normalizePhone(body.phone);
+        
         duplicateChecks.push(
-          userModel.findOne({ phone: body.phone, _id: { $ne: deliverer.userId } }).session(session)
+          userModel.findOne({ phone: normalizedPhone, _id: { $ne: deliverer.userId } }).session(session)
         );
       }
 
@@ -361,7 +366,7 @@ export const updateDeliverer = catchAsyncError(
       const delivererUpdates: any = {};
 
       if (body.email) userUpdates.email = body.email;
-      if (body.phone) userUpdates.phone = body.phone;
+      if (body.phone) userUpdates.phone = userModel.normalizePhone(body.phone);
       if (body.username) userUpdates.username = body.username;
       if (body.firstName) userUpdates.firstName = body.firstName;
       if (body.lastName) userUpdates.lastName = body.lastName;
@@ -764,9 +769,12 @@ export const createTransporter = catchAsyncError(
       }
 
 
+      const normalizedPhone = userModel.normalizePhone(phone);
+
       const [existingEmail, existingPhone, existingUsername] = await Promise.all([
         userModel.findOne({ email }).session(session),
-        userModel.findOne({ phone }).session(session),
+
+        userModel.findOne({ phone: normalizedPhone }).session(session),
         userModel.findOne({ username }).session(session),
       ]);
 
@@ -939,8 +947,11 @@ export const updateTransporter = catchAsyncError(
       }
 
       if (body.phone) {
+
+        const normalizedPhone = userModel.normalizePhone(body.phone);
+
         duplicateChecks.push(
-          userModel.findOne({ phone: body.phone, _id: { $ne: transporter.userId } }).session(session)
+          userModel.findOne({ phone: normalizedPhone, _id: { $ne: transporter.userId } }).session(session)
         );
       }
 
@@ -960,7 +971,7 @@ export const updateTransporter = catchAsyncError(
       const transporterUpdates: any = {};
 
       if (body.email) userUpdates.email = body.email;
-      if (body.phone) userUpdates.phone = body.phone;
+      if (body.phone) userUpdates.phone = userModel.normalizePhone(body.phone);
       if (body.username) userUpdates.username = body.username;
       if (body.firstName) userUpdates.firstName = body.firstName;
       if (body.lastName) userUpdates.lastName = body.lastName;
@@ -1372,8 +1383,11 @@ async function getOrCreateClient(
   }
   
 
+  const normalizedPhone = userModel.normalizePhone(recipientInfo.phone);
+
   let client = await userModel.findOne({ 
-    phone: recipientInfo.phone,
+
+    phone: normalizedPhone,
     role: "client" 
   }).session(session);
   
@@ -1396,7 +1410,7 @@ async function getOrCreateClient(
   
   const [newUser] = await userModel.create([{
     email,
-    phone: recipientInfo.phone,
+    phone: normalizedPhone,
     firstName,
     lastName,
     role: 'client',
@@ -2853,9 +2867,12 @@ export const createFreelancer = catchAsyncError(
       }
 
 
+      const normalizedPhone = userModel.normalizePhone(phone);
+
       const [existingEmail, existingPhone, existingUsername] = await Promise.all([
         userModel.findOne({ email }).session(session),
-        userModel.findOne({ phone }).session(session),
+
+        userModel.findOne({ phone: normalizedPhone }).session(session),
         userModel.findOne({ username }).session(session),
       ]);
 
@@ -3020,8 +3037,11 @@ export const updateFreelancer = catchAsyncError(
       }
 
       if (body.phone) {
+
+        const normalizedPhone = userModel.normalizePhone(body.phone);
+
         duplicateChecks.push(
-          userModel.findOne({ phone: body.phone, _id: { $ne: freelancer.userId } }).session(session)
+          userModel.findOne({ phone: normalizedPhone, _id: { $ne: freelancer.userId } }).session(session)
         );
       }
 
@@ -3042,7 +3062,7 @@ export const updateFreelancer = catchAsyncError(
       const freelancerUpdates: any = {};
 
       if (body.email) userUpdates.email = body.email;
-      if (body.phone) userUpdates.phone = body.phone;
+      if (body.phone) userUpdates.phone = userModel.normalizePhone(body.phone);
       if (body.username) userUpdates.username = body.username;
       if (body.firstName) userUpdates.firstName = body.firstName;
       if (body.lastName) userUpdates.lastName = body.lastName;

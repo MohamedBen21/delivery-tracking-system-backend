@@ -1693,12 +1693,25 @@ export const createSupervisor = catchAsyncError(
         }
       }
 
-      // ===== Fetch required data =====
+      const normalizedPhone = userModel.normalizePhone(phone);
+
       const [manager, branch, existingUser] = await Promise.all([
         ManagerModel.findOne({ userId: managerId, companyId }).session(session),
         BranchModel.findOne({ _id: branchId, companyId }).session(session),
-        userModel.findOne({ email }).session(session),
+        userModel.findOne({ 
+          $or: [
+            { email },
+            { phone: normalizedPhone }
+          ]
+        }).session(session),
       ]);
+
+      if (existingUser) {
+        if (existingUser.email === email) {
+          throw new ErrorHandler("User with this email already exists", 400);
+        }
+        throw new ErrorHandler("User with this phone number already exists", 400);
+      }
 
       if (!manager || !manager.isActive) {
         throw new ErrorHandler("You are not an active manager", 403);
@@ -1891,7 +1904,19 @@ export const updateSupervisor = catchAsyncError(
           if (typeof userData.phone !== "string") {
             throw new ErrorHandler("phone must be string", 400);
           }
-          user.phone = userData.phone;
+          
+
+          const normalizedPhone = userModel.normalizePhone(userData.phone);
+          const phoneExists = await userModel.findOne({ 
+            phone: normalizedPhone,
+            _id: { $ne: user._id }
+          }).session(session);
+          
+          if (phoneExists) {
+            throw new ErrorHandler("This phone number is already in use", 400);
+          }
+          
+          user.phone = normalizedPhone;
         }
 
 
