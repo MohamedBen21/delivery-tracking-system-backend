@@ -46,7 +46,15 @@ export const register = catchAsyncError(
         return next(new ErrorHandler("All fields are required", 400));
       }
 
-      const existingUser = await User.findOne({ email });
+      const normalizedPhone = User.normalizePhone(phone);
+
+      const existingUser = await User.findOne({ 
+        $or: [
+          { email },
+          { phone: normalizedPhone }
+        ]
+      });
+
       if (existingUser) {
         return next(new ErrorHandler("User already exists", 400));
       }
@@ -244,7 +252,15 @@ export const activate = catchAsyncError(
       return next(new ErrorHandler("Invalid activation code", 400));
     }
  
-    const existingUser = await User.findOne({ email });
+    const normalizedPhone = User.normalizePhone(phone);
+
+    const existingUser = await User.findOne({ 
+      $or: [
+        { email },
+        { phone: normalizedPhone }
+      ]
+    });
+
     if (existingUser) {
       return next(new ErrorHandler("User already exists", 400));
     }
@@ -902,7 +918,16 @@ export const requestPasswordReset = catchAsyncError(
       }
 
 
-      const query = isEmail ? { email: sanitized } : { phone: identifier.trim() };
+      let query;
+
+      if (isEmail) {
+        query = { email: sanitized };
+      } else {
+
+        const normalizedPhone = User.normalizePhone(identifier.trim());
+        query = { phone: normalizedPhone };
+      }
+
       const user = await userModel.findOne(query);
 
       if (!user) {
@@ -1039,9 +1064,16 @@ export const verifyOTP = catchAsyncError(
       }
 
 
-      const query = decoded.email
-        ? { email: decoded.email }
-        : { phone: decoded.phone };
+      let query;
+
+      if (decoded.email) {
+
+        query = { email: decoded.email };
+      } else if (decoded.phone) {
+
+        const normalizedPhone = User.normalizePhone(decoded.phone);
+        query = { phone: normalizedPhone };
+      }
 
       const user = await userModel.findOne(query);
 
@@ -1354,8 +1386,11 @@ export const createManager = catchAsyncError(
       }
 
       // 2. Check if user already exists with this email or phone
+      const normalizedPhone = User.normalizePhone(phone);
+
       const existingUser = await userModel.findOne({
-        $or: [{ email: email.toLowerCase() }, { phone }]
+        
+        $or: [{ email: email.toLowerCase() }, { phone: normalizedPhone }]
       });
 
       if (existingUser) {

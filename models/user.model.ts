@@ -24,6 +24,13 @@ export interface IUser extends Document {
   comparePassword: (password: string) => Promise<boolean>;
   SignAccessToken: () => string;
   SignRefreshToken: () => string;
+  
+}
+
+
+export interface IUserModel extends Model<IUser> {
+
+  normalizePhone(phone: string): string;
 }
 
 const userSchema: Schema<IUser> = new mongoose.Schema(
@@ -125,22 +132,35 @@ userSchema.index({ role: 1, status: 1 });
 
 
 userSchema.pre<IUser>("save", async function (next) {
-
-  if (!this.passwordHash || !this.isModified("passwordHash")) {
-    return next();
-  }
-
   try {
 
+    if (this.isModified("phone")) {
+
+      let phone = this.phone.trim().replace(/[^\d+]/g, '').replace(/\s+/g, '');
+      
+      if (phone.startsWith('0')) {
+        phone = '+213' + phone.substring(1);
+      }
+      
+      if (!phone.startsWith('+213')) {
+        return next(new Error('Phone number must start with +213 or 0') as any);
+      }
+      
+      this.phone = phone;
+    }
+
+
+    if (!this.passwordHash || !this.isModified("passwordHash")) {
+      return next();
+    }
+
     this.passwordHash = await bcrypt.hash(this.passwordHash, 10);
-
+    
     next();
-
+    
   } catch (error: any) {
-
     next(error);
   }
-
 });
 
 
@@ -177,6 +197,23 @@ userSchema.methods.comparePassword = async function (
 };
 
 
-const userModel: Model<IUser> = mongoose.model<IUser>("User", userSchema);
+
+userSchema.statics.normalizePhone = function(phone: string): string {
+  
+  let normalized = phone.trim().replace(/[^\d+]/g, '').replace(/\s+/g, '');
+  
+  if (normalized.startsWith('0')) {
+    normalized = '+213' + normalized.substring(1);
+  }
+  
+  if (!normalized.startsWith('+213')) {
+    throw new Error('Phone number must start with +213 or 0');
+  }
+  
+  return normalized;
+};
+
+
+const userModel: IUserModel = mongoose.model<IUser, IUserModel>("User", userSchema);
 
 export default userModel;
