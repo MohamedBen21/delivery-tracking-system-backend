@@ -840,7 +840,7 @@ export const deleteProfilePicture = catchAsyncError(
 
 
 const generateOTP = (): string =>
-  Math.floor(100000 + Math.random() * 900000).toString();
+  Math.floor(1000 + Math.random() * 9000).toString();
 
 
 const createOTPToken = (
