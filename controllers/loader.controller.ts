@@ -878,3 +878,220 @@ export const sealManifest = catchAsyncError(
   },
 );
 
+
+
+//  POST /loader/manifests/:manifestId/load-on-truck
+//  Loader scans the sealed manifest bag barcode and loads it onto the vehicle.
+//  A transporter (driver) and vehicle must be specified.
+//  Status: sealed → loaded
+
+
+export const loadManifestOnTruck = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let committed = false;
+
+    try {
+      const loaderUserId = req.user?._id;
+      const { manifestId } = req.params;
+      const { transporterUserId, vehicleId, estimatedArrival, notes } = req.body as {
+        transporterUserId: string;
+        vehicleId?: string;
+        estimatedArrival?: string;
+        notes?: string;
+      };
+
+      if (!mongoose.Types.ObjectId.isValid(manifestId.toString())) {
+        return next(new ErrorHandler("Invalid manifestId.", 400));
+      }
+      if (!transporterUserId || !mongoose.Types.ObjectId.isValid(transporterUserId)) {
+        return next(new ErrorHandler("Valid transporterUserId is required.", 400));
+      }
+      if (vehicleId && !mongoose.Types.ObjectId.isValid(vehicleId)) {
+        return next(new ErrorHandler("Invalid vehicleId.", 400));
+      }
+
+      const loader = await resolveLoader(loaderUserId, next, true, session);
+      if (!loader) return;
+
+      const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
+      const now = new Date();
+
+
+      const [manifest, transporter, vehicle] = await Promise.all([
+        ManifestModel.findById(manifestId).session(session),
+        userModel.findById(transporterUserId).session(session).lean(),
+        vehicleId ? VehicleModel.findById(vehicleId).session(session) : Promise.resolve(null),
+      ]);
+
+      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+
+      if (manifest.originBranchId.toString() !== activeBranchId.toString()) {
+        return next(new ErrorHandler("This manifest belongs to a different branch.", 403));
+      }
+
+      if (manifest.status !== "sealed") {
+        return next(
+          new ErrorHandler(
+            `Manifest must be sealed before loading onto a truck. Current status: '${manifest.status}'.`,
+            400,
+          ),
+        );
+      }
+
+      if (!transporter) {
+        return next(new ErrorHandler("Transporter user not found.", 404));
+      }
+
+      if (!["transporter", "driver"].includes(transporter.role)) {
+        return next(
+          new ErrorHandler(
+            `User must have role 'transporter' or 'driver'. Current role: '${transporter.role}'.`,
+            400,
+          ),
+        );
+      }
+
+      if (vehicle) {
+        if (vehicle.status !== "available" && vehicle.status !== "in_use") {
+          return next(
+            new ErrorHandler(
+              `Vehicle is '${vehicle.status}' and cannot be used for transport.`,
+              400,
+            ),
+          );
+        }
+
+
+        const hasFragile = manifest.packages.some(async () => {
+          const pkg = await PackageModel.findOne({
+            _id: { $in: manifest.packages.map((p: IManifestPackageEntry) => p.packageId) },
+            isFragile: true,
+          });
+          return !!pkg;
+        });
+
+        if (!vehicle.supportsFragile && manifest.packages.some((p: any) => p.isFragile)) {
+          return next(
+            new ErrorHandler("Vehicle does not support fragile packages.", 400),
+          );
+        }
+      }
+
+      const eta = estimatedArrival ? new Date(estimatedArrival) : undefined;
+
+      if (eta && isNaN(eta.getTime())) {
+        return next(new ErrorHandler("estimatedArrival is not a valid date.", 400));
+      }
+
+
+      await manifest.assignTransport(
+        new mongoose.Types.ObjectId(transporterUserId),
+        vehicleId ? new mongoose.Types.ObjectId(vehicleId) : undefined,
+        eta,
+      );
+
+
+      if (vehicle) {
+        await VehicleModel.findByIdAndUpdate(
+          vehicleId,
+          {
+            $set: {
+              status: "in_use",
+              assignedUserId: new mongoose.Types.ObjectId(transporterUserId),
+              assignedUserRole: "transporter",
+              currentBranchId: activeBranchId,
+            },
+          },
+          { session },
+        );
+      }
+
+      await ManifestEventModel.create(
+        [
+          {
+            manifestId: manifest._id,
+            manifestCode: manifest.manifestCode,
+            eventType: "loaded_on_vehicle",
+            performedBy: loaderUserId,
+            performerName: loaderName(req),
+            performerRole: "loader",
+            branchId: activeBranchId,
+            previousStatus: "sealed",
+            newStatus: "loaded",
+            metadata: {
+              transporterId: transporterUserId,
+              vehicleId: vehicleId ?? null,
+              estimatedArrival: eta ?? null,
+            },
+            notes: notes?.trim() || `Manifest loaded onto vehicle by loader.`,
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+      await LoaderModel.findByIdAndUpdate(
+        loader._id,
+        {
+          $inc: {
+            "stats.totalManifestsLoaded": 1,
+            "currentShift.manifestsLoadedCount": 1,
+          },
+          $set: { "stats.lastActiveAt": now },
+          $push: {
+            recentScans: {
+              $each: [
+                {
+                  action: "scan_manifest_on_truck",
+                  scannedId: manifest._id,
+                  scannedCode: manifest.manifestCode,
+                  manifestId: manifest._id,
+                  manifestCode: manifest.manifestCode,
+                  vehicleId: vehicleId ? new mongoose.Types.ObjectId(vehicleId) : undefined,
+                  branchId: activeBranchId,
+                  timestamp: now,
+                  notes: notes?.trim(),
+                  success: true,
+                },
+              ],
+              $position: 0,
+              $slice: 200,
+            },
+          },
+        },
+        { session },
+      );
+
+      await session.commitTransaction();
+      committed = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `Manifest ${manifest.manifestCode} loaded onto vehicle. Ready for departure.`,
+        data: {
+          manifestId: manifest._id,
+          manifestCode: manifest.manifestCode,
+          previousStatus: "sealed",
+          currentStatus: "loaded",
+          transporter: {
+            id: transporter._id,
+            name: `${transporter.firstName} ${transporter.lastName}`,
+          },
+          vehicleId: vehicleId ?? null,
+          estimatedArrival: eta ?? null,
+          packageCount: manifest.packageCount,
+        },
+      });
+
+    } catch (err: any) {
+      return next(err);
+    } finally {
+      if (!committed) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  },
+);
+
