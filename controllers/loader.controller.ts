@@ -1095,3 +1095,294 @@ export const loadManifestOnTruck = catchAsyncError(
   },
 );
 
+
+
+//   POST /loader/manifests/:manifestId/depart
+//  Called by the loader when the truck physically leaves the origin branch.
+//  Status: loaded → in_transit
+//  All packages inside the manifest move to 'in_transit_to_branch'.
+
+
+export const markManifestDeparted = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let committed = false;
+
+    try {
+      const loaderUserId = req.user?._id;
+      const { manifestId } = req.params;
+      const { notes } = req.body as { notes?: string };
+
+      if (!mongoose.Types.ObjectId.isValid(manifestId.toString())) {
+        return next(new ErrorHandler("Invalid manifestId.", 400));
+      }
+
+      const loader = await resolveLoader(loaderUserId, next, true, session);
+      if (!loader) return;
+
+      const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
+      const now = new Date();
+
+      const manifest = await ManifestModel.findById(manifestId).session(session);
+      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+
+      if (manifest.originBranchId.toString() !== activeBranchId.toString()) {
+        return next(new ErrorHandler("This manifest belongs to a different branch.", 403));
+      }
+
+      if (manifest.status !== "loaded") {
+        return next(
+          new ErrorHandler(
+            `Manifest must be in 'loaded' status before departure. Current status: '${manifest.status}'.`,
+            400,
+          ),
+        );
+      }
+
+      await manifest.markDeparted(loaderUserId as mongoose.Types.ObjectId);
+
+
+      const packageIds = manifest.packages.map((p: IManifestPackageEntry) => p.packageId);
+
+      await PackageModel.updateMany(
+        { _id: { $in: packageIds } },
+        {
+          $set: { status: "in_transit_to_branch" as PackageStatus },
+          $push: {
+            trackingHistory: {
+              status: "in_transit_to_branch",
+              branchId: activeBranchId,
+              userId: loaderUserId,
+              notes: `Truck departed from ${activeBranchId}. Manifest: ${manifest.manifestCode}.`,
+              timestamp: now,
+            },
+          },
+        },
+        { session },
+      );
+
+
+      const historyDocs = packageIds.map((pkgId: mongoose.Types.ObjectId) => ({
+        packageId: pkgId,
+        status: "in_transit_to_branch" as PackageStatus,
+        branchId: activeBranchId,
+        handledBy: loaderUserId,
+        handlerName: loaderName(req),
+        handlerRole: "loader",
+        manifestId: manifest._id,
+        notes: `Departed in manifest ${manifest.manifestCode}.`,
+        timestamp: now,
+      }));
+
+      await PackageHistoryModel.insertMany(historyDocs, { session });
+
+      await ManifestEventModel.create(
+        [
+          {
+            manifestId: manifest._id,
+            manifestCode: manifest.manifestCode,
+            eventType: "departed",
+            performedBy: loaderUserId,
+            performerName: loaderName(req),
+            performerRole: "loader",
+            branchId: activeBranchId,
+            previousStatus: "loaded",
+            newStatus: "in_transit",
+            notes: notes?.trim() || `Manifest departed. ${packageIds.length} packages in transit.`,
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+
+      await BranchModel.findByIdAndUpdate(
+        activeBranchId,
+        { $inc: { currentLoad: -packageIds.length } },
+        { session },
+      );
+
+      await session.commitTransaction();
+      committed = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `Manifest ${manifest.manifestCode} is now in transit. ${packageIds.length} packages on the way.`,
+        data: {
+          manifestId: manifest._id,
+          manifestCode: manifest.manifestCode,
+          previousStatus: "loaded",
+          currentStatus: "in_transit",
+          departedAt: now,
+          packagesInTransit: packageIds.length,
+          estimatedArrival: manifest.estimatedArrival ?? null,
+        },
+      });
+
+    } catch (err: any) {
+      return next(err);
+    } finally {
+      if (!committed) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  },
+);
+
+
+//   POST /loader/manifests/:manifestId/arrive
+//  Called by the loader at the DESTINATION branch when the truck pulls in.
+//  Status: in_transit → arrived
+//  All packages move to 'at_destination_branch'.
+
+export const markManifestArrived = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let committed = false;
+
+    try {
+      const loaderUserId = req.user?._id;
+      const { manifestId } = req.params;
+      const { notes } = req.body as { notes?: string };
+
+      if (!mongoose.Types.ObjectId.isValid(manifestId.toString())) {
+        return next(new ErrorHandler("Invalid manifestId.", 400));
+      }
+
+      const loader = await resolveLoader(loaderUserId, next, true, session);
+      if (!loader) return;
+
+      const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
+      const now = new Date();
+
+      const manifest = await ManifestModel.findById(manifestId).session(session);
+      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+
+
+      if (manifest.destinationBranchId.toString() !== activeBranchId.toString()) {
+        return next(
+          new ErrorHandler(
+            "You are not at this manifest's destination branch. Cannot mark arrival.",
+            403,
+          ),
+        );
+      }
+
+      if (manifest.status !== "in_transit") {
+        return next(
+          new ErrorHandler(
+            `Manifest must be 'in_transit' to mark arrival. Current status: '${manifest.status}'.`,
+            400,
+          ),
+        );
+      }
+
+      await manifest.markArrived(loaderUserId as mongoose.Types.ObjectId);
+
+      const packageIds = manifest.packages.map((p: IManifestPackageEntry) => p.packageId);
+
+
+      await PackageModel.updateMany(
+        { _id: { $in: packageIds } },
+        {
+          $set: {
+            status: "at_destination_branch" as PackageStatus,
+            currentBranchId: activeBranchId,
+          },
+          $push: {
+            trackingHistory: {
+              status: "at_destination_branch",
+              branchId: activeBranchId,
+              userId: loaderUserId,
+              notes: `Arrived at destination branch. Manifest: ${manifest.manifestCode}.`,
+              timestamp: now,
+            },
+          },
+        },
+        { session },
+      );
+
+      const historyDocs = packageIds.map((pkgId: mongoose.Types.ObjectId) => ({
+        packageId: pkgId,
+        status: "at_destination_branch" as PackageStatus,
+        branchId: activeBranchId,
+        handledBy: loaderUserId,
+        handlerName: loaderName(req),
+        handlerRole: "loader",
+        manifestId: manifest._id,
+        notes: `Arrived in manifest ${manifest.manifestCode}.`,
+        timestamp: now,
+      }));
+
+      await PackageHistoryModel.insertMany(historyDocs, { session });
+
+      await ManifestEventModel.create(
+        [
+          {
+            manifestId: manifest._id,
+            manifestCode: manifest.manifestCode,
+            eventType: "arrived",
+            performedBy: loaderUserId,
+            performerName: loaderName(req),
+            performerRole: "loader",
+            branchId: activeBranchId,
+            previousStatus: "in_transit",
+            newStatus: "arrived",
+            notes: notes?.trim() || `Manifest arrived. ${packageIds.length} packages to unload.`,
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+
+      await BranchModel.findByIdAndUpdate(
+        activeBranchId,
+        { $inc: { currentLoad: packageIds.length } },
+        { session },
+      );
+
+
+      if (manifest.transportLeg?.vehicleId) {
+        await VehicleModel.findByIdAndUpdate(
+          manifest.transportLeg.vehicleId,
+          {
+            $set: {
+              status: "available",
+              currentBranchId: activeBranchId,
+            },
+            $unset: { assignedUserId: 1, assignedUserRole: 1 },
+          },
+          { session },
+        );
+      }
+
+      await session.commitTransaction();
+      committed = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `Manifest ${manifest.manifestCode} arrived. Ready for unloading.`,
+        data: {
+          manifestId: manifest._id,
+          manifestCode: manifest.manifestCode,
+          previousStatus: "in_transit",
+          currentStatus: "arrived",
+          arrivedAt: now,
+          packageCount: packageIds.length,
+          destinationBranchId: activeBranchId,
+        },
+      });
+
+    } catch (err: any) {
+      return next(err);
+    } finally {
+      if (!committed) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  },
+);
+
