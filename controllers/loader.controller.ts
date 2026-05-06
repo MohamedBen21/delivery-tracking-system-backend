@@ -204,14 +204,15 @@ export const createManifest = catchAsyncError(
       };
 
       if (!destinationBranchId || !mongoose.Types.ObjectId.isValid(destinationBranchId)) {
-        return next(new ErrorHandler("Valid destinationBranchId is required.", 400));
+
+        throw new ErrorHandler("Valid destinationBranchId is required.", 400);
       }
 
       const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
 
       if (activeBranchId.toString() === destinationBranchId) {
-        return next(
-          new ErrorHandler("Origin and destination branches cannot be the same.", 400),
+
+          throw new ErrorHandler("Origin and destination branches cannot be the same.", 400
         );
       }
 
@@ -221,16 +222,17 @@ export const createManifest = catchAsyncError(
       ]);
 
       if (!originBranch || originBranch.status !== "active") {
-        return next(new ErrorHandler("Origin branch not found or not active.", 404));
+
+        throw new ErrorHandler("Origin branch not found or not active.", 404);
       }
       if (!destinationBranch || destinationBranch.status !== "active") {
-        return next(new ErrorHandler("Destination branch not found or not active.", 404));
+
+        throw new ErrorHandler("Destination branch not found or not active.", 404);
       }
 
       if (!["standard", "express", "urgent"].includes(priority)) {
-        return next(
-          new ErrorHandler("priority must be standard, express, or urgent.", 400),
-        );
+
+        throw new ErrorHandler("priority must be standard, express, or urgent.", 400);
       }
 
       // Generate the manifest code using the static model method
@@ -344,7 +346,9 @@ export const createManifest = catchAsyncError(
       }
       return next(err);
     } finally {
+
       if (!committed) await session.abortTransaction().catch(() => {});
+
       await session.endSession();
     }
   },
@@ -361,6 +365,7 @@ export const scanPackageIn = catchAsyncError(
 
     const session = await mongoose.startSession();
     session.startTransaction();
+
     let committed = false;
 
     try {
@@ -393,41 +398,38 @@ export const scanPackageIn = catchAsyncError(
       ]);
 
       if (!manifest) {
-        return next(new ErrorHandler("Manifest not found.", 404));
+
+        throw new ErrorHandler("Manifest not found.", 404);
       }
 
 
       if (manifest.originBranchId.toString() !== activeBranchId.toString()) {
-        return next(
-          new ErrorHandler(
-            "This manifest belongs to a different branch. You cannot scan packages into it here.",
-            403,
-          ),
+
+        throw new ErrorHandler(
+          "This manifest belongs to a different branch. You cannot scan packages into it here.",
+          403,
         );
       }
 
       if (manifest.status !== "open") {
-        return next(
-          new ErrorHandler(
-            `Manifest is '${manifest.status}'. Only open manifests accept new packages.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Manifest is '${manifest.status}'. Only open manifests accept new packages.`,
+          400,
         );
       }
 
       if (!packageDoc) {
-        return next(
-          new ErrorHandler(`No package found with tracking number ${trackingNumber}.`, 404),
-        );
+
+        throw new ErrorHandler(`No package found with tracking number ${trackingNumber}.`, 404);
       }
 
 
       if (packageDoc.status !== "at_origin_branch") {
-        return next(
-          new ErrorHandler(
-            `Package must be in 'at_origin_branch' status to be manifested. Current status: '${packageDoc.status}'.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Package must be in 'at_origin_branch' status to be manifested. Current status: '${packageDoc.status}'.`,
+          400,
         );
       }
 
@@ -435,21 +437,19 @@ export const scanPackageIn = catchAsyncError(
         !packageDoc.originBranchId ||
         packageDoc.originBranchId.toString() !== activeBranchId.toString()
       ) {
-        return next(
-          new ErrorHandler(
-            "Package origin branch does not match your current branch.",
-            403,
-          ),
+
+        throw new ErrorHandler(
+          "Package origin branch does not match your current branch.",
+          403,
         );
       }
 
 
       if ((packageDoc as any).currentManifestId) {
-        return next(
-          new ErrorHandler(
-            "Package is already assigned to another manifest. Remove it first.",
-            400,
-          ),
+
+        throw new ErrorHandler(
+          "Package is already assigned to another manifest. Remove it first.",
+          400,
         );
       }
 
@@ -580,7 +580,9 @@ export const scanPackageIn = catchAsyncError(
       }
       return next(err);
     } finally {
+
       if (!committed) await session.abortTransaction().catch(() => {});
+
       await session.endSession();
     }
   },
@@ -626,19 +628,20 @@ export const removePackageFromManifest = catchAsyncError(
         PackageModel.findById(packageId).session(session),
       ]);
 
-      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
-      if (!packageDoc) return next(new ErrorHandler("Package not found.", 404));
+      if (!manifest) throw new ErrorHandler("Manifest not found.", 404);
+
+      if (!packageDoc) throw new ErrorHandler("Package not found.", 404);
 
       if (manifest.originBranchId.toString() !== activeBranchId.toString()) {
-        return next(new ErrorHandler("This manifest belongs to a different branch.", 403));
+
+        throw new ErrorHandler("This manifest belongs to a different branch.", 403);
       }
 
       if (manifest.status !== "open") {
-        return next(
-          new ErrorHandler(
-            `Cannot remove packages from a '${manifest.status}' manifest. Only open manifests can be modified.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Cannot remove packages from a '${manifest.status}' manifest. Only open manifests can be modified.`,
+          400,
         );
       }
 
@@ -728,7 +731,9 @@ export const removePackageFromManifest = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
+
       if (!committed) await session.abortTransaction().catch(() => {});
+
       await session.endSession();
     }
   },
@@ -746,6 +751,7 @@ export const sealManifest = catchAsyncError(
 
     const session = await mongoose.startSession();
     session.startTransaction();
+
     let committed = false;
 
     try {
@@ -771,20 +777,21 @@ export const sealManifest = catchAsyncError(
 
       const manifest = await ManifestModel.findById(manifestId).session(session);
 
-      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+      if (!manifest) throw new ErrorHandler("Manifest not found.", 404);
 
       if (manifest.originBranchId.toString() !== activeBranchId.toString()) {
-        return next(new ErrorHandler("This manifest belongs to a different branch.", 403));
+
+        throw new ErrorHandler("This manifest belongs to a different branch.", 403);
       }
 
       if (manifest.status !== "open") {
-        return next(
-          new ErrorHandler(`Cannot seal a '${manifest.status}' manifest.`, 400),
-        );
+
+        throw new ErrorHandler(`Cannot seal a '${manifest.status}' manifest.`, 400);
       }
 
       if (manifest.packages.length === 0) {
-        return next(new ErrorHandler("Cannot seal an empty manifest.", 400));
+
+        throw new ErrorHandler("Cannot seal an empty manifest.", 400);
       }
 
      
@@ -872,7 +879,9 @@ export const sealManifest = catchAsyncError(
       }
       return next(err);
     } finally {
+
       if (!committed) await session.abortTransaction().catch(() => {});
+
       await session.endSession();
     }
   },
@@ -891,6 +900,7 @@ export const loadManifestOnTruck = catchAsyncError(
 
     const session = await mongoose.startSession();
     session.startTransaction();
+
     let committed = false;
 
     try {
@@ -926,41 +936,39 @@ export const loadManifestOnTruck = catchAsyncError(
         vehicleId ? VehicleModel.findById(vehicleId).session(session) : Promise.resolve(null),
       ]);
 
-      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+      if (!manifest) throw new ErrorHandler("Manifest not found.", 404);
 
       if (manifest.originBranchId.toString() !== activeBranchId.toString()) {
-        return next(new ErrorHandler("This manifest belongs to a different branch.", 403));
+
+        throw new ErrorHandler("This manifest belongs to a different branch.", 403);
       }
 
       if (manifest.status !== "sealed") {
-        return next(
-          new ErrorHandler(
-            `Manifest must be sealed before loading onto a truck. Current status: '${manifest.status}'.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Manifest must be sealed before loading onto a truck. Current status: '${manifest.status}'.`,
+          400,
         );
       }
 
       if (!transporter) {
-        return next(new ErrorHandler("Transporter user not found.", 404));
+        throw new ErrorHandler("Transporter user not found.", 404);
       }
 
       if (!["transporter", "driver"].includes(transporter.role)) {
-        return next(
-          new ErrorHandler(
-            `User must have role 'transporter' or 'driver'. Current role: '${transporter.role}'.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `User must have role 'transporter' or 'driver'. Current role: '${transporter.role}'.`,
+          400,
         );
       }
 
       if (vehicle) {
         if (vehicle.status !== "available" && vehicle.status !== "in_use") {
-          return next(
-            new ErrorHandler(
-              `Vehicle is '${vehicle.status}' and cannot be used for transport.`,
-              400,
-            ),
+
+          throw new ErrorHandler(
+            `Vehicle is '${vehicle.status}' and cannot be used for transport.`,
+            400,
           );
         }
 
@@ -974,16 +982,16 @@ export const loadManifestOnTruck = catchAsyncError(
         });
 
         if (!vehicle.supportsFragile && manifest.packages.some((p: any) => p.isFragile)) {
-          return next(
-            new ErrorHandler("Vehicle does not support fragile packages.", 400),
-          );
+
+          throw new ErrorHandler("Vehicle does not support fragile packages.", 400);
         }
       }
 
       const eta = estimatedArrival ? new Date(estimatedArrival) : undefined;
 
       if (eta && isNaN(eta.getTime())) {
-        return next(new ErrorHandler("estimatedArrival is not a valid date.", 400));
+
+        throw new ErrorHandler("estimatedArrival is not a valid date.", 400);
       }
 
 
@@ -1108,6 +1116,7 @@ export const markManifestDeparted = catchAsyncError(
 
     const session = await mongoose.startSession();
     session.startTransaction();
+
     let committed = false;
 
     try {
@@ -1126,18 +1135,19 @@ export const markManifestDeparted = catchAsyncError(
       const now = new Date();
 
       const manifest = await ManifestModel.findById(manifestId).session(session);
-      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+
+      if (!manifest) throw new ErrorHandler("Manifest not found.", 404);
 
       if (manifest.originBranchId.toString() !== activeBranchId.toString()) {
-        return next(new ErrorHandler("This manifest belongs to a different branch.", 403));
+
+        throw new ErrorHandler("This manifest belongs to a different branch.", 403);
       }
 
       if (manifest.status !== "loaded") {
-        return next(
-          new ErrorHandler(
-            `Manifest must be in 'loaded' status before departure. Current status: '${manifest.status}'.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Manifest must be in 'loaded' status before departure. Current status: '${manifest.status}'.`,
+          400,
         );
       }
 
@@ -1224,7 +1234,9 @@ export const markManifestDeparted = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
+
       if (!committed) await session.abortTransaction().catch(() => {});
+
       await session.endSession();
     }
   },
@@ -1399,6 +1411,7 @@ export const scanPackageOut = catchAsyncError(
 
     const session = await mongoose.startSession();
     session.startTransaction();
+
     let committed = false;
 
     try {
@@ -1429,27 +1442,24 @@ export const scanPackageOut = catchAsyncError(
         }).session(session),
       ]);
 
-      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+      if (!manifest) throw new ErrorHandler("Manifest not found.", 404);
 
       if (manifest.destinationBranchId.toString() !== activeBranchId.toString()) {
-        return next(
-          new ErrorHandler("You are not at this manifest's destination branch.", 403),
-        );
+
+        throw new ErrorHandler("You are not at this manifest's destination branch.", 403);
       }
 
       if (!["arrived", "unloading"].includes(manifest.status)) {
-        return next(
-          new ErrorHandler(
-            `Manifest must be 'arrived' or 'unloading' to scan packages out. Current status: '${manifest.status}'.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Manifest must be 'arrived' or 'unloading' to scan packages out. Current status: '${manifest.status}'.`,
+          400,
         );
       }
 
       if (!packageDoc) {
-        return next(
-          new ErrorHandler(`No package found with tracking number ${trackingNumber}.`, 404),
-        );
+
+        throw new ErrorHandler(`No package found with tracking number ${trackingNumber}.`, 404);
       }
 
       
@@ -1459,20 +1469,18 @@ export const scanPackageOut = catchAsyncError(
       );
 
       if (!entry) {
-        return next(
-          new ErrorHandler(
-            `Package ${trackingNumber} is not part of manifest ${manifest.manifestCode}.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Package ${trackingNumber} is not part of manifest ${manifest.manifestCode}.`,
+          400,
         );
       }
 
       if (entry.entryStatus !== "in_manifest") {
-        return next(
-          new ErrorHandler(
-            `Package entry is already '${entry.entryStatus}'. Cannot unload again.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Package entry is already '${entry.entryStatus}'. Cannot unload again.`,
+          400,
         );
       }
 
@@ -1655,6 +1663,7 @@ export const remanifestPackage = catchAsyncError(
 
     const session = await mongoose.startSession();
     session.startTransaction();
+
     let committed = false;
 
     try {
@@ -1693,37 +1702,33 @@ export const remanifestPackage = catchAsyncError(
         }).session(session),
       ]);
 
-      if (!sourceManifest) return next(new ErrorHandler("Source manifest not found.", 404));
-      if (!targetManifest) return next(new ErrorHandler("Target manifest not found.", 404));
-      if (!packageDoc)     return next(new ErrorHandler(`Package ${trackingNumber} not found.`, 404));
+      if (!sourceManifest) throw new ErrorHandler("Source manifest not found.", 404);
+      if (!targetManifest) throw new ErrorHandler("Target manifest not found.", 404);
+      if (!packageDoc)     throw new ErrorHandler(`Package ${trackingNumber} not found.`, 404);
 
 
       if (sourceManifest.destinationBranchId.toString() !== activeBranchId.toString()) {
-        return next(
-          new ErrorHandler("You are not at the source manifest's destination branch.", 403),
-        );
+
+        throw new ErrorHandler("You are not at the source manifest's destination branch.", 403);
       }
 
       if (!["arrived", "unloading"].includes(sourceManifest.status)) {
-        return next(
-          new ErrorHandler(
-            `Source manifest must be arrived or unloading. Current: '${sourceManifest.status}'.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Source manifest must be arrived or unloading. Current: '${sourceManifest.status}'.`,
+          400,
         );
       }
 
 
       if (targetManifest.status !== "open") {
-        return next(
-          new ErrorHandler(`Target manifest must be open. Current: '${targetManifest.status}'.`, 400),
-        );
+
+        throw new ErrorHandler(`Target manifest must be open. Current: '${targetManifest.status}'.`, 400);
       }
 
       if (targetManifest.originBranchId.toString() !== activeBranchId.toString()) {
-        return next(
-          new ErrorHandler("Target manifest does not originate from your current branch.", 403),
-        );
+
+        throw new ErrorHandler("Target manifest does not originate from your current branch.", 403);
       }
 
       const entry = sourceManifest.packages.find(
@@ -1732,20 +1737,18 @@ export const remanifestPackage = catchAsyncError(
       );
 
       if (!entry) {
-        return next(
-          new ErrorHandler(
-            `Package ${trackingNumber} is not in the source manifest.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Package ${trackingNumber} is not in the source manifest.`,
+          400,
         );
       }
 
       if (!["in_manifest", "unloaded"].includes(entry.entryStatus)) {
-        return next(
-          new ErrorHandler(
-            `Package entry status is '${entry.entryStatus}'. Cannot re-manifest.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Package entry status is '${entry.entryStatus}'. Cannot re-manifest.`,
+          400,
         );
       }
 
@@ -1862,7 +1865,9 @@ export const remanifestPackage = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
+
       if (!committed) await session.abortTransaction().catch(() => {});
+
       await session.endSession();
     }
   },
@@ -1880,6 +1885,7 @@ export const closeManifest = catchAsyncError(
 
     const session = await mongoose.startSession();
     session.startTransaction();
+
     let committed = false;
 
     try {
@@ -1898,18 +1904,19 @@ export const closeManifest = catchAsyncError(
       const now = new Date();
 
       const manifest = await ManifestModel.findById(manifestId).session(session);
-      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+
+      if (!manifest) throw new ErrorHandler("Manifest not found.", 404);
 
       if (manifest.destinationBranchId.toString() !== activeBranchId.toString()) {
-        return next(new ErrorHandler("You are not at this manifest's destination branch.", 403));
+
+        throw new ErrorHandler("You are not at this manifest's destination branch.", 403);
       }
 
       if (!["unloading", "arrived", "discrepancy"].includes(manifest.status)) {
-        return next(
-          new ErrorHandler(
-            `Cannot close a manifest with status '${manifest.status}'.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Cannot close a manifest with status '${manifest.status}'.`,
+          400,
         );
       }
 
@@ -2030,7 +2037,9 @@ export const closeManifest = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
+
       if (!committed) await session.abortTransaction().catch(() => {});
+
       await session.endSession();
     }
   },
@@ -2047,6 +2056,7 @@ export const flagDiscrepancy = catchAsyncError(
 
     const session = await mongoose.startSession();
     session.startTransaction();
+
     let committed = false;
 
     try {
@@ -2072,18 +2082,19 @@ export const flagDiscrepancy = catchAsyncError(
       const now = new Date();
 
       const manifest = await ManifestModel.findById(manifestId).session(session);
-      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+
+      if (!manifest) throw new ErrorHandler("Manifest not found.", 404);
 
       if (manifest.destinationBranchId.toString() !== activeBranchId.toString()) {
-        return next(new ErrorHandler("You are not at this manifest's destination branch.", 403));
+
+        throw new ErrorHandler("You are not at this manifest's destination branch.", 403);
       }
 
       if (!["arrived", "unloading", "closed"].includes(manifest.status)) {
-        return next(
-          new ErrorHandler(
-            `Cannot flag discrepancy on a '${manifest.status}' manifest.`,
-            400,
-          ),
+
+        throw new ErrorHandler(
+          `Cannot flag discrepancy on a '${manifest.status}' manifest.`,
+          400,
         );
       }
 
@@ -2182,7 +2193,9 @@ export const flagDiscrepancy = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
+
       if (!committed) await session.abortTransaction().catch(() => {});
+      
       await session.endSession();
     }
   },

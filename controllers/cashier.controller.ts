@@ -26,7 +26,7 @@ if (session) query.session(session);
 const cashier = await query.lean();
 
 if (!cashier) {
-next(new ErrorHandler("Active cashier profile not found.", 404));
+throw new ErrorHandler("Active cashier profile not found.", 404);
 return null;
 }
 
@@ -35,16 +35,15 @@ if (
 !cashier.currentShift ||
 (cashier.currentShift as any).status !== "active"
 ) {
-next(
-    new ErrorHandler(
+
+throw  new ErrorHandler(
     "You must be checked in to an active shift before performing operations.",
     403,
-    ),
 );
 return null;
 }
 
-return cashier as any;
+return cashier;
 }
 
 
@@ -72,7 +71,13 @@ if (!q || q.trim().length < 2) {
     );
 }
 
-const search = q.trim();
+    let search = q.trim();
+
+
+    const phoneRegex = /^0(5|6|7)[0-9]{8}$/;
+    if (phoneRegex.test(search)) {
+        search = '+213' + search.substring(1);
+    }
 
 // Search against the User collection (email, phone) and Freelancer (businessName)
 // We join them via a pipeline for a single atomic query.
@@ -219,7 +224,8 @@ try {
     };
 
     if (!trackingNumber?.trim()) {
-    return next(new ErrorHandler("trackingNumber is required.", 400));
+
+    throw new ErrorHandler("trackingNumber is required.", 400);
     }
 
     const now = new Date();
@@ -230,11 +236,10 @@ try {
     }).session(session);
 
     if (!packageDoc) {
-    return next(
-        new ErrorHandler(
+
+    throw new ErrorHandler(
         `No package found with tracking number ${trackingNumber}.`,
         404,
-        ),
     );
     }
 
@@ -243,21 +248,19 @@ try {
     packageDoc.originBranchId.toString() !==
     cashier.assignedBranchId.toString()
     ) {
-    return next(
-        new ErrorHandler(
+
+    throw new ErrorHandler(
         "This package belongs to a different branch and cannot be claimed here.",
         403,
-        ),
     );
     }
 
     // ── Guard: must be 'pending' (not already claimed or further)
     if (packageDoc.status !== "pending") {
-    return next(
-        new ErrorHandler(
+
+    throw new ErrorHandler(
         `Package is already in status '${packageDoc.status}' and cannot be claimed again.`,
         400,
-        ),
     );
     }
 
@@ -423,7 +426,8 @@ try {
     };
 
     if (!trackingNumber?.trim()) {
-    return next(new ErrorHandler("trackingNumber is required.", 400));
+
+    throw new ErrorHandler("trackingNumber is required.", 400);
     }
 
     const now = new Date();
@@ -434,20 +438,18 @@ try {
     }).session(session);
 
     if (!packageDoc) {
-    return next(
-        new ErrorHandler(
+
+    throw new ErrorHandler(
         `Package ${trackingNumber} not found at your branch.`,
         404,
-        ),
     );
     }
 
     if (packageDoc.status !== "cashier_claimed") {
-    return next(
-        new ErrorHandler(
+
+    throw new ErrorHandler(
         `Package must be in 'cashier_claimed' status to accept. Current status: '${packageDoc.status}'.`,
         400,
-        ),
     );
     }
 
@@ -554,6 +556,7 @@ try {
     }
     return next(error);
 } finally {
+
     if (!transactionCommitted) {
     await session.abortTransaction().catch(() => {});
     }
@@ -587,6 +590,7 @@ const VALID_REJECTION_REASONS: RejectionReason[] = [
 "address_unserviceable", "duplicate_package", "other",
 ];
 
+
 export const rejectPackage = catchAsyncError(
 async (req: Request, res: Response, next: NextFunction) => {
 
@@ -606,15 +610,15 @@ try {
     };
 
     if (!trackingNumber?.trim()) {
-    return next(new ErrorHandler("trackingNumber is required.", 400));
+
+    throw new ErrorHandler("trackingNumber is required.", 400);
     }
 
     if (!rejectionReason || !VALID_REJECTION_REASONS.includes(rejectionReason)) {
-    return next(
-        new ErrorHandler(
+
+    throw new ErrorHandler(
         `rejectionReason must be one of: ${VALID_REJECTION_REASONS.join(", ")}`,
         400,
-        ),
     );
     }
 
@@ -626,18 +630,16 @@ try {
     }).session(session);
 
     if (!packageDoc) {
-    return next(
-        new ErrorHandler(`Package ${trackingNumber} not found at your branch.`, 404),
-    );
+
+    throw new ErrorHandler(`Package ${trackingNumber} not found at your branch.`, 404);
     }
 
 
     if (packageDoc.status !== "cashier_claimed") {
-    return next(
-        new ErrorHandler(
+        
+    throw new ErrorHandler(
         `Only packages in 'cashier_claimed' status can be rejected. Current status: '${packageDoc.status}'.`,
         400,
-        ),
     );
     }
 

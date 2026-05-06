@@ -97,16 +97,15 @@ async function resolveFreelancer(
   const freelancer = await FreelancerModel.findOne({ userId }).lean();
   
   if (!freelancer) {
-    next(new ErrorHandler("Freelancer profile not found.", 404));
+    throw new ErrorHandler("Freelancer profile not found.", 404);
     return null;
   }
   
   if (freelancer.status !== "active" || !freelancer.isActive) {
-    next(
-      new ErrorHandler(
+
+    throw  new ErrorHandler(
         `Your freelancer account is ${freelancer.status}. Contact support.`,
         403,
-      ),
     );
     return null;
   }
@@ -1185,6 +1184,7 @@ export const createPackage = catchAsyncError(
  
     const session = await mongoose.startSession();
     session.startTransaction();
+
     let transactionCommitted = false;
  
     try {
@@ -1224,53 +1224,55 @@ export const createPackage = catchAsyncError(
         !recipientCity || !recipientState || !weight || !type ||
         !deliveryType || !totalPrice
       ) {
-        return next(
-          new ErrorHandler(
-            "recipientName, recipientPhone, recipientAddress, recipientCity, " +
-            "recipientState, weight, type, deliveryType, and totalPrice are required.",
-            400,
-          ),
+
+        throw new ErrorHandler(
+          "recipientName, recipientPhone, recipientAddress, recipientCity, " +
+          "recipientState, weight, type, deliveryType, and totalPrice are required.",
+          400,
         );
       }
  
 
       if (typeof weight !== "number" || weight <= 0) {
-        return next(new ErrorHandler("weight must be a positive number.", 400));
+
+        throw new ErrorHandler("weight must be a positive number.", 400);
       }
  
       if (typeof totalPrice !== "number" || totalPrice <= 0) {
-        return next(new ErrorHandler("totalPrice must be a positive number.", 400));
+
+        throw new ErrorHandler("totalPrice must be a positive number.", 400);
       }
  
       const VALID_TYPES = ["document", "parcel", "fragile", "heavy", "perishable", "electronic", "clothing"];
       if (!VALID_TYPES.includes(type)) {
-        return next(new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400));
+
+        throw new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400);
       }
  
       if (!["home", "branch_pickup"].includes(deliveryType)) {
-        return next(new ErrorHandler("deliveryType must be 'home' or 'branch_pickup'.", 400));
+
+        throw new ErrorHandler("deliveryType must be 'home' or 'branch_pickup'.", 400);
       }
  
       if (deliveryType === "branch_pickup" && !destinationBranchId) {
-        return next(
-          new ErrorHandler("destinationBranchId is required for branch_pickup deliveries.", 400),
-        );
+
+        throw new ErrorHandler("destinationBranchId is required for branch_pickup deliveries.", 400);
       }
  
       if (
         destinationBranchId &&
         !mongoose.Types.ObjectId.isValid(destinationBranchId)
       ) {
-        return next(new ErrorHandler("Invalid destinationBranchId.", 400));
+
+        throw new ErrorHandler("Invalid destinationBranchId.", 400);
       }
  
       if (
         deliveryPriority &&
         !["standard", "express", "same_day"].includes(deliveryPriority)
       ) {
-        return next(
-          new ErrorHandler("deliveryPriority must be standard, express, or same_day.", 400),
-        );
+
+        throw new ErrorHandler("deliveryPriority must be standard, express, or same_day.", 400);
       }
  
 
@@ -1283,18 +1285,18 @@ export const createPackage = catchAsyncError(
           normalizedAlternativePhone = normalizePhone(alternativePhone);
         }
       } catch (error: any) {
-        return next(new ErrorHandler(error.message || "Invalid phone number format.", 400));
+
+        throw new ErrorHandler(error.message || "Invalid phone number format.", 400);
       }
  
 
       const originBranchId = freelancer.defaultOriginBranchId;
  
       if (!originBranchId) {
-        return next(
-          new ErrorHandler(
-            "Your freelancer profile has no default origin branch set. Contact support.",
-            400,
-          ),
+        throw new ErrorHandler(
+
+          "Your freelancer profile has no default origin branch set. Contact support.",
+          400,
         );
       }
  
@@ -1312,23 +1314,23 @@ export const createPackage = catchAsyncError(
       const [originBranch, destinationBranch] = await Promise.all(branchQueries);
  
       if (!originBranch) {
-        return next(new ErrorHandler("Origin branch not found.", 404));
+
+        throw new ErrorHandler("Origin branch not found.", 404);
       }
  
       if (originBranch.status !== "active") {
-        return next(
-          new ErrorHandler("Your origin branch is not currently active.", 400),
-        );
+
+        throw new ErrorHandler("Your origin branch is not currently active.", 400);
       }
  
       if (destinationBranchId && !destinationBranch) {
-        return next(new ErrorHandler("Destination branch not found.", 404));
+
+        throw new ErrorHandler("Destination branch not found.", 404);
       }
  
       if (destinationBranch && destinationBranch.status !== "active") {
-        return next(
-          new ErrorHandler("The selected destination branch is not currently active.", 400),
-        );
+
+        throw new ErrorHandler("The selected destination branch is not currently active.", 400);
       }
  
 
@@ -1336,9 +1338,8 @@ export const createPackage = catchAsyncError(
         destinationBranchId &&
         originBranchId.toString() === destinationBranchId.toString()
       ) {
-        return next(
-          new ErrorHandler("Origin and destination branches cannot be the same.", 400),
-        );
+        
+        throw new ErrorHandler("Origin and destination branches cannot be the same.", 400);
       }
  
    
