@@ -1643,3 +1643,229 @@ export const scanPackageOut = catchAsyncError(
 );
 
 
+
+//  POST /loader/manifests/:manifestId/re-manifest
+//  A package that arrived at a hub but needs to go to yet another branch
+//  is scanned out of the current manifest and into a new outbound manifest.
+//  This covers the hub-relay scenario.
+
+
+export const remanifestPackage = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let committed = false;
+
+    try {
+      const loaderUserId = req.user?._id;
+      const { manifestId } = req.params;   
+      const { trackingNumber, newManifestId, notes } = req.body as {
+        trackingNumber: string;
+        newManifestId: string;             
+        notes?: string;
+      };
+
+      if (!mongoose.Types.ObjectId.isValid(manifestId.toString())) {
+        return next(new ErrorHandler("Invalid manifestId.", 400));
+      }
+      if (!trackingNumber?.trim()) {
+        return next(new ErrorHandler("trackingNumber is required.", 400));
+      }
+      if (!newManifestId || !mongoose.Types.ObjectId.isValid(newManifestId)) {
+        return next(new ErrorHandler("Valid newManifestId is required.", 400));
+      }
+      if (manifestId === newManifestId) {
+        return next(new ErrorHandler("Source and target manifests cannot be the same.", 400));
+      }
+
+      const loader = await resolveLoader(loaderUserId, next, true, session);
+      if (!loader) return;
+
+      const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
+      const now = new Date();
+
+      const [sourceManifest, targetManifest, packageDoc] = await Promise.all([
+        ManifestModel.findById(manifestId).session(session),
+        ManifestModel.findById(newManifestId).session(session),
+        PackageModel.findOne({
+          trackingNumber: trackingNumber.trim().toUpperCase(),
+        }).session(session),
+      ]);
+
+      if (!sourceManifest) return next(new ErrorHandler("Source manifest not found.", 404));
+      if (!targetManifest) return next(new ErrorHandler("Target manifest not found.", 404));
+      if (!packageDoc)     return next(new ErrorHandler(`Package ${trackingNumber} not found.`, 404));
+
+
+      if (sourceManifest.destinationBranchId.toString() !== activeBranchId.toString()) {
+        return next(
+          new ErrorHandler("You are not at the source manifest's destination branch.", 403),
+        );
+      }
+
+      if (!["arrived", "unloading"].includes(sourceManifest.status)) {
+        return next(
+          new ErrorHandler(
+            `Source manifest must be arrived or unloading. Current: '${sourceManifest.status}'.`,
+            400,
+          ),
+        );
+      }
+
+
+      if (targetManifest.status !== "open") {
+        return next(
+          new ErrorHandler(`Target manifest must be open. Current: '${targetManifest.status}'.`, 400),
+        );
+      }
+
+      if (targetManifest.originBranchId.toString() !== activeBranchId.toString()) {
+        return next(
+          new ErrorHandler("Target manifest does not originate from your current branch.", 403),
+        );
+      }
+
+      const entry = sourceManifest.packages.find(
+        (p: IManifestPackageEntry) =>
+          p.packageId.toString() === (packageDoc._id as mongoose.Types.ObjectId).toString(),
+      );
+
+      if (!entry) {
+        return next(
+          new ErrorHandler(
+            `Package ${trackingNumber} is not in the source manifest.`,
+            400,
+          ),
+        );
+      }
+
+      if (!["in_manifest", "unloaded"].includes(entry.entryStatus)) {
+        return next(
+          new ErrorHandler(
+            `Package entry status is '${entry.entryStatus}'. Cannot re-manifest.`,
+            400,
+          ),
+        );
+      }
+
+
+      await sourceManifest.remanifestPackage(
+        packageDoc._id as mongoose.Types.ObjectId,
+        targetManifest._id as mongoose.Types.ObjectId,
+        loaderUserId as mongoose.Types.ObjectId,
+      );
+
+
+      await targetManifest.addPackage(
+        packageDoc._id as mongoose.Types.ObjectId,
+        packageDoc.trackingNumber,
+        packageDoc.weight,
+        loaderUserId as mongoose.Types.ObjectId,
+      );
+
+
+      await PackageModel.findByIdAndUpdate(
+        packageDoc._id,
+        {
+          $set: {
+            status: "manifested" as PackageStatus,
+            currentManifestId: targetManifest._id,
+          },
+          $push: {
+            trackingHistory: {
+              status: "manifested",
+              branchId: activeBranchId,
+              userId: loaderUserId,
+              notes: notes?.trim() ||
+                `Re-manifested from ${sourceManifest.manifestCode} → ${targetManifest.manifestCode}.`,
+              timestamp: now,
+            },
+          },
+        },
+        { session },
+      );
+
+      await PackageHistoryModel.create(
+        [
+          {
+            packageId: packageDoc._id,
+            status: "manifested" as PackageStatus,
+            branchId: activeBranchId,
+            handledBy: loaderUserId,
+            handlerName: loaderName(req),
+            handlerRole: "loader",
+            manifestId: targetManifest._id,
+            notes: notes?.trim() ||
+              `Transferred from manifest ${sourceManifest.manifestCode} to ${targetManifest.manifestCode} at hub.`,
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+      await ManifestEventModel.create(
+        [
+          {
+            manifestId: sourceManifest._id,
+            manifestCode: sourceManifest.manifestCode,
+            eventType: "package_remanifested",
+            performedBy: loaderUserId,
+            performerName: loaderName(req),
+            performerRole: "loader",
+            branchId: activeBranchId,
+            packageId: packageDoc._id,
+            packageTrackingNumber: packageDoc.trackingNumber,
+            metadata: { targetManifestId: targetManifest._id, targetManifestCode: targetManifest.manifestCode },
+            notes: `Package moved to manifest ${targetManifest.manifestCode}.`,
+            timestamp: now,
+          },
+          {
+            manifestId: targetManifest._id,
+            manifestCode: targetManifest.manifestCode,
+            eventType: "package_added",
+            performedBy: loaderUserId,
+            performerName: loaderName(req),
+            performerRole: "loader",
+            branchId: activeBranchId,
+            packageId: packageDoc._id,
+            packageTrackingNumber: packageDoc.trackingNumber,
+            metadata: { fromManifestId: sourceManifest._id, fromManifestCode: sourceManifest.manifestCode },
+            notes: `Package transferred from manifest ${sourceManifest.manifestCode}.`,
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+      await session.commitTransaction();
+      committed = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `Package ${packageDoc.trackingNumber} moved to manifest ${targetManifest.manifestCode}.`,
+        data: {
+          packageId: packageDoc._id,
+          trackingNumber: packageDoc.trackingNumber,
+          fromManifest: {
+            id: sourceManifest._id,
+            code: sourceManifest.manifestCode,
+          },
+          toManifest: {
+            id: targetManifest._id,
+            code: targetManifest.manifestCode,
+            packageCount: targetManifest.packages.length,
+          },
+        },
+      });
+
+    } catch (err: any) {
+      return next(err);
+    } finally {
+      if (!committed) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  },
+);
+
+
