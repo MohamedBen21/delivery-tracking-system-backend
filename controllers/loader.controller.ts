@@ -2190,3 +2190,129 @@ export const flagDiscrepancy = catchAsyncError(
 
 
 
+
+
+export const getMyShift = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const loaderUserId = req.user?._id;
+    if (!loaderUserId) return next(new ErrorHandler("Unauthorized.", 401));
+
+    const loader = await LoaderModel.findOne({ userId: loaderUserId, status: "active" })
+      .populate("assignedBranchId", "name code address")
+      .populate("temporaryBranchId", "name code")
+      .lean();
+
+    if (!loader) return next(new ErrorHandler("Active loader profile not found.", 404));
+
+    const shift = loader.currentShift as any;
+    const isCheckedIn = !!shift && shift.status === "active";
+
+    const durationMinutes = isCheckedIn
+      ? Math.round((Date.now() - new Date(shift.startedAt).getTime()) / 60000)
+      : null;
+
+    // Fetch active manifests at this loader's branch
+    const activeBranchId = (loader as any).temporaryBranchId?._id ?? (loader as any).assignedBranchId._id;
+
+    const activeManifests = await ManifestModel.find({
+      originBranchId: activeBranchId,
+      status: { $in: ["open", "sealed", "loaded"] },
+    })
+      .select("manifestCode status packageCount totalDeclaredWeight priority createdAt")
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    const arrivingManifests = await ManifestModel.find({
+      destinationBranchId: activeBranchId,
+      status: { $in: ["in_transit", "arrived", "unloading"] },
+    })
+      .select("manifestCode status packageCount estimatedArrival arrivedAt")
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        isCheckedIn,
+        assignedBranch: loader.assignedBranchId,
+        temporaryBranch: loader.temporaryBranchId ?? null,
+        currentShift: isCheckedIn ? { ...shift, durationMinutes } : null,
+        stats: loader.stats,
+        recentScans: (loader.recentScans as any[]).slice(0, 20),
+        activeManifests,      
+        arrivingManifests,   
+      },
+    });
+  },
+);
+
+
+
+export const getManifestDetail = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const loaderUserId = req.user?._id;
+    const { manifestId } = req.params;
+
+    if (!loaderUserId) return next(new ErrorHandler("Unauthorized.", 401));
+
+    if (!mongoose.Types.ObjectId.isValid(manifestId.toString())) {
+      return next(new ErrorHandler("Invalid manifestId.", 400));
+    }
+
+    const [loader, manifest] = await Promise.all([
+      LoaderModel.findOne({ userId: loaderUserId, status: "active" }).lean(),
+      ManifestModel.findById(manifestId)
+        .populate("originBranchId",      "name code address")
+        .populate("destinationBranchId", "name code address")
+        .populate("createdBy",           "firstName lastName")
+        .populate("sealInfo.sealedBy",   "firstName lastName")
+        .populate("transportLeg.transporterId", "firstName lastName phone")
+        .lean(),
+    ]);
+
+    if (!loader) return next(new ErrorHandler("Active loader profile not found.", 404));
+    if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+
+
+    const events = await ManifestEventModel.find({ manifestId: manifest._id })
+      .sort({ timestamp: -1 })
+      .limit(50)
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...manifest,
+        events,
+      },
+    });
+  },
+);
+
+
+
+export const getMyStats = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const loaderUserId = req.user?._id;
+    if (!loaderUserId) return next(new ErrorHandler("Unauthorized.", 401));
+
+    const loader = await LoaderModel.findOne({ userId: loaderUserId, status: "active" })
+      .select("stats recentShifts employeeCode assignedBranchId")
+      .populate("assignedBranchId", "name code")
+      .lean();
+
+    if (!loader) return next(new ErrorHandler("Active loader profile not found.", 404));
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        employeeCode: loader.employeeCode,
+        assignedBranch: loader.assignedBranchId,
+        stats: loader.stats,
+        recentShifts: (loader.recentShifts as any[]).slice(0, 10),
+      },
+    });
+  },
+);
