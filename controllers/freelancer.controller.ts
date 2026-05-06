@@ -4,11 +4,12 @@ import { catchAsyncError } from "../middleware/catchAsyncErrors";
 import ErrorHandler from "../utils/ErrorHandler";
 import PackageModel, { PackageStatus } from "../models/package.model";
 import PackageHistoryModel from "../models/package-history.model";
-import FreelancerModel from "../models/freelancer.model";
+import FreelancerModel, { IFreelancer } from "../models/freelancer.model";
 import BranchModel from "../models/branch.model";
 import userModel from "../models/user.model";
 import { buildUserFieldUpdates } from "./manager.controller";
 import PaymentModel from "../models/payment.model";
+import clientModel from "../models/client.model";
 
 
 
@@ -87,17 +88,20 @@ function paginationMeta(total: number, page: number, limit: number) {
 async function resolveFreelancer(
   userId: any,
   next: NextFunction,
-): Promise<mongoose.Document & { _id: mongoose.Types.ObjectId; userId: mongoose.Types.ObjectId; companyId: mongoose.Types.ObjectId } | null> {
+) {
   if (!userId) {
     next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     return null;
   }
+  
   const freelancer = await FreelancerModel.findOne({ userId }).lean();
+  
   if (!freelancer) {
     next(new ErrorHandler("Freelancer profile not found.", 404));
     return null;
   }
-  if (freelancer.status !== "active" || freelancer.isActive === false) {
+  
+  if (freelancer.status !== "active" || !freelancer.isActive) {
     next(
       new ErrorHandler(
         `Your freelancer account is ${freelancer.status}. Contact support.`,
@@ -106,7 +110,8 @@ async function resolveFreelancer(
     );
     return null;
   }
-  return freelancer as any;
+  
+  return freelancer;
 }
 
 
@@ -685,7 +690,7 @@ const READABLE_STATUS: Record<PackageStatus, string> = {
 
   cashier_claimed: 'Claimed at Counter',
   manifested:      'Assigned to Manifest',
-  
+
   rescheduled:           "Rescheduled",
   returned:              "Returned",
   cancelled:             "Cancelled",
@@ -1039,3 +1044,516 @@ export const updateMeFreelancer = catchAsyncError(
     });
   },
 );
+
+
+
+
+interface ICreatePackageBody {
+
+  recipientName: string;
+  recipientPhone: string;
+  alternativePhone?: string;
+  recipientAddress: string;
+  recipientCity: string;
+  recipientState: string;
+  recipientPostalCode?: string;
+  deliveryNotes?: string;
+ 
+
+  weight: number;
+  dimensions?: { length: number; width: number; height: number };
+  isFragile?: boolean;
+  type: "document" | "parcel" | "fragile" | "heavy" | "perishable" | "electronic" | "clothing";
+  description?: string;
+  declaredValue?: number;
+ 
+
+  deliveryType: "home" | "branch_pickup";
+  deliveryPriority?: "standard" | "express" | "same_day";
+  destinationBranchId?: string;   
+ 
+
+  totalPrice: number;
+  paymentMethod?: string;
+ 
+
+  estimatedDeliveryTime?: string;
+}
+
+
+
+function normalizePhone(phone: string): string {
+  let normalized = phone.trim().replace(/[^\d+]/g, '').replace(/\s+/g, '');
+  
+  if (normalized.startsWith('0')) {
+    normalized = '+213' + normalized.substring(1);
+  }
+  
+  if (!normalized.startsWith('+213')) {
+    throw new Error('Phone number must start with +213 or 0');
+  }
+  
+  return normalized;
+}
+
+
+function generateTrackingNumber(): string {
+  const prefix = 'PKG';
+  const timestamp = Date.now().toString().slice(-6);
+  const random = Math.floor(1000 + Math.random() * 9000);
+  return `${prefix}${timestamp}${random}`;
+}
+
+
+async function resolveClientByPhone(
+  recipientPhone: string,
+  recipientName: string,
+  recipientAddress: string,
+  recipientCity: string,
+  recipientState: string,
+  alternativePhone?: string,
+  session?: mongoose.ClientSession,
+): Promise<mongoose.Types.ObjectId> {
+  const normalizedPhone = normalizePhone(recipientPhone);
+  const normalizedAltPhone = alternativePhone ? normalizePhone(alternativePhone) : undefined;
+  
+
+  const existingClient = await userModel.findOne({ 
+    phone: normalizedPhone,
+    role: "client" 
+  }).session(session || null);
+  
+  if (existingClient) {
+
+    await clientModel.findOneAndUpdate(
+      { userId: existingClient._id },
+      {
+        $set: {
+          deliveryAddresses: [{
+            label: 'Latest Delivery Address',
+            street: recipientAddress.trim(),
+            city: recipientCity.trim(),
+            state: recipientState.trim(),
+            isDefault: true,
+          }],
+        },
+      },
+      { session: session || null, upsert: true }
+    );
+    
+    return existingClient._id;
+  }
+  
+
+  const nameParts = recipientName.trim().split(' ');
+  const firstName = nameParts[0] || 'Client';
+  const lastName = nameParts.slice(1).join(' ') || 'Recipient';
+  
+  const [newClientUser] = await userModel.create(
+    [{
+
+      phone: normalizedPhone,
+      firstName,
+      lastName,
+      role: 'client',
+      status: 'active',
+    }],
+    { session: session || null }
+  );
+
+
+  await clientModel.create(
+    [{
+      userId: newClientUser._id,
+      deliveryAddresses: [{
+        label: 'Default Delivery Address',
+        street: recipientAddress.trim(),
+        city: recipientCity.trim(),
+        state: recipientState.trim(),
+        isDefault: true,
+      }],
+    }],
+    { session: session || null }
+  );
+
+  return newClientUser._id;
+}
+
+
+export const createPackage = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+ 
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+ 
+    try {
+      const freelancerUserId = req.user?._id;
+ 
+
+      const freelancer = await resolveFreelancer(freelancerUserId, next);
+      if (!freelancer) return;
+ 
+
+      const {
+        recipientName,
+        recipientPhone,
+        alternativePhone,
+        recipientAddress,
+        recipientCity,
+        recipientState,
+        recipientPostalCode,
+        deliveryNotes,
+        weight,
+        dimensions,
+        isFragile,
+        type,
+        description,
+        declaredValue,
+        deliveryType,
+        deliveryPriority,
+        destinationBranchId,
+        totalPrice,
+        paymentMethod,
+        estimatedDeliveryTime,
+      } = req.body as ICreatePackageBody;
+ 
+
+      if (
+        !recipientName || !recipientPhone || !recipientAddress ||
+        !recipientCity || !recipientState || !weight || !type ||
+        !deliveryType || !totalPrice
+      ) {
+        return next(
+          new ErrorHandler(
+            "recipientName, recipientPhone, recipientAddress, recipientCity, " +
+            "recipientState, weight, type, deliveryType, and totalPrice are required.",
+            400,
+          ),
+        );
+      }
+ 
+
+      if (typeof weight !== "number" || weight <= 0) {
+        return next(new ErrorHandler("weight must be a positive number.", 400));
+      }
+ 
+      if (typeof totalPrice !== "number" || totalPrice <= 0) {
+        return next(new ErrorHandler("totalPrice must be a positive number.", 400));
+      }
+ 
+      const VALID_TYPES = ["document", "parcel", "fragile", "heavy", "perishable", "electronic", "clothing"];
+      if (!VALID_TYPES.includes(type)) {
+        return next(new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400));
+      }
+ 
+      if (!["home", "branch_pickup"].includes(deliveryType)) {
+        return next(new ErrorHandler("deliveryType must be 'home' or 'branch_pickup'.", 400));
+      }
+ 
+      if (deliveryType === "branch_pickup" && !destinationBranchId) {
+        return next(
+          new ErrorHandler("destinationBranchId is required for branch_pickup deliveries.", 400),
+        );
+      }
+ 
+      if (
+        destinationBranchId &&
+        !mongoose.Types.ObjectId.isValid(destinationBranchId)
+      ) {
+        return next(new ErrorHandler("Invalid destinationBranchId.", 400));
+      }
+ 
+      if (
+        deliveryPriority &&
+        !["standard", "express", "same_day"].includes(deliveryPriority)
+      ) {
+        return next(
+          new ErrorHandler("deliveryPriority must be standard, express, or same_day.", 400),
+        );
+      }
+ 
+
+      let normalizedRecipientPhone: string;
+      let normalizedAlternativePhone: string | undefined;
+      
+      try {
+        normalizedRecipientPhone = normalizePhone(recipientPhone);
+        if (alternativePhone) {
+          normalizedAlternativePhone = normalizePhone(alternativePhone);
+        }
+      } catch (error: any) {
+        return next(new ErrorHandler(error.message || "Invalid phone number format.", 400));
+      }
+ 
+
+      const originBranchId = freelancer.defaultOriginBranchId;
+ 
+      if (!originBranchId) {
+        return next(
+          new ErrorHandler(
+            "Your freelancer profile has no default origin branch set. Contact support.",
+            400,
+          ),
+        );
+      }
+ 
+
+      const branchQueries: Promise<any>[] = [
+        BranchModel.findById(originBranchId).session(session).lean(),
+      ];
+ 
+      if (destinationBranchId) {
+        branchQueries.push(
+          BranchModel.findById(destinationBranchId).session(session).lean(),
+        );
+      }
+ 
+      const [originBranch, destinationBranch] = await Promise.all(branchQueries);
+ 
+      if (!originBranch) {
+        return next(new ErrorHandler("Origin branch not found.", 404));
+      }
+ 
+      if (originBranch.status !== "active") {
+        return next(
+          new ErrorHandler("Your origin branch is not currently active.", 400),
+        );
+      }
+ 
+      if (destinationBranchId && !destinationBranch) {
+        return next(new ErrorHandler("Destination branch not found.", 404));
+      }
+ 
+      if (destinationBranch && destinationBranch.status !== "active") {
+        return next(
+          new ErrorHandler("The selected destination branch is not currently active.", 400),
+        );
+      }
+ 
+
+      if (
+        destinationBranchId &&
+        originBranchId.toString() === destinationBranchId.toString()
+      ) {
+        return next(
+          new ErrorHandler("Origin and destination branches cannot be the same.", 400),
+        );
+      }
+ 
+   
+      const destination = {
+        recipientName: recipientName.trim(),
+        recipientPhone: normalizedRecipientPhone,
+        alternativePhone: normalizedAlternativePhone,
+        address: recipientAddress.trim(),
+        city: recipientCity.trim(),
+        state: recipientState.trim(),
+        postalCode: recipientPostalCode?.trim(),
+        notes: deliveryNotes?.trim(),
+      };
+ 
+
+      const trackingNumber = generateTrackingNumber();
+ 
+
+      const clientId = await resolveClientByPhone(
+        recipientPhone,
+        recipientName,
+        recipientAddress,
+        recipientCity,
+        recipientState,
+        alternativePhone,
+        session,
+      );
+ 
+
+      const [packageDoc] = await PackageModel.create(
+        [
+          {
+            trackingNumber,
+            companyId: freelancer.companyId,
+            senderId: freelancerUserId,
+            senderType: "freelancer",
+            clientId, 
+ 
+            weight,
+            dimensions,
+            isFragile: isFragile ?? false,
+            type,
+            description: description?.trim(),
+            declaredValue,
+ 
+            originBranchId,
+            currentBranchId: originBranchId,   
+            destinationBranchId: destinationBranchId ?? undefined,
+ 
+            destination,
+ 
+            status: "pending",
+            deliveryType,
+            deliveryPriority: deliveryPriority ?? "standard",
+ 
+            totalPrice,
+            paymentStatus: "pending",
+            paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
+ 
+            maxAttempts: 3,
+            attemptCount: 0,
+            issues: [],
+            returnInfo: { isReturn: false },
+ 
+            estimatedDeliveryTime: estimatedDeliveryTime
+              ? new Date(estimatedDeliveryTime)
+              : undefined,
+ 
+            trackingHistory: [
+              {
+                status: "pending",
+                branchId: originBranchId,
+                userId: freelancerUserId,
+                notes: "Package registered by freelancer. Awaiting counter drop-off.",
+                timestamp: new Date(),
+              },
+            ],
+          },
+        ],
+        { session },
+      );
+ 
+
+      await PackageHistoryModel.create(
+        [
+          {
+            packageId: packageDoc._id,
+            status: "pending" as PackageStatus,
+            branchId: originBranchId,
+            handledBy: freelancerUserId,
+            handlerRole: "freelancer",
+            notes: "Package registered by freelancer via mobile app.",
+            timestamp: new Date(),
+          },
+        ],
+        { session },
+      );
+ 
+
+      await PaymentModel.create(
+        [
+          {
+            companyId: freelancer.companyId,
+            packageId: packageDoc._id,
+            trackingNumber,
+            branchId: originBranchId,
+            clientId,                   
+            senderId: freelancerUserId,
+            collectionMethod:
+              deliveryType === "home" ? "home_delivery" : "branch_pickup",
+            amount: totalPrice,
+            paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
+            status: "pending",
+          },
+        ],
+        { session },
+      );
+ 
+
+      await FreelancerModel.findByIdAndUpdate(
+        freelancer._id,
+        {
+          $inc: { "statistics.totalPackagesSent": 1 },
+          $set: { lastActiveAt: new Date() },
+        },
+        { session },
+      );
+ 
+      await session.commitTransaction();
+      transactionCommitted = true;
+ 
+
+      return res.status(201).json({
+        success: true,
+        message:
+          "Package registered successfully. Please print the bordereau and bring " +
+          "the package to your branch counter.",
+        data: {
+          packageId: packageDoc._id,
+ 
+
+          bordereau: {
+            trackingNumber,
+            barcodeFormat: "CODE128",
+            generatedAt: new Date().toISOString(),
+ 
+            sender: {
+              businessName: freelancer.businessName ?? null,
+              phone: (req.user as any)?.phone ?? null,
+            },
+ 
+            recipient: {
+              name: destination.recipientName,
+              phone: destination.recipientPhone,
+              address: destination.address,
+              city: destination.city,
+              state: destination.state,
+              postalCode: destination.postalCode ?? null,
+            },
+ 
+            package: {
+              weight,
+              type,
+              isFragile: isFragile ?? false,
+              declaredValue: declaredValue ?? null,
+              deliveryType,
+              deliveryPriority: deliveryPriority ?? "standard",
+            },
+ 
+            originBranch: {
+              id: originBranch._id,
+              name: originBranch.name,
+              code: originBranch.code,
+              address: originBranch.address,
+            },
+ 
+            destinationBranch: destinationBranch
+              ? {
+                  id: destinationBranch._id,
+                  name: destinationBranch.name,
+                  code: destinationBranch.code,
+                  address: destinationBranch.address,
+                }
+              : null,
+ 
+            totalPrice,
+            paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
+          },
+ 
+          status: "pending",
+          createdAt: packageDoc.createdAt,
+        },
+      });
+ 
+    } catch (error: any) {
+ 
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+ 
+      return next(error);
+ 
+    } finally {
+      if (!transactionCommitted) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
+  },
+);
+

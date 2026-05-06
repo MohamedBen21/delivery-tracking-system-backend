@@ -2,7 +2,7 @@ import mongoose, { Document, Model, Schema } from "mongoose";
 import { PackageStatus } from "./package.model"; // Import from package model
 
 export type HandlerRole = 'transporter' | 'deliverer' | 'branch_supervisor' | 'client' | 'system' | 'admin' | 'manager'  | 'loader'    
-  | 'cashier';
+  | 'cashier' | 'freelancer';
 
 export interface ILocation {
   type: 'Point';
@@ -106,7 +106,7 @@ const packageHistorySchema = new Schema<IPackageHistory>({
   handlerRole: {
     type: String,
     enum: {
-        values:['transporter', 'deliverer', 'branch_supervisor', 'client', 'system', 'admin', 'manager', 'loader' ,'cashier'],
+        values:['transporter', 'deliverer', 'branch_supervisor', 'client', 'system', 'admin', 'manager', 'loader' ,'cashier', 'freelancer'],
         message:"Handler role must be one of the allowed values."
     },
   },
@@ -195,7 +195,7 @@ packageHistorySchema.pre('save', function(next) {
     this.timestamp = new Date();
   }
 
-  if (this.handlerRole && ['transporter','deliverer','branch_supervisor','client','system','admin','manager'].includes(this.handlerRole)  && !this.handledBy) {
+  if (this.handlerRole && ['transporter','deliverer','branch_supervisor','client','system','admin','manager','freelancer'].includes(this.handlerRole)  && !this.handledBy) {
          return next(new Error('Handler role set but no handler reference provided'));
   }
   

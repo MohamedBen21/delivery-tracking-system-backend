@@ -37,19 +37,28 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
   {
     email: {
       type: String,
-      required: [true, "Please enter your email"],
+      required: [
+        function(this: IUser) {
+          // Email is required for all roles EXCEPT client
+          return this.role !== "client";
+        },
+        "Please enter your email",
+      ],
       unique: true,
-
+      sparse:true,
       lowercase: true,
       trim: true,
-
       validate: {
-        validator: (value: string) => emailRegex.test(value),
+        validator: (value: string) => {
 
+          if (!value && (this as any).role === "client") {
+            return true;
+          }
+          return emailRegex.test(value);
+        },
         message: "Please enter a valid email",
       },
     },
-
     phone: {
       type: String,
       required: [true, "Please enter your phone number"],
