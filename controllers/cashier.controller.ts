@@ -759,3 +759,201 @@ try {
 },
 );
 
+
+
+
+//     POST /cashier/check-in
+//     POST /cashier/check-out
+
+export const checkIn = catchAsyncError(
+async (req: Request, res: Response, next: NextFunction) => {
+const cashierUserId = req.user?._id;
+
+if (!cashierUserId) {
+    return next(new ErrorHandler("Unauthorized.", 401));
+}
+
+const cashier = await CashierModel.findOne({
+    userId: cashierUserId,
+    status: "active",
+});
+
+if (!cashier) {
+    return next(new ErrorHandler("Active cashier profile not found.", 404));
+}
+
+if (cashier.currentShift && (cashier.currentShift as any).status === "active") {
+    return next(new ErrorHandler("You already have an active shift.", 400));
+}
+
+await cashier.checkIn(cashier.assignedBranchId);
+
+return res.status(200).json({
+    success: true,
+    message: "Shift started. You are now checked in.",
+    data: {
+    branchId: cashier.assignedBranchId,
+    shiftStartedAt: (cashier.currentShift as any)?.startedAt ?? new Date(),
+    },
+});
+},
+);
+
+
+export const checkOut = catchAsyncError(
+async (req: Request, res: Response, next: NextFunction) => {
+const cashierUserId = req.user?._id;
+
+if (!cashierUserId) {
+    return next(new ErrorHandler("Unauthorized.", 401));
+}
+
+const { notes } = req.body as { notes?: string };
+
+const cashier = await CashierModel.findOne({
+    userId: cashierUserId,
+    status: "active",
+});
+
+if (!cashier) {
+    return next(new ErrorHandler("Active cashier profile not found.", 404));
+}
+
+if (!cashier.currentShift || (cashier.currentShift as any).status !== "active") {
+    return next(new ErrorHandler("No active shift to end.", 400));
+}
+
+const shiftSnapshot = { ...cashier.currentShift } as any;
+
+await cashier.checkOut(notes);
+
+return res.status(200).json({
+    success: true,
+    message: "Shift ended. You are now checked out.",
+    data: {
+    shiftSummary: {
+        startedAt: shiftSnapshot.startedAt,
+        endedAt: new Date(),
+        packagesClaimedCount: shiftSnapshot.packagesClaimedCount,
+        packagesRejectedCount: shiftSnapshot.packagesRejectedCount,
+        labelsIssuedCount: shiftSnapshot.labelsIssuedCount,
+        paymentsCollectedCount: shiftSnapshot.paymentsCollectedCount,
+        totalAmountCollected: shiftSnapshot.totalAmountCollected,
+    },
+    },
+});
+},
+);
+
+
+//     GET /cashier/my-shift
+//     Returns the cashier's current shift stats and the last 20 scan actions,
+//     so the mobile app can show a live counter view.
+
+
+export const getMyShift = catchAsyncError(
+async (req: Request, res: Response, next: NextFunction) => {
+const cashierUserId = req.user?._id;
+
+if (!cashierUserId) {
+    return next(new ErrorHandler("Unauthorized.", 401));
+}
+
+const cashier = await CashierModel.findOne({
+    userId: cashierUserId,
+    status: "active",
+})
+    .populate("assignedBranchId", "name code address")
+    .lean();
+
+if (!cashier) {
+    return next(new ErrorHandler("Active cashier profile not found.", 404));
+}
+
+const isCheckedIn =
+    !!cashier.currentShift &&
+    (cashier.currentShift as any).status === "active";
+
+const durationMinutes = isCheckedIn
+    ? Math.round(
+        (Date.now() -
+        new Date((cashier.currentShift as any).startedAt).getTime()) /
+        60000,
+    )
+    : null;
+
+return res.status(200).json({
+    success: true,
+    data: {
+    isCheckedIn,
+    branch: cashier.assignedBranchId,
+    currentShift: isCheckedIn
+        ? {
+            ...(cashier.currentShift as any),
+            durationMinutes,
+        }
+        : null,
+    recentScans: (cashier.recentScans as any[]).slice(0, 20),
+    stats: cashier.stats,
+    },
+});
+},
+);
+
+
+//     GET /cashier/pending-packages
+//     All 'pending' packages registered for this branch but not yet claimed.
+//     Useful for the cashier to see what's expected today before merchants arrive.
+
+
+export const getPendingPackages = catchAsyncError(
+async (req: Request, res: Response, next: NextFunction) => {
+const cashierUserId = req.user?._id;
+
+const cashier = await resolveCashier(cashierUserId, next);
+if (!cashier) return;
+
+const { page, limit } = req.query as Record<string, string | undefined>;
+const pageNum  = Math.max(1, parseInt(page  ?? "1",  10));
+const limitNum = Math.min(100, Math.max(1, parseInt(limit ?? "20", 10)));
+const skip = (pageNum - 1) * limitNum;
+
+const [packages, total] = await Promise.all([
+    PackageModel.find({
+    originBranchId: cashier.assignedBranchId,
+    status: "pending",
+    })
+    .select(
+        "trackingNumber weight type isFragile totalPrice deliveryType " +
+        "destination senderId createdAt",
+    )
+    .populate("senderId", "firstName lastName phone")
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limitNum)
+    .lean(),
+
+    PackageModel.countDocuments({
+    originBranchId: cashier.assignedBranchId,
+    status: "pending",
+    }),
+]);
+
+const totalPages = Math.ceil(total / limitNum);
+
+return res.status(200).json({
+    success: true,
+    data: packages,
+    pagination: {
+    total,
+    page: pageNum,
+    limit: limitNum,
+    totalPages,
+    hasNextPage: pageNum < totalPages,
+    hasPrevPage: pageNum > 1,
+    },
+});
+},
+);
+
+
