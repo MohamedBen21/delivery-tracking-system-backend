@@ -586,3 +586,295 @@ export const scanPackageIn = catchAsyncError(
   },
 );
 
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5.  REMOVE PACKAGE FROM MANIFEST (before sealing)
+//     DELETE /loader/manifests/:manifestId/packages/:packageId
+//
+//  Only allowed while the manifest is still 'open'.
+//  Package returns to 'at_origin_branch'.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const removePackageFromManifest = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let committed = false;
+
+    try {
+      const loaderUserId = req.user?._id;
+      const { manifestId, packageId } = req.params;
+      const { notes } = req.body as { notes?: string };
+
+      if (!mongoose.Types.ObjectId.isValid(manifestId.toString())) {
+        return next(new ErrorHandler("Invalid manifestId.", 400));
+      }
+      if (!mongoose.Types.ObjectId.isValid(packageId.toString())) {
+        return next(new ErrorHandler("Invalid packageId.", 400));
+      }
+
+      const loader = await resolveLoader(loaderUserId, next, true, session);
+      if (!loader) return;
+
+      const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
+      const now = new Date();
+
+      const [manifest, packageDoc] = await Promise.all([
+        ManifestModel.findById(manifestId).session(session),
+        PackageModel.findById(packageId).session(session),
+      ]);
+
+      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+      if (!packageDoc) return next(new ErrorHandler("Package not found.", 404));
+
+      if (manifest.originBranchId.toString() !== activeBranchId.toString()) {
+        return next(new ErrorHandler("This manifest belongs to a different branch.", 403));
+      }
+
+      if (manifest.status !== "open") {
+        return next(
+          new ErrorHandler(
+            `Cannot remove packages from a '${manifest.status}' manifest. Only open manifests can be modified.`,
+            400,
+          ),
+        );
+      }
+
+
+      await manifest.removePackage(
+        packageDoc._id as mongoose.Types.ObjectId,
+        loaderUserId as mongoose.Types.ObjectId,
+        notes,
+      );
+
+
+      await PackageModel.findByIdAndUpdate(
+        packageDoc._id,
+        {
+          $set: {
+            status: "at_origin_branch" as PackageStatus,
+            currentManifestId: null,
+          },
+          $push: {
+            trackingHistory: {
+              status: "at_origin_branch",
+              branchId: activeBranchId,
+              userId: loaderUserId,
+              notes: notes?.trim() || `Removed from manifest ${manifest.manifestCode}`,
+              timestamp: now,
+            },
+          },
+        },
+        { session },
+      );
+
+      await PackageHistoryModel.create(
+        [
+          {
+            packageId: packageDoc._id,
+            status: "at_origin_branch" as PackageStatus,
+            branchId: activeBranchId,
+            handledBy: loaderUserId,
+            handlerName: loaderName(req),
+            handlerRole: "loader",
+            manifestId: manifest._id,
+            notes: notes?.trim() || `Removed from manifest ${manifest.manifestCode} before sealing.`,
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+      await ManifestEventModel.create(
+        [
+          {
+            manifestId: manifest._id,
+            manifestCode: manifest.manifestCode,
+            eventType: "package_removed",
+            performedBy: loaderUserId,
+            performerName: loaderName(req),
+            performerRole: "loader",
+            branchId: activeBranchId,
+            packageId: packageDoc._id,
+            packageTrackingNumber: packageDoc.trackingNumber,
+            notes: notes?.trim() || `Package removed before sealing.`,
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+      await session.commitTransaction();
+      committed = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `Package ${packageDoc.trackingNumber} removed from manifest ${manifest.manifestCode}.`,
+        data: {
+          manifestId: manifest._id,
+          manifestCode: manifest.manifestCode,
+          packageId: packageDoc._id,
+          trackingNumber: packageDoc.trackingNumber,
+          packageStatus: "at_origin_branch",
+          manifestSnapshot: {
+            packageCount: manifest.packageCount - 1,
+            status: manifest.status,
+          },
+        },
+      });
+
+    } catch (err: any) {
+      return next(err);
+    } finally {
+      if (!committed) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  },
+);
+
+
+//  POST /loader/manifests/:manifestId/seal
+//  Physically closes and labels the bag.
+//  After this no packages can be added or removed.
+//  Status: open → sealed
+
+
+export const sealManifest = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let committed = false;
+
+    try {
+      const loaderUserId = req.user?._id;
+      const { manifestId } = req.params;
+      const { sealNumber, notes } = req.body as {
+        sealNumber: string;
+        notes?: string;
+      };
+
+      if (!mongoose.Types.ObjectId.isValid(manifestId.toString())) {
+        return next(new ErrorHandler("Invalid manifestId.", 400));
+      }
+      if (!sealNumber?.trim()) {
+        return next(new ErrorHandler("sealNumber is required.", 400));
+      }
+
+      const loader = await resolveLoader(loaderUserId, next, true, session);
+      if (!loader) return;
+
+      const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
+      const now = new Date();
+
+      const manifest = await ManifestModel.findById(manifestId).session(session);
+
+      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+
+      if (manifest.originBranchId.toString() !== activeBranchId.toString()) {
+        return next(new ErrorHandler("This manifest belongs to a different branch.", 403));
+      }
+
+      if (manifest.status !== "open") {
+        return next(
+          new ErrorHandler(`Cannot seal a '${manifest.status}' manifest.`, 400),
+        );
+      }
+
+      if (manifest.packages.length === 0) {
+        return next(new ErrorHandler("Cannot seal an empty manifest.", 400));
+      }
+
+     
+      await manifest.seal(
+        loaderUserId as mongoose.Types.ObjectId,
+        sealNumber.trim().toUpperCase(),
+        notes,
+      );
+
+      await ManifestEventModel.create(
+        [
+          {
+            manifestId: manifest._id,
+            manifestCode: manifest.manifestCode,
+            eventType: "sealed",
+            performedBy: loaderUserId,
+            performerName: loaderName(req),
+            performerRole: "loader",
+            branchId: activeBranchId,
+            previousStatus: "open",
+            newStatus: "sealed",
+            metadata: { sealNumber: sealNumber.trim().toUpperCase() },
+            notes: notes?.trim() || `Manifest sealed. ${manifest.packages.length} packages, ${manifest.totalDeclaredWeight}kg.`,
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+      await LoaderModel.findByIdAndUpdate(
+        loader._id,
+        {
+          $inc: { "stats.totalManifestsSealed": 1 },
+          $set: { "stats.lastActiveAt": now },
+          $push: {
+            recentScans: {
+              $each: [
+                {
+                  action: "seal_manifest",
+                  scannedId: manifest._id,
+                  scannedCode: manifest.manifestCode,
+                  manifestId: manifest._id,
+                  manifestCode: manifest.manifestCode,
+                  branchId: activeBranchId,
+                  timestamp: now,
+                  notes: `Sealed with ${sealNumber}`,
+                  success: true,
+                },
+              ],
+              $position: 0,
+              $slice: 200,
+            },
+          },
+        },
+        { session },
+      );
+
+      await session.commitTransaction();
+      committed = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `Manifest ${manifest.manifestCode} sealed successfully.`,
+        data: {
+          manifestId: manifest._id,
+          manifestCode: manifest.manifestCode,
+          status: "sealed",
+          sealNumber: sealNumber.trim().toUpperCase(),
+          packageCount: manifest.packageCount,
+          totalDeclaredWeight: manifest.totalDeclaredWeight,
+          sealedAt: now,
+          packages: manifest.packages.map((p: IManifestPackageEntry) => ({
+            trackingNumber: p.trackingNumber,
+            weight: p.weight,
+            sequence: p.sequence,
+          })),
+        },
+      });
+
+    } catch (err: any) {
+      if (err.name === "ValidationError") {
+        return next(new ErrorHandler(
+          Object.values(err.errors).map((e: any) => e.message).join(", "), 400,
+        ));
+      }
+      return next(err);
+    } finally {
+      if (!committed) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  },
+);
+
