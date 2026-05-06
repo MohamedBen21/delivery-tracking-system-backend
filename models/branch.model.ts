@@ -1,4 +1,5 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
+import ManifestModel, { IManifest } from "./manifest.model";
 
 
 export type WeekDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 
@@ -85,6 +86,8 @@ export interface IBranchModel extends Model<IBranch> {
 
   findHubs(companyId?: string): Promise<IBranch[]>;
   findByParentHub(hubId: string): Promise<IBranch[]>;
+
+  findOpenManifests(branchId: string): Promise<IManifest[]>;
 }
 
 const branchAddressSchema = new Schema<IBranchAddress>({
@@ -405,6 +408,15 @@ branchSchema.statics.findHubs = function(companyId?: string) {
 branchSchema.statics.findByParentHub = function(hubId: string) {
 
   return this.find({ parentHubId: hubId });
+};
+
+branchSchema.statics.findOpenManifests = function(branchId: string) {
+
+  return ManifestModel.find({
+    $or: [{ originBranchId: branchId }, { destinationBranchId: branchId }],
+    status: { $in: ['open', 'sealed', 'arrived', 'unloading'] },
+  });
+  
 };
 
 const BranchModel: Model<IBranch> = (mongoose.models.Branch || 

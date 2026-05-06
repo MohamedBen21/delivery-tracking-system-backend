@@ -7,8 +7,12 @@ export type DeliveryType = 'home' | 'branch_pickup' ;
 
 export type PackageStatus = 
   | 'pending'
+
+  | 'cashier_claimed'      
   | 'accepted'
   | 'at_origin_branch'
+
+  | 'manifested'           
   | 'in_transit_to_branch'
   | 'at_destination_branch'
   | 'out_for_delivery'
@@ -147,6 +151,13 @@ export interface IPackage extends Document {
   estimatedDeliveryTime?: Date;
   deliveredAt?: Date;
   updatedAt: Date;
+
+
+  currentManifestId?: mongoose.Types.ObjectId;   
+  claimedByCashierId?: mongoose.Types.ObjectId; 
+  claimedAt?: Date;
+
+
 
   isDelivered: boolean;
   isInTransit: boolean;
@@ -553,8 +564,8 @@ const packageSchema = new Schema<IPackage>({
   
   status: {
     type: String,
-    enum: ['pending', 'accepted', 'at_origin_branch', 'in_transit_to_branch', 
-           'at_destination_branch', 'out_for_delivery', 'delivered', 
+    enum: ['pending', 'accepted', 'at_origin_branch', 'in_transit_to_branch', 'cashier_claimed',
+           'at_destination_branch', 'out_for_delivery', 'delivered', 'manifested',
            'failed_delivery', 'failed_delivery_attempt' , 'rescheduled', 'returned', 'cancelled', 
            'lost', 'damaged', 'on_hold'],
     default: 'pending',
@@ -667,6 +678,23 @@ const packageSchema = new Schema<IPackage>({
     default: null,
   },
 
+
+  currentManifestId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Manifest',
+    default: null,
+  },
+
+  claimedByCashierId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Cashier',
+    default: null,
+  },
+
+  claimedAt: {
+    type: Date,
+  },
+
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
@@ -712,8 +740,14 @@ packageSchema.virtual('needsAttention').get(function() {
 packageSchema.virtual('deliveryProgress').get(function() {
   const statusOrder: Record<PackageStatus, number> = {
     'pending': 0,
+
+    'cashier_claimed': 5,
+
     'accepted': 10,
     'at_origin_branch': 20,
+    
+    'manifested': 30,
+    
     'in_transit_to_branch': 40,
     'at_destination_branch': 60,
     'out_for_delivery': 80,
@@ -959,6 +993,7 @@ packageSchema.index({ currentBranchId: 1, status: 1 });
 packageSchema.index({ 'destination.location': '2dsphere' });
 packageSchema.index({ createdAt: -1 });
 packageSchema.index({ 'trackingHistory.timestamp': -1 });
+packageSchema.index({ currentManifestId: 1 });
 
 
 const PackageModel: Model<IPackage> = mongoose.model<IPackage>('Package', packageSchema);

@@ -1,7 +1,8 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 import { PackageStatus } from "./package.model"; // Import from package model
 
-export type HandlerRole = 'transporter' | 'deliverer' | 'branch_supervisor' | 'client' | 'system' | 'admin' | 'manager';
+export type HandlerRole = 'transporter' | 'deliverer' | 'branch_supervisor' | 'client' | 'system' | 'admin' | 'manager'  | 'loader'    
+  | 'cashier';
 
 export interface ILocation {
   type: 'Point';
@@ -105,7 +106,7 @@ const packageHistorySchema = new Schema<IPackageHistory>({
   handlerRole: {
     type: String,
     enum: {
-        values:['transporter', 'deliverer', 'branch_supervisor', 'client', 'system', 'admin', 'manager'],
+        values:['transporter', 'deliverer', 'branch_supervisor', 'client', 'system', 'admin', 'manager', 'loader' ,'cashier'],
         message:"Handler role must be one of the allowed values."
     },
   },
@@ -143,6 +144,10 @@ packageHistorySchema.virtual('readableStatus').get(function() {
     'in_transit_to_branch': 'In Transit to Branch',
     'at_destination_branch': 'At Destination Branch',
     'out_for_delivery': 'Out for Delivery',
+
+    'cashier_claimed': 'Claimed at Counter',
+    'manifested':      'Assigned to Manifest',
+
     'delivered': 'Delivered',
     'failed_delivery': 'Delivery Failed',
     'failed_delivery_attempt': 'Delivery Failed attempt',

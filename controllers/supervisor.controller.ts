@@ -5873,6 +5873,9 @@ const READABLE_STATUS: Record<PackageStatus, string> = {
   delivered:              "Delivered",
   failed_delivery:        "Delivery Failed",
   
+  cashier_claimed: 'Claimed at Counter',
+  manifested:      'Assigned to Manifest',
+  
   failed_delivery_attempt: "Failed Delivery Attempt",
   rescheduled:            "Rescheduled",
   returned:               "Returned",

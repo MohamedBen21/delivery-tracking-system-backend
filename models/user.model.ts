@@ -18,7 +18,7 @@ export interface IUser extends Document {
     public_id: string;
     url:string;
   };
-  role: "admin" | "manager" | "client" | "deliverer" | "transporter" | "supervisor" | "freelancer";
+  role: "admin" | "manager" | "client" | "deliverer" | "transporter" | "supervisor" | "freelancer" | "cashier" | "loader";
   status: "active" | "pending" | "suspended" | "inactive";
 
   comparePassword: (password: string) => Promise<boolean>;
