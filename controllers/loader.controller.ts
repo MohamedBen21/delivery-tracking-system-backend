@@ -1869,3 +1869,324 @@ export const remanifestPackage = catchAsyncError(
 );
 
 
+//  POST /loader/manifests/:manifestId/close
+//  If not all packages have been scanned out (some missing/damaged),
+//  the supervisor/loader can force-close the manifest.
+//  Remaining 'in_manifest' entries are marked 'missing' by the model method.
+
+
+export const closeManifest = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let committed = false;
+
+    try {
+      const loaderUserId = req.user?._id;
+      const { manifestId } = req.params;
+      const { notes } = req.body as { notes?: string };
+
+      if (!mongoose.Types.ObjectId.isValid(manifestId.toString())) {
+        return next(new ErrorHandler("Invalid manifestId.", 400));
+      }
+
+      const loader = await resolveLoader(loaderUserId, next, true, session);
+      if (!loader) return;
+
+      const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
+      const now = new Date();
+
+      const manifest = await ManifestModel.findById(manifestId).session(session);
+      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+
+      if (manifest.destinationBranchId.toString() !== activeBranchId.toString()) {
+        return next(new ErrorHandler("You are not at this manifest's destination branch.", 403));
+      }
+
+      if (!["unloading", "arrived", "discrepancy"].includes(manifest.status)) {
+        return next(
+          new ErrorHandler(
+            `Cannot close a manifest with status '${manifest.status}'.`,
+            400,
+          ),
+        );
+      }
+
+      const missingEntries = manifest.packages.filter(
+        (p: IManifestPackageEntry) => p.entryStatus === "in_manifest",
+      );
+
+
+      await manifest.close(loaderUserId as mongoose.Types.ObjectId);
+
+
+      if (missingEntries.length > 0) {
+        const missingIds = missingEntries.map((p: IManifestPackageEntry) => p.packageId);
+
+        await PackageModel.updateMany(
+          { _id: { $in: missingIds } },
+          {
+            $set: { status: "lost" as PackageStatus, currentManifestId: null },
+            $push: {
+              trackingHistory: {
+                status: "lost",
+                branchId: activeBranchId,
+                userId: loaderUserId,
+                notes: `Package not found when manifest ${manifest.manifestCode} was closed.`,
+                timestamp: now,
+              },
+            },
+          },
+          { session },
+        );
+
+        const lostHistoryDocs = missingIds.map((pkgId: mongoose.Types.ObjectId) => ({
+          packageId: pkgId,
+          status: "lost" as PackageStatus,
+          branchId: activeBranchId,
+          handledBy: loaderUserId,
+          handlerName: loaderName(req),
+          handlerRole: "loader",
+          manifestId: manifest._id,
+          notes: `Not accounted for on manifest close. Marked lost.`,
+          timestamp: now,
+        }));
+
+        await PackageHistoryModel.insertMany(lostHistoryDocs, { session });
+      }
+
+      await ManifestEventModel.create(
+        [
+          {
+            manifestId: manifest._id,
+            manifestCode: manifest.manifestCode,
+            eventType: "closed",
+            performedBy: loaderUserId,
+            performerName: loaderName(req),
+            performerRole: "loader",
+            branchId: activeBranchId,
+            previousStatus: manifest.status,
+            newStatus: "closed",
+            notes: notes?.trim() ||
+              `Manifest closed. ${missingEntries.length} packages marked missing.`,
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+      await LoaderModel.findByIdAndUpdate(
+        loader._id,
+        {
+          $inc: {
+            "stats.totalManifestsUnloaded": 1,
+            "currentShift.manifestsUnloadedCount": 1,
+          },
+          $set: { "stats.lastActiveAt": now },
+          $push: {
+            recentScans: {
+              $each: [
+                {
+                  action: "close_manifest",
+                  scannedId: manifest._id,
+                  scannedCode: manifest.manifestCode,
+                  manifestId: manifest._id,
+                  manifestCode: manifest.manifestCode,
+                  branchId: activeBranchId,
+                  timestamp: now,
+                  notes: notes?.trim(),
+                  success: true,
+                },
+              ],
+              $position: 0,
+              $slice: 200,
+            },
+          },
+        },
+        { session },
+      );
+
+      await session.commitTransaction();
+      committed = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `Manifest ${manifest.manifestCode} closed.`,
+        data: {
+          manifestId: manifest._id,
+          manifestCode: manifest.manifestCode,
+          status: "closed",
+          closedAt: now,
+          summary: {
+            totalPackages:   manifest.packageCount,
+            unloaded:        manifest.packages.filter((p: IManifestPackageEntry) => p.entryStatus === "unloaded").length,
+            remanifested:    manifest.packages.filter((p: IManifestPackageEntry) => p.entryStatus === "remanifested").length,
+            missingOnClose:  missingEntries.length,
+          },
+        },
+      });
+
+    } catch (err: any) {
+      return next(err);
+    } finally {
+      if (!committed) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  },
+);
+
+
+//  POST /loader/manifests/:manifestId/discrepancy
+//  Called when the loader finds a count mismatch on arrival that requires
+//  supervisor investigation before the manifest can be closed.
+
+
+export const flagDiscrepancy = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let committed = false;
+
+    try {
+      const loaderUserId = req.user?._id;
+      const { manifestId } = req.params;
+      const { missingTrackingNumbers = [], extraTrackingNumbers = [], notes } = req.body as {
+        missingTrackingNumbers?: string[];
+        extraTrackingNumbers?: string[];
+        notes: string;
+      };
+
+      if (!mongoose.Types.ObjectId.isValid(manifestId.toString())) {
+        return next(new ErrorHandler("Invalid manifestId.", 400));
+      }
+      if (!notes?.trim()) {
+        return next(new ErrorHandler("Discrepancy notes are required.", 400));
+      }
+
+      const loader = await resolveLoader(loaderUserId, next, true, session);
+      if (!loader) return;
+
+      const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
+      const now = new Date();
+
+      const manifest = await ManifestModel.findById(manifestId).session(session);
+      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+
+      if (manifest.destinationBranchId.toString() !== activeBranchId.toString()) {
+        return next(new ErrorHandler("You are not at this manifest's destination branch.", 403));
+      }
+
+      if (!["arrived", "unloading", "closed"].includes(manifest.status)) {
+        return next(
+          new ErrorHandler(
+            `Cannot flag discrepancy on a '${manifest.status}' manifest.`,
+            400,
+          ),
+        );
+      }
+
+
+      const [missingPackages, extraPackages] = await Promise.all([
+        missingTrackingNumbers.length > 0
+          ? PackageModel.find({
+              trackingNumber: { $in: missingTrackingNumbers.map((t: string) => t.toUpperCase()) },
+            }).select("_id").session(session).lean()
+          : Promise.resolve([]),
+        extraTrackingNumbers.length > 0
+          ? PackageModel.find({
+              trackingNumber: { $in: extraTrackingNumbers.map((t: string) => t.toUpperCase()) },
+            }).select("_id").session(session).lean()
+          : Promise.resolve([]),
+      ]);
+
+      const missingIds = missingPackages.map((p: any) => p._id);
+      const extraIds   = extraPackages.map((p: any) => p._id);
+
+      await manifest.flagDiscrepancy(
+        loaderUserId as mongoose.Types.ObjectId,
+        missingIds,
+        extraIds,
+        notes.trim(),
+      );
+
+      await ManifestEventModel.create(
+        [
+          {
+            manifestId: manifest._id,
+            manifestCode: manifest.manifestCode,
+            eventType: "discrepancy_flagged",
+            performedBy: loaderUserId,
+            performerName: loaderName(req),
+            performerRole: "loader",
+            branchId: activeBranchId,
+            previousStatus: manifest.status,
+            newStatus: "discrepancy",
+            metadata: { missingCount: missingIds.length, extraCount: extraIds.length },
+            notes: notes.trim(),
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+      await LoaderModel.findByIdAndUpdate(
+        loader._id,
+        {
+          $inc: { "stats.totalDiscrepanciesFlagged": 1 },
+          $set: { "stats.lastActiveAt": now },
+          $push: {
+            recentScans: {
+              $each: [
+                {
+                  action: "flag_discrepancy",
+                  scannedId: manifest._id,
+                  scannedCode: manifest.manifestCode,
+                  manifestId: manifest._id,
+                  manifestCode: manifest.manifestCode,
+                  branchId: activeBranchId,
+                  timestamp: now,
+                  notes: notes.trim(),
+                  success: true,
+                },
+              ],
+              $position: 0,
+              $slice: 200,
+            },
+          },
+        },
+        { session },
+      );
+
+      await session.commitTransaction();
+      committed = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `Discrepancy flagged on manifest ${manifest.manifestCode}. Supervisor review required.`,
+        data: {
+          manifestId: manifest._id,
+          manifestCode: manifest.manifestCode,
+          status: "discrepancy",
+          discrepancy: {
+            expectedCount: manifest.packageCount,
+            missingCount: missingIds.length,
+            extraCount: extraIds.length,
+            notes: notes.trim(),
+            reportedAt: now,
+          },
+        },
+      });
+
+    } catch (err: any) {
+      return next(err);
+    } finally {
+      if (!committed) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  },
+);
+
+
+
