@@ -395,4 +395,367 @@ try {
 
 
 
+//     POST /cashier/accept-package
+//     After claiming, the cashier does a final check (weight verified, label
+//     confirmed) and accepts the package into the branch stock.
+//     Status → 'at_origin_branch'
+//
+//     This two-step claim → accept gives the cashier a chance to weigh/inspect
+//     before committing. They can also reject here (see rejectPackage below).
+
+
+export const acceptPackage = catchAsyncError(
+async (req: Request, res: Response, next: NextFunction) => {
+
+const session = await mongoose.startSession();
+session.startTransaction();
+let transactionCommitted = false;
+
+try {
+    const cashierUserId = req.user?._id;
+    const cashier = await resolveCashier(cashierUserId, next, session);
+    if (!cashier) return;
+
+    const { trackingNumber, verifiedWeight, notes } = req.body as {
+    trackingNumber: string;
+    verifiedWeight?: number;  
+    notes?: string;
+    };
+
+    if (!trackingNumber?.trim()) {
+    return next(new ErrorHandler("trackingNumber is required.", 400));
+    }
+
+    const now = new Date();
+
+    const packageDoc = await PackageModel.findOne({
+    trackingNumber: trackingNumber.trim().toUpperCase(),
+    originBranchId: cashier.assignedBranchId,
+    }).session(session);
+
+    if (!packageDoc) {
+    return next(
+        new ErrorHandler(
+        `Package ${trackingNumber} not found at your branch.`,
+        404,
+        ),
+    );
+    }
+
+    if (packageDoc.status !== "cashier_claimed") {
+    return next(
+        new ErrorHandler(
+        `Package must be in 'cashier_claimed' status to accept. Current status: '${packageDoc.status}'.`,
+        400,
+        ),
+    );
+    }
+
+    const noteText =
+    notes?.trim() ||
+    `Package inspected and accepted into branch stock.${
+        verifiedWeight ? ` Verified weight: ${verifiedWeight}kg.` : ""
+    }`;
+
+    const updateFields: Record<string, any> = {
+    status: "at_origin_branch" as PackageStatus,
+    currentBranchId: cashier.assignedBranchId,
+    };
+
+
+    if (verifiedWeight && typeof verifiedWeight === "number" && verifiedWeight > 0) {
+    updateFields.weight = verifiedWeight;
+    }
+
+    await PackageModel.findByIdAndUpdate(
+    packageDoc._id,
+    {
+        $set: updateFields,
+        $push: {
+        trackingHistory: {
+            status: "at_origin_branch",
+            branchId: cashier.assignedBranchId,
+            userId: cashierUserId,
+            notes: noteText,
+            timestamp: now,
+        },
+        },
+    },
+    { session },
+    );
+
+    await PackageHistoryModel.create(
+    [
+        {
+        packageId: packageDoc._id,
+        status: "at_origin_branch" as PackageStatus,
+        branchId: cashier.assignedBranchId,
+        handledBy: cashierUserId,
+        handlerName: `${(req.user as any)?.firstName} ${(req.user as any)?.lastName}`,
+        handlerRole: "cashier",
+        notes: noteText,
+        timestamp: now,
+        },
+    ],
+    { session },
+    );
+
+  
+    await CashierModel.findByIdAndUpdate(
+    cashier._id,
+    {
+        $inc: { "stats.totalLabelsIssued": 1 },
+        $set: { "stats.lastActiveAt": now },
+        $push: {
+        recentScans: {
+            $each: [
+            {
+                action: "print_label",
+                packageId: packageDoc._id,
+                trackingNumber: packageDoc.trackingNumber,
+                branchId: cashier.assignedBranchId,
+                timestamp: now,
+                notes: noteText,
+                success: true,
+            },
+            ],
+            $slice: -200,
+            $position: 0,
+        },
+        },
+    },
+    { session },
+    );
+
+    await session.commitTransaction();
+    transactionCommitted = true;
+
+    return res.status(200).json({
+    success: true,
+    message: "Package accepted into branch stock.",
+    data: {
+        packageId: packageDoc._id,
+        trackingNumber: packageDoc.trackingNumber,
+        previousStatus: "cashier_claimed",
+        currentStatus: "at_origin_branch",
+        acceptedAt: now,
+        verifiedWeight: verifiedWeight ?? null,
+    },
+    });
+
+} catch (error: any) {
+    if (error.name === "ValidationError") {
+    return next(
+        new ErrorHandler(
+        Object.values(error.errors).map((e: any) => e.message).join(", "),
+        400,
+        ),
+    );
+    }
+    return next(error);
+} finally {
+    if (!transactionCommitted) {
+    await session.abortTransaction().catch(() => {});
+    }
+    await session.endSession();
+}
+},
+);
+
+
+//     POST /cashier/reject-package
+//
+//     Called when the package fails physical inspection after being claimed.
+//     Status → 'cancelled'. BranchModel currentLoad is decremented because
+//     the package never made it into stock.
+
+
+type RejectionReason =
+| "damaged_on_arrival"
+| "prohibited_item"
+| "wrong_dimensions"
+| "overweight"
+| "missing_documentation"
+| "payment_declined"
+| "address_unserviceable"
+| "duplicate_package"
+| "other";
+
+const VALID_REJECTION_REASONS: RejectionReason[] = [
+"damaged_on_arrival", "prohibited_item", "wrong_dimensions",
+"overweight", "missing_documentation", "payment_declined",
+"address_unserviceable", "duplicate_package", "other",
+];
+
+export const rejectPackage = catchAsyncError(
+async (req: Request, res: Response, next: NextFunction) => {
+
+const session = await mongoose.startSession();
+session.startTransaction();
+let transactionCommitted = false;
+
+try {
+    const cashierUserId = req.user?._id;
+    const cashier = await resolveCashier(cashierUserId, next, session);
+    if (!cashier) return;
+
+    const { trackingNumber, rejectionReason, notes } = req.body as {
+    trackingNumber: string;
+    rejectionReason: RejectionReason;
+    notes?: string;
+    };
+
+    if (!trackingNumber?.trim()) {
+    return next(new ErrorHandler("trackingNumber is required.", 400));
+    }
+
+    if (!rejectionReason || !VALID_REJECTION_REASONS.includes(rejectionReason)) {
+    return next(
+        new ErrorHandler(
+        `rejectionReason must be one of: ${VALID_REJECTION_REASONS.join(", ")}`,
+        400,
+        ),
+    );
+    }
+
+    const now = new Date();
+
+    const packageDoc = await PackageModel.findOne({
+    trackingNumber: trackingNumber.trim().toUpperCase(),
+    originBranchId: cashier.assignedBranchId,
+    }).session(session);
+
+    if (!packageDoc) {
+    return next(
+        new ErrorHandler(`Package ${trackingNumber} not found at your branch.`, 404),
+    );
+    }
+
+
+    if (packageDoc.status !== "cashier_claimed") {
+    return next(
+        new ErrorHandler(
+        `Only packages in 'cashier_claimed' status can be rejected. Current status: '${packageDoc.status}'.`,
+        400,
+        ),
+    );
+    }
+
+    const noteText = `Rejected at counter. Reason: ${rejectionReason}.${
+    notes?.trim() ? ` Notes: ${notes.trim()}` : ""
+    }`;
+
+    await Promise.all([
+
+    PackageModel.findByIdAndUpdate(
+        packageDoc._id,
+        {
+        $set: { status: "cancelled" as PackageStatus },
+        $push: {
+            trackingHistory: {
+            status: "cancelled",
+            branchId: cashier.assignedBranchId,
+            userId: cashierUserId,
+            notes: noteText,
+            timestamp: now,
+            },
+        },
+        },
+        { session },
+    ),
+
+    PackageHistoryModel.create(
+        [
+        {
+            packageId: packageDoc._id,
+            status: "cancelled" as PackageStatus,
+            branchId: cashier.assignedBranchId,
+            handledBy: cashierUserId,
+            handlerName: `${(req.user as any)?.firstName} ${(req.user as any)?.lastName}`,
+            handlerRole: "cashier",
+            notes: noteText,
+            timestamp: now,
+        },
+        ],
+        { session },
+    ),
+
+
+    BranchModel.findByIdAndUpdate(
+        cashier.assignedBranchId,
+        { $inc: { currentLoad: -1 } },
+        { session },
+    ),
+
+    PaymentModel.findOneAndUpdate(
+        { packageId: packageDoc._id },
+        { $set: { status: "cancelled" } },
+        { session },
+    ),
+
+    CashierModel.findByIdAndUpdate(
+        cashier._id,
+        {
+        $inc: {
+            "currentShift.packagesRejectedCount": 1,
+            "stats.totalPackagesRejected": 1,
+        },
+        $set: { "stats.lastActiveAt": now },
+        $push: {
+            recentScans: {
+            $each: [
+                {
+                action: "reject_package",
+                packageId: packageDoc._id,
+                trackingNumber: packageDoc.trackingNumber,
+                branchId: cashier.assignedBranchId,
+                timestamp: now,
+                notes: noteText,
+                rejectionReason,
+                success: true,
+                },
+            ],
+            $slice: -200,
+            $position: 0,
+            },
+        },
+        },
+        { session },
+    ),
+    ]);
+
+    await session.commitTransaction();
+    transactionCommitted = true;
+
+    return res.status(200).json({
+    success: true,
+    message: "Package rejected and cancelled.",
+    data: {
+        packageId: packageDoc._id,
+        trackingNumber: packageDoc.trackingNumber,
+        previousStatus: "cashier_claimed",
+        currentStatus: "cancelled",
+        rejectionReason,
+        rejectedAt: now,
+    },
+    });
+
+} catch (error: any) {
+    if (error.name === "ValidationError") {
+    return next(
+        new ErrorHandler(
+        Object.values(error.errors).map((e: any) => e.message).join(", "),
+        400,
+        ),
+    );
+    }
+    return next(error);
+} finally {
+    if (!transactionCommitted) {
+    await session.abortTransaction().catch(() => {});
+    }
+    await session.endSession();
+}
+},
+);
 
