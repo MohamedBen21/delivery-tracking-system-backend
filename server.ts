@@ -5,7 +5,10 @@ import { configureCloudinary } from "./conifg/cloudinary.conf";
 import { connectMongo } from "./databases/Mongo.database";
 import { connectRedis } from "./databases/Redis.database";
 import { startScheduler } from "./route_planning/scheduler";
-
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import { socketAuth } from './middleware/socketAuth';
+import { SocketService } from './services/socket.service';
 
 const port = process.env.PORT || 8080;
 
@@ -16,8 +19,31 @@ async function bootstrap() {
   await connectMongo();
   connectRedis();
 
-  const server = app.listen(port, () => {
-    console.log(`App is running on port ${port}`);
+
+  const httpServer = createServer(app);
+  
+
+  const io = new Server(httpServer, {
+    cors: {
+      origin: process.env.ORIGIN || "http://localhost:5173",
+      methods: ["GET", "POST"],
+      credentials: true
+    }
+  });
+  
+
+  io.use(socketAuth);
+  
+
+  const socketService = new SocketService(io);
+  
+
+  (global as any).socketService = socketService;
+
+
+  const server = httpServer.listen(port, () => {
+
+    console.log(`App is running on port ${port} with Socket.IO support`);
     startScheduler();
   });
 
@@ -29,7 +55,8 @@ async function bootstrap() {
     });
   }
 
-  process.on("SIGINT",  () => shutdown("SIGINT"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
