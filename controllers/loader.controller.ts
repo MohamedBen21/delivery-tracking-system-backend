@@ -1386,3 +1386,260 @@ export const markManifestArrived = catchAsyncError(
   },
 );
 
+
+
+//  POST /loader/manifests/:manifestId/scan-out
+//  Loader at destination branch scans each package out of the manifest bag.
+//  Status: at_destination_branch — package is now loose at this branch and can
+//  be dispatched for home delivery or picked up by the client.
+
+
+export const scanPackageOut = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let committed = false;
+
+    try {
+      const loaderUserId = req.user?._id;
+      const { manifestId } = req.params;
+      const { trackingNumber, notes } = req.body as {
+        trackingNumber: string;
+        notes?: string;
+      };
+
+      if (!mongoose.Types.ObjectId.isValid(manifestId.toString())) {
+        return next(new ErrorHandler("Invalid manifestId.", 400));
+      }
+      if (!trackingNumber?.trim()) {
+        return next(new ErrorHandler("trackingNumber is required.", 400));
+      }
+
+      const loader = await resolveLoader(loaderUserId, next, true, session);
+      if (!loader) return;
+
+      const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
+      const now = new Date();
+
+      const [manifest, packageDoc] = await Promise.all([
+        ManifestModel.findById(manifestId).session(session),
+        PackageModel.findOne({
+          trackingNumber: trackingNumber.trim().toUpperCase(),
+        }).session(session),
+      ]);
+
+      if (!manifest) return next(new ErrorHandler("Manifest not found.", 404));
+
+      if (manifest.destinationBranchId.toString() !== activeBranchId.toString()) {
+        return next(
+          new ErrorHandler("You are not at this manifest's destination branch.", 403),
+        );
+      }
+
+      if (!["arrived", "unloading"].includes(manifest.status)) {
+        return next(
+          new ErrorHandler(
+            `Manifest must be 'arrived' or 'unloading' to scan packages out. Current status: '${manifest.status}'.`,
+            400,
+          ),
+        );
+      }
+
+      if (!packageDoc) {
+        return next(
+          new ErrorHandler(`No package found with tracking number ${trackingNumber}.`, 404),
+        );
+      }
+
+      
+      const entry = manifest.packages.find(
+        (p: IManifestPackageEntry) =>
+          p.packageId.toString() === (packageDoc._id as mongoose.Types.ObjectId).toString(),
+      );
+
+      if (!entry) {
+        return next(
+          new ErrorHandler(
+            `Package ${trackingNumber} is not part of manifest ${manifest.manifestCode}.`,
+            400,
+          ),
+        );
+      }
+
+      if (entry.entryStatus !== "in_manifest") {
+        return next(
+          new ErrorHandler(
+            `Package entry is already '${entry.entryStatus}'. Cannot unload again.`,
+            400,
+          ),
+        );
+      }
+
+
+      await manifest.unloadPackage(
+        packageDoc._id as mongoose.Types.ObjectId,
+        loaderUserId as mongoose.Types.ObjectId,
+        notes,
+      );
+
+
+      await PackageModel.findByIdAndUpdate(
+        packageDoc._id,
+        {
+          $set: { currentManifestId: null },
+          $push: {
+            trackingHistory: {
+              status: "at_destination_branch",
+              branchId: activeBranchId,
+              userId: loaderUserId,
+              notes: notes?.trim() || `Scanned out of manifest ${manifest.manifestCode}. Ready for dispatch.`,
+              timestamp: now,
+            },
+          },
+        },
+        { session },
+      );
+
+      await PackageHistoryModel.create(
+        [
+          {
+            packageId: packageDoc._id,
+            status: "at_destination_branch" as PackageStatus,
+            branchId: activeBranchId,
+            handledBy: loaderUserId,
+            handlerName: loaderName(req),
+            handlerRole: "loader",
+            manifestId: manifest._id,
+            notes: notes?.trim() || `Unloaded from manifest ${manifest.manifestCode}. Awaiting dispatch.`,
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+      const isFirstScan = manifest.status === "arrived"; 
+
+      await ManifestEventModel.create(
+        [
+          {
+            manifestId: manifest._id,
+            manifestCode: manifest.manifestCode,
+            eventType: isFirstScan ? "unload_started" : "package_unloaded",
+            performedBy: loaderUserId,
+            performerName: loaderName(req),
+            performerRole: "loader",
+            branchId: activeBranchId,
+            packageId: packageDoc._id,
+            packageTrackingNumber: packageDoc.trackingNumber,
+            notes: `Package unloaded from manifest bag.`,
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+      await LoaderModel.findByIdAndUpdate(
+        loader._id,
+        {
+          $inc: {
+            "stats.totalPackagesUnloaded": 1,
+            "currentShift.packagesUnloadedCount": 1,
+          },
+          $set: { "stats.lastActiveAt": now },
+          $push: {
+            recentScans: {
+              $each: [
+                {
+                  action: "scan_out_package",
+                  scannedId: packageDoc._id,
+                  scannedCode: packageDoc.trackingNumber,
+                  manifestId: manifest._id,
+                  manifestCode: manifest.manifestCode,
+                  branchId: activeBranchId,
+                  timestamp: now,
+                  notes: notes?.trim(),
+                  success: true,
+                },
+              ],
+              $position: 0,
+              $slice: 200,
+            },
+          },
+        },
+        { session },
+      );
+
+      
+      const remaining = manifest.packages.filter(
+        (p: IManifestPackageEntry) => p.entryStatus === "in_manifest",
+      ).length;
+
+      let autoClosedAt: Date | null = null;
+
+      if (remaining === 0) {
+        await manifest.close(loaderUserId as mongoose.Types.ObjectId);
+        autoClosedAt = new Date();
+
+        await ManifestEventModel.create(
+          [
+            {
+              manifestId: manifest._id,
+              manifestCode: manifest.manifestCode,
+              eventType: "closed",
+              performedBy: loaderUserId,
+              performerName: loaderName(req),
+              performerRole: "loader",
+              branchId: activeBranchId,
+              previousStatus: "unloading",
+              newStatus: "closed",
+              notes: "All packages unloaded. Manifest auto-closed.",
+              timestamp: autoClosedAt,
+            },
+          ],
+          { session },
+        );
+
+        await LoaderModel.findByIdAndUpdate(
+          loader._id,
+          {
+            $inc: {
+              "stats.totalManifestsUnloaded": 1,
+              "currentShift.manifestsUnloadedCount": 1,
+            },
+          },
+          { session },
+        );
+      }
+
+      await session.commitTransaction();
+      committed = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `Package ${packageDoc.trackingNumber} scanned out successfully.`,
+        data: {
+          manifestId: manifest._id,
+          manifestCode: manifest.manifestCode,
+          packageId: packageDoc._id,
+          trackingNumber: packageDoc.trackingNumber,
+          entryStatus: "unloaded",
+          manifestSnapshot: {
+            remaining,
+            totalInManifest: manifest.packageCount,
+            status: remaining === 0 ? "closed" : "unloading",
+            autoClosedAt,
+          },
+        },
+      });
+
+    } catch (err: any) {
+      return next(err);
+    } finally {
+      if (!committed) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  },
+);
+
+
