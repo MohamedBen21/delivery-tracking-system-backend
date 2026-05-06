@@ -187,3 +187,212 @@ return res.status(200).json({
 },
 );
 
+
+
+//     POST /cashier/claim-package
+//     The cashier scans the barcode on the bordereau. The system:
+//       a) Validates the package belongs to this branch and is still 'pending'
+//       b) Updates status → 'cashier_claimed'
+//       c) Stamps the package with claimedByCashierId + claimedAt
+//       d) Writes a PackageHistory record
+//       e) Logs the action on the cashier's shift stats
+//
+//     This is intentionally a single-package operation — each barcode scan
+//     is one atomic action.  The cashier scans all packages one by one.
+
+
+export const claimPackage = catchAsyncError(
+async (req: Request, res: Response, next: NextFunction) => {
+
+const session = await mongoose.startSession();
+session.startTransaction();
+let transactionCommitted = false;
+
+try {
+    const cashierUserId = req.user?._id;
+    const cashier = await resolveCashier(cashierUserId, next, session);
+    if (!cashier) return;
+
+    const { trackingNumber, notes } = req.body as {
+    trackingNumber: string;
+    notes?: string;
+    };
+
+    if (!trackingNumber?.trim()) {
+    return next(new ErrorHandler("trackingNumber is required.", 400));
+    }
+
+    const now = new Date();
+
+
+    const packageDoc = await PackageModel.findOne({
+    trackingNumber: trackingNumber.trim().toUpperCase(),
+    }).session(session);
+
+    if (!packageDoc) {
+    return next(
+        new ErrorHandler(
+        `No package found with tracking number ${trackingNumber}.`,
+        404,
+        ),
+    );
+    }
+
+    // ── Guard: must be at this cashier's branch
+    if (
+    packageDoc.originBranchId.toString() !==
+    cashier.assignedBranchId.toString()
+    ) {
+    return next(
+        new ErrorHandler(
+        "This package belongs to a different branch and cannot be claimed here.",
+        403,
+        ),
+    );
+    }
+
+    // ── Guard: must be 'pending' (not already claimed or further)
+    if (packageDoc.status !== "pending") {
+    return next(
+        new ErrorHandler(
+        `Package is already in status '${packageDoc.status}' and cannot be claimed again.`,
+        400,
+        ),
+    );
+    }
+
+    const noteText =
+    notes?.trim() ||
+    `Package physically received at counter by cashier. Bordereau verified.`;
+
+    //  Update the package 
+    await PackageModel.findByIdAndUpdate(
+    packageDoc._id,
+    {
+        $set: {
+        status: "cashier_claimed" as PackageStatus,
+        claimedByCashierId: cashier._id,
+        claimedAt: now,
+        },
+        $push: {
+        trackingHistory: {
+            status: "cashier_claimed",
+            branchId: cashier.assignedBranchId,
+            userId: cashierUserId,
+            notes: noteText,
+            timestamp: now,
+        },
+        },
+    },
+    { session },
+    );
+
+    // PackageHistory record
+    await PackageHistoryModel.create(
+    [
+        {
+        packageId: packageDoc._id,
+        status: "cashier_claimed" as PackageStatus,
+        branchId: cashier.assignedBranchId,
+        handledBy: cashierUserId,
+        handlerName: `${(req.user as any)?.firstName} ${(req.user as any)?.lastName}`,
+        handlerRole: "cashier",
+        notes: noteText,
+        timestamp: now,
+        },
+    ],
+    { session },
+    );
+
+    // ── Increment branch currentLoad (package is now physically at branch) 
+    await BranchModel.findByIdAndUpdate(
+    cashier.assignedBranchId,
+    { $inc: { currentLoad: 1 } },
+    { session },
+    );
+
+    // ── Update cashier shift counters + recentScans 
+    await CashierModel.findByIdAndUpdate(
+    cashier._id,
+    {
+        $inc: {
+        "currentShift.packagesClaimedCount": 1,
+        "stats.totalPackagesClaimed": 1,
+        },
+        $set: {
+        "stats.lastActiveAt": now,
+        },
+        $push: {
+        recentScans: {
+            $each: [
+            {
+                action: "claim_package",
+                packageId: packageDoc._id,
+                trackingNumber: packageDoc.trackingNumber,
+                branchId: cashier.assignedBranchId,
+                timestamp: now,
+                notes: noteText,
+                success: true,
+            },
+            ],
+            $slice: -200,   // keep last 200 scans (most recent at the end)
+            $position: 0,
+        },
+        },
+    },
+    { session },
+    );
+
+    await session.commitTransaction();
+    transactionCommitted = true;
+
+    return res.status(200).json({
+    success: true,
+    message: "Package claimed successfully.",
+    data: {
+        packageId: packageDoc._id,
+        trackingNumber: packageDoc.trackingNumber,
+        previousStatus: "pending",
+        currentStatus: "cashier_claimed",
+        claimedAt: now,
+        package: {
+        type: packageDoc.type,
+        weight: packageDoc.weight,
+        isFragile: packageDoc.isFragile,
+        declaredValue: (packageDoc as any).declaredValue ?? null,
+        deliveryType: packageDoc.deliveryType,
+        totalPrice: (packageDoc as any).totalPrice,
+        recipient: {
+            name: packageDoc.destination.recipientName,
+            phone: packageDoc.destination.recipientPhone,
+            city: packageDoc.destination.city,
+            state: packageDoc.destination.state,
+        },
+        },
+    },
+    });
+
+} catch (error: any) {
+    if (error.name === "ValidationError") {
+    return next(
+        new ErrorHandler(
+        Object.values(error.errors)
+            .map((e: any) => e.message)
+            .join(", "),
+        400,
+        ),
+    );
+    }
+    return next(error);
+} finally {
+    if (!transactionCommitted) {
+    await session.abortTransaction().catch(() => {});
+    }
+    await session.endSession();
+}
+},
+);
+
+
+
+
