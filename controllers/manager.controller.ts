@@ -10,6 +10,7 @@ import SupervisorModel, {
   SupervisorPermission,
 } from "../models/supervisor.model";
 import VehicleModel, { AssignedUserRole, IVehicleDocuments, VehicleStatus, VehicleType } from "../models/vehicle.model";
+import { notifyAdminsNewEntityPending, sendSupervisorAccountCreatedNotification, sendSupervisorBlockStatusNotification } from "../services/notification.service";
 
 
 type CompanyBusinessType = "solo" | "company";
@@ -204,6 +205,20 @@ export const createCompany = catchAsyncError(
 
       await session.commitTransaction();
       transactionCommitted = true;
+
+
+
+      notifyAdminsNewEntityPending(
+        company[0]._id.toString(),
+        "Manager",
+        `${user.firstName} ${user.lastName} - Company: ${name}`
+
+      ).catch(error => {
+
+        console.error('Admin notification for new company failed:', error);
+
+      });
+
       
       const populatedCompany = await CompanyModel.findById(company[0]._id)
         .populate("userId", "firstName lastName email phone username")
@@ -1762,6 +1777,21 @@ export const createSupervisor = catchAsyncError(
       await session.commitTransaction();
       transactionCommitted = true;
 
+
+
+      const branchName = branch ? branch.name : "Branch";
+
+      sendSupervisorAccountCreatedNotification(
+        user[0]._id.toString(),
+        firstName,
+        lastName,
+        supervisor[0]._id.toString(),
+        branchName
+      ).catch(error => {
+        console.error('Supervisor creation notification failed:', error);
+     });
+
+
       const populatedSupervisor = await SupervisorModel.findById(
         supervisor[0]._id,
       )
@@ -2032,6 +2062,19 @@ export const toggleBlockSupervisor = catchAsyncError(
 
       await session.commitTransaction();
       transactionCommitted = true;
+
+
+      sendSupervisorBlockStatusNotification(
+
+        supervisor.userId.toString(),
+        supervisorId.toString(),
+        !newIsActive 
+
+      ).catch(error => {
+        
+        console.error('Supervisor block status notification failed:', error);
+
+      });
 
       const updatedSupervisor = await SupervisorModel.findById(supervisorId)
         .populate("userId", "firstName lastName email phone username imageUrl")

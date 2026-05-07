@@ -35,6 +35,7 @@ import delivererModel from "../models/deliverer.model";
 import transporterModel from "../models/transporter.model";
 import SupervisorModel from "../models/supervisor.model";
 import freelancerModel from "../models/freelancer.model";
+import { notifyAdminsNewEntityPending, sendManagerAccountCreatedNotification, sendWelcomeNotification } from "../services/notification.service";
 
 
 export const register = catchAsyncError(
@@ -283,6 +284,17 @@ export const activate = catchAsyncError(
       secure: true,
     });
  
+    
+
+    sendWelcomeNotification(
+      newUser._id.toString(),
+      newUser.firstName,
+      newUser.role
+    ).catch(error => {
+
+      console.error('Welcome notification sending failed:', error);
+
+    });
 
     await sendToken(newUser, 200, res, "Account activated successfully");
   },
@@ -1408,6 +1420,7 @@ export const createManager = catchAsyncError(
         status: "active"
       });
 
+
       // 4. Create a temporary companyId (you might want to create a default company or make this optional)
       // For testing, we'll create a dummy ObjectId or you can modify the schema to allow null temporarily
       const dummyCompanyId = new mongoose.Types.ObjectId();
@@ -1422,6 +1435,28 @@ export const createManager = catchAsyncError(
           allBranches: true,
           specificBranches: []
         }
+      });
+
+
+      // Send notifications for new manager creation
+      sendManagerAccountCreatedNotification(
+        user._id.toString(),
+        user.firstName,
+        user.lastName
+      ).catch(error => {
+        console.error('Manager notification sending failed:', error);
+
+      });
+
+      // Notify admins about new manager
+      
+      notifyAdminsNewEntityPending(
+        manager._id.toString(),
+        "Manager",
+        `${user.firstName} ${user.lastName}`
+      ).catch(error => {
+        console.error('Admin notification sending failed:', error);
+        // Will implement proper logging later
       });
 
       // 6. Return response (excluding sensitive data)

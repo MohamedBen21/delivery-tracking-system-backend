@@ -9,6 +9,7 @@ import FreelancerModel from "../models/freelancer.model";
 import BranchModel from "../models/branch.model";
 import userModel from "../models/user.model";
 import PaymentModel from "../models/payment.model";
+import { sendPackageAcceptedIntoBranchNotification, sendPackageClaimedByCashierNotification, sendPackageRejectedByCashierNotification } from "../services/notification.service";
 
 
 async function resolveCashier(
@@ -349,6 +350,21 @@ try {
     await session.commitTransaction();
     transactionCommitted = true;
 
+
+
+    sendPackageClaimedByCashierNotification(
+
+    packageDoc.senderId.toString(),
+    packageDoc.senderType,
+    packageDoc._id.toString(),
+    packageDoc.trackingNumber,
+    (cashier as any).branchName || "Branch"  
+
+    ).catch(error => {
+    console.error('Package claimed notification sending failed:', error);
+
+    });
+
     return res.status(200).json({
     success: true,
     message: "Package claimed successfully.",
@@ -531,6 +547,21 @@ try {
 
     await session.commitTransaction();
     transactionCommitted = true;
+
+
+    sendPackageAcceptedIntoBranchNotification(
+
+    packageDoc.senderId.toString(),
+    packageDoc.senderType,
+    packageDoc._id.toString(),
+    packageDoc.trackingNumber,
+    (cashier as any).branchName || "Branch" 
+    
+    ).catch(error => {
+
+    console.error('Package accepted notification sending failed:', error);
+    // Will implement proper logging later
+    });
 
     return res.status(200).json({
     success: true,
@@ -728,6 +759,22 @@ try {
 
     await session.commitTransaction();
     transactionCommitted = true;
+
+
+    sendPackageRejectedByCashierNotification(
+
+    packageDoc.senderId.toString(),
+    packageDoc.senderType,
+    packageDoc._id.toString(),
+    packageDoc.trackingNumber,
+    rejectionReason
+
+    ).catch(error => {
+
+    console.error('Package rejected notification sending failed:', error);
+
+    });
+
 
     return res.status(200).json({
     success: true,
