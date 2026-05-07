@@ -1065,3 +1065,216 @@ export async function notifyAdminsNewEntityPending(
     console.error(`Failed to notify admins of new ${entityType}:`, error);
   }
 }
+
+
+//  TRANSPORTER ACCOUNT EVENTS  (triggered from supervisor_controller)
+
+/**
+ * Triggered: supervisor_controller → createTransporter / assignTransporter.
+ * Recipient: the new transporter.
+ */
+
+export async function sendTransporterAccountCreatedNotification(
+  transporterUserId: string,
+  firstName: string,
+  lastName: string,
+  transporterId: string,
+  companyName: string,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(transporterUserId);
+    const title = "You've Been Assigned as a Transporter 🚛";
+
+    const message = `Dear ${firstName} ${lastName}, you have been assigned as a transporter at ${companyName}. Log in to view your routes and manifests.`;
+    const iconType: IconType = "delivery_app";
+
+    const notificationData = {
+      type: "account_created",
+      route: "/transporter/dashboard",
+      id: transporterId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: transporterUserId,
+      notificationType: "account_created",
+      referenceId: transporterId,
+      referenceType: "Transporter",
+      title,
+      message,
+      priority: "normal",
+      userType: "transporter",
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store transporter account notification:", err));
+
+  } catch (error) {
+    console.error("Failed to send transporter account created notification:", error);
+  }
+}
+
+
+/**
+ * Triggered: supervisor_controller → toggleBlockTransporter.
+ * Recipient: the transporter being blocked or unblocked.
+ */
+
+export async function sendTransporterBlockStatusNotification(
+  transporterUserId: string,
+  transporterId: string,
+  isBlocked: boolean,
+) {
+  try {
+    const fcmToken = await getFcmToken(transporterUserId);
+    const title = isBlocked ? "Account Suspended" : "Account Reactivated";
+
+    const message = isBlocked
+      ? "Your transporter account has been suspended. Please contact your company manager for more information."
+      : "Your transporter account has been reactivated. You can resume accepting routes.";
+
+    const iconType: IconType = "delivery_app";
+
+    const notificationData = {
+      type: isBlocked ? "account_blocked" : "account_unblocked",
+      route: "/transporter/account-status",
+      id: transporterId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: transporterUserId,
+      notificationType: isBlocked ? "account_blocked" : "account_unblocked",
+      referenceId: transporterId,
+      referenceType: "Transporter",
+      title,
+      message,
+      priority: "high",
+      userType: "transporter",
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store transporter block status notification:", err));
+  } catch (error) {
+    console.error("Failed to send transporter block status notification:", error);
+  }
+}
+
+
+
+//  SUPERVISOR ACCOUNT EVENTS  (triggered from manager_controller)
+
+/**
+ * Triggered: manager_controller → createSupervisor.
+ * Recipient: the newly created supervisor.
+ */
+
+export async function sendSupervisorAccountCreatedNotification(
+  supervisorUserId: string,
+  firstName: string,
+  lastName: string,
+  supervisorId: string,
+  branchName: string,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(supervisorUserId);
+    const title = "Supervisor Account Created 🏢";
+
+    const message = `Dear ${firstName} ${lastName}, your supervisor account has been created for branch "${branchName}". Log in to start managing your branch.`;
+    const iconType: IconType = "manager_app";
+    
+    const notificationData = {
+      type: "account_created",
+      route: "/supervisor/dashboard",
+      id: supervisorId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: supervisorUserId,
+      notificationType: "account_created",
+      referenceId: supervisorId,
+      referenceType: "Supervisor",
+      title,
+      message,
+      priority: "normal",
+      userType: "supervisor",
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store supervisor account notification:", err));
+
+  } catch (error) {
+    console.error("Failed to send supervisor account created notification:", error);
+  }
+}
+
+
+/**
+ * Triggered: manager_controller → toggleBlockSupervisor.
+ * Recipient: the supervisor being blocked or unblocked.
+ */
+
+export async function sendSupervisorBlockStatusNotification(
+  supervisorUserId: string,
+  supervisorId: string,
+  isBlocked: boolean,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(supervisorUserId);
+    const title = isBlocked ? "Account Suspended" : "Account Reactivated";
+
+    const message = isBlocked
+      ? "Your supervisor account has been suspended. Please contact your company manager for more information."
+      : "Your supervisor account has been reactivated. You can resume managing your branch.";
+    const iconType: IconType = "manager_app";
+
+    const notificationData = {
+      type: isBlocked ? "account_blocked" : "account_unblocked",
+      route: "/supervisor/account-status",
+      id: supervisorId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: supervisorUserId,
+      notificationType: isBlocked ? "account_blocked" : "account_unblocked",
+      referenceId: supervisorId,
+      referenceType: "Supervisor",
+      title,
+      message,
+      priority: "high",
+      userType: "supervisor",
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store supervisor block status notification:", err));
+
+  } catch (error) {
+    console.error("Failed to send supervisor block status notification:", error);
+  }
+}
+
