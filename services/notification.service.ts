@@ -670,6 +670,58 @@ export async function sendPackageRejectedByCashierNotification(
 
 
 
+/**
+ * Triggered: cashier_controller → acceptPackage (status: cashier_claimed → at_origin_branch).
+ * Recipient: the sender – their package cleared physical inspection and is in branch stock.
+ */
+
+export async function sendPackageAcceptedIntoBranchNotification(
+  senderUserId: string,
+  senderType: string,
+  packageId: string,
+  trackingNumber: string,
+  branchName: string,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(senderUserId);
+    const title = "Package Cleared Inspection ✅";
+
+    const message = `Your package ${trackingNumber} has passed inspection at ${branchName} and is now in branch stock. It will be dispatched shortly.`;
+    const iconType: IconType = senderType === "freelancer" ? "freelancer_app" : "client_app";
+
+    const notificationData = {
+      type: "package_status_update",
+      status: "at_origin_branch",
+      route: `/packages/${packageId}`,
+      id: packageId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: senderUserId,
+      notificationType: "package_status_update",
+      referenceId: packageId,
+      referenceType: "Package",
+      title,
+      message,
+      priority: "normal",
+      userType: senderType,
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store package accepted into branch notification:", err));
+
+  } catch (error) {
+    console.error("Failed to send package accepted into branch notification:", error);
+  }
+}
+
 //  FREELANCER ACCOUNT EVENTS  (triggered from supervisor_controller / freelancer_controller)
 
 /**
@@ -1018,6 +1070,189 @@ export async function sendManifestDiscrepancyNotification(
 }
 
 
+/**
+ * Triggered: loader_controller → loadManifestOnTruck (status: sealed → loaded).
+ * Recipients:
+ *   - The assigned transporter – they have a manifest loaded and ready for departure.
+ *   - Supervisors of the destination branch – a truck will be heading their way.
+ */
+
+export async function sendManifestLoadedOnTruckNotification(
+  manifestId: string,
+  manifestCode: string,
+  packageCount: number,
+  transporterUserId: string,
+  transporterId: string,
+  destinationBranchId: string,
+) {
+  try {
+
+    const transporterFcmToken = await getFcmToken(transporterUserId);
+    const transporterTitle = "Manifest Loaded — Ready to Depart 🚛";
+
+    const transporterMessage = `Manifest ${manifestCode} with ${packageCount} package(s) has been loaded onto your vehicle. Await departure clearance from the loader.`;
+    const iconType: IconType = "delivery_app";
+
+    const transporterNotificationData = {
+      type: "manifest_sealed",
+      route: `/transporter/manifests/${manifestId}`,
+      id: manifestId,
+      iconType,
+    };
+
+    if (transporterFcmToken) {
+      await sendNotificationToDevice(
+        transporterFcmToken,
+        transporterTitle,
+        transporterMessage,
+        transporterNotificationData,
+      );
+    }
+
+    storeNotificationInDB({
+
+      userId: transporterUserId,
+      notificationType: "manifest_sealed",
+      referenceId: manifestId,
+      referenceType: "Manifest",
+      title: transporterTitle,
+      message: transporterMessage,
+      priority: "high",
+      userType: "transporter",
+      route: transporterNotificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store manifest loaded notification (transporter):", err));
+
+
+    const supervisors = await userModel
+      .find({ role: "supervisor", fcm_token: { $exists: true, $ne: null } })
+      .select("fcm_token")
+      .lean();
+
+    const tokens = supervisors
+      .map((s) => (s as any).fcm_token as string)
+      .filter(Boolean);
+
+    if (tokens.length) {
+
+      const supervisorTitle = "Shipment En Route to Your Branch 🚛";
+      const supervisorMessage = `Manifest ${manifestCode} with ${packageCount} package(s) has been loaded and will depart shortly for your branch.`;
+
+      const supervisorNotificationData = {
+        type: "manifest_sealed",
+        route: `/manifests/${manifestId}`,
+        id: manifestId,
+        iconType: "manager_app" as IconType,
+      };
+
+      await sendNotificationToMultipleDevices(
+        tokens,
+        supervisorTitle,
+        supervisorMessage,
+        supervisorNotificationData,
+      );
+    }
+  } catch (error) {
+    console.error("Failed to send manifest loaded on truck notification:", error);
+  }
+}
+
+
+/**
+ * Triggered: loader_controller → markManifestDeparted (status: loaded → in_transit).
+ * Recipients:
+ *   - The transporter – confirmed departure, they are now on the road.
+ *   - Supervisors of the destination branch – the truck has left and is en route.
+ */
+
+export async function sendManifestDepartedNotification(
+  manifestId: string,
+  manifestCode: string,
+  packageCount: number,
+  transporterUserId: string,
+  destinationBranchId: string,
+  estimatedArrival?: Date,
+) {
+  try {
+
+    const etaText = estimatedArrival
+      ? ` Estimated arrival: ${estimatedArrival.toLocaleString()}.`
+      : "";
+
+
+    const transporterFcmToken = await getFcmToken(transporterUserId);
+    const transporterTitle = "Departure Confirmed — Safe Travels 🛣️";
+
+    const transporterMessage = `Manifest ${manifestCode} departure has been confirmed. You are now carrying ${packageCount} package(s).${etaText}`;
+    const iconType: IconType = "delivery_app";
+
+    const transporterNotificationData = {
+      type: "manifest_sealed",
+      route: `/transporter/manifests/${manifestId}`,
+      id: manifestId,
+      iconType,
+    };
+
+    if (transporterFcmToken) {
+      await sendNotificationToDevice(
+        transporterFcmToken,
+        transporterTitle,
+        transporterMessage,
+        transporterNotificationData,
+      );
+    }
+
+    storeNotificationInDB({
+      userId: transporterUserId,
+      notificationType: "manifest_sealed",
+      referenceId: manifestId,
+      referenceType: "Manifest",
+      title: transporterTitle,
+      message: transporterMessage,
+      priority: "normal",
+      userType: "transporter",
+      route: transporterNotificationData.route,
+      iconType,
+    }).catch((err) => console.error("Failed to store manifest departed notification (transporter):", err));
+
+
+    const supervisors = await userModel
+      .find({ role: "supervisor", fcm_token: { $exists: true, $ne: null } })
+      .select("fcm_token")
+      .lean();
+
+    const tokens = supervisors
+      .map((s) => (s as any).fcm_token as string)
+      .filter(Boolean);
+
+    if (tokens.length) {
+
+      const supervisorTitle = "Shipment Departed — Now In Transit 🚛";
+      const supervisorMessage = `Manifest ${manifestCode} carrying ${packageCount} package(s) has departed and is now in transit to your branch.${etaText}`;
+
+      const supervisorNotificationData = {
+        type: "manifest_sealed",
+        route: `/manifests/${manifestId}`,
+        id: manifestId,
+        iconType: "manager_app" as IconType,
+      };
+
+      await sendNotificationToMultipleDevices(
+        tokens,
+        supervisorTitle,
+        supervisorMessage,
+        supervisorNotificationData,
+      );
+    }
+  } catch (error) {
+    console.error("Failed to send manifest departed notification:", error);
+  }
+}
+
+
+
+
 
 //  ADMIN / BROADCAST EVENTS
 
@@ -1277,4 +1512,5 @@ export async function sendSupervisorBlockStatusNotification(
     console.error("Failed to send supervisor block status notification:", error);
   }
 }
+
 
