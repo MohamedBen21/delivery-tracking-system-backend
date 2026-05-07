@@ -563,3 +563,215 @@ export async function sendPackageIssueResolvedNotification(
 
 
 
+//  CASHIER EVENTS
+
+/**
+ * Triggered: cashier_controller → claimPackage.
+ * Recipient: the freelancer/sender – their package has been physically received.
+ */
+
+export async function sendPackageClaimedByCashierNotification(
+  senderUserId: string,
+  senderType: string,
+  packageId: string,
+  trackingNumber: string,
+  branchName: string,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(senderUserId);
+    const title = "Package Received at Counter ✅";
+
+    const message = `Your package ${trackingNumber} has been received and verified at ${branchName}. It will be dispatched shortly.`;
+    const iconType: IconType = senderType === "freelancer" ? "freelancer_app" : "client_app";
+
+    const notificationData = {
+      type: "package_claimed",
+      route: `/packages/${packageId}`,
+      id: packageId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: senderUserId,
+      notificationType: "package_claimed",
+      referenceId: packageId,
+      referenceType: "Package",
+      title,
+      message,
+      priority: "normal",
+      userType: senderType,
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store package claimed notification:", err));
+
+  } catch (error) {
+    console.error("Failed to send package claimed notification:", error);
+  }
+}
+
+
+/**
+ * Triggered: cashier_controller → rejectPackage.
+ * Recipient: the freelancer/sender – their package was rejected at the counter.
+ */
+
+export async function sendPackageRejectedByCashierNotification(
+  senderUserId: string,
+  senderType: string,
+  packageId: string,
+  trackingNumber: string,
+  rejectionReason: string,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(senderUserId);
+    const title = "Package Rejected at Counter ❌";
+
+    const message = `Your package ${trackingNumber} was rejected at the branch counter. Reason: ${rejectionReason}. Please contact support.`;
+    const iconType: IconType = senderType === "freelancer" ? "freelancer_app" : "client_app";
+
+    const notificationData = {
+      type: "package_rejected",
+      route: `/packages/${packageId}`,
+      id: packageId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: senderUserId,
+      notificationType: "package_rejected",
+      referenceId: packageId,
+      referenceType: "Package",
+      title,
+      message,
+      priority: "high",
+      userType: senderType,
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store package rejected notification:", err));
+
+  } catch (error) {
+    console.error("Failed to send package rejected notification:", error);
+  }
+}
+
+
+
+//  FREELANCER ACCOUNT EVENTS  (triggered from supervisor_controller / freelancer_controller)
+
+/**
+ * Triggered: supervisor_controller → createFreelancer.
+ * Recipient: the new freelancer.
+ */
+
+export async function sendFreelancerAccountCreatedNotification(
+  freelancerUserId: string,
+  firstName: string,
+  lastName: string,
+  freelancerId: string,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(freelancerUserId);
+    const title = "Freelancer Account Created 🎉";
+
+    const message = `Dear ${firstName} ${lastName}, your freelancer account has been created successfully. You can now start registering packages through the app.`;
+    const iconType: IconType = "freelancer_app";
+
+    const notificationData = {
+      type: "account_created",
+      route: "/freelancer/dashboard",
+      id: freelancerId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: freelancerUserId,
+      notificationType: "account_created",
+      referenceId: freelancerId,
+      referenceType: "Freelancer",
+      title,
+      message,
+      priority: "low",
+      userType: "freelancer",
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store freelancer account notification:", err));
+
+  } catch (error) {
+    console.error("Failed to send freelancer account created notification:", error);
+  }
+}
+
+
+/**
+ * Triggered: supervisor_controller → toggleBlockFreelancer.
+ * Recipient: the freelancer being blocked or unblocked.
+ */
+
+export async function sendFreelancerBlockStatusNotification(
+  freelancerUserId: string,
+  freelancerId: string,
+  isBlocked: boolean,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(freelancerUserId);
+    const title = isBlocked ? "Account Suspended" : "Account Reactivated";
+
+    const message = isBlocked
+      ? "Your freelancer account has been suspended. Please contact your branch supervisor for more information."
+      : "Your freelancer account has been reactivated. You can now register packages again.";
+    const iconType: IconType = "freelancer_app";
+
+    const notificationData = {
+      type: isBlocked ? "account_blocked" : "account_unblocked",
+      route: "/freelancer/account-status",
+      id: freelancerId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: freelancerUserId,
+      notificationType: isBlocked ? "account_blocked" : "account_unblocked",
+      referenceId: freelancerId,
+      referenceType: "Freelancer",
+      title,
+      message,
+      priority: "high",
+      userType: "freelancer",
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store freelancer block status notification:", err));
+  } catch (error) {
+    console.error("Failed to send freelancer block status notification:", error);
+  }
+}
+
+
+
