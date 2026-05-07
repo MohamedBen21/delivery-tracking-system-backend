@@ -1266,7 +1266,7 @@ export async function sendManifestDepartedNotification(
 
 export async function notifyAdminsNewEntityPending(
   entityId: string,
-  entityType: "Freelancer" | "Manager" | "Deliverer" | "Transporter",
+  entityType: "Freelancer" | "Manager" | "Deliverer" | "Transporter" | "Vehicle",
   displayName: string,
 ) {
   try {

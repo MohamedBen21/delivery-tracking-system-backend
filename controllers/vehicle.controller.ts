@@ -7,6 +7,7 @@ import ManagerModel from "../models/manager.model";
 import CompanyModel from "../models/company.model";
 import BranchModel from "../models/branch.model";
 import userModel from "../models/user.model";
+import { notifyAdminsNewEntityPending } from "../services/notification.service";
 
 const VEHICLE_TYPES: VehicleType[] = [
   "motorcycle",
@@ -152,8 +153,10 @@ function validateDocuments(
 
 export const createVehicle = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+
     const session = await mongoose.startSession();
     session.startTransaction();
+
     let transactionCommitted = false;
 
     try {
@@ -415,6 +418,17 @@ export const createVehicle = catchAsyncError(
 
       await session.commitTransaction();
       transactionCommitted = true;
+
+
+      notifyAdminsNewEntityPending(
+        vehicle._id.toString(),
+        "Vehicle", 
+        `New Vehicle: ${normalizedRegNum} (${type}) - ${brand || 'Unknown'} ${modelName || ''}`
+      ).catch(error => {
+        
+        console.error('Admin notification for new vehicle failed:', error);
+        // Will implement proper logging later
+      });
 
       const [populatedVehicle] = await VehicleModel.aggregate([
         { $match: { _id: vehicle._id } },

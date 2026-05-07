@@ -10,6 +10,7 @@ import userModel from "../models/user.model";
 import { buildUserFieldUpdates } from "./manager.controller";
 import PaymentModel from "../models/payment.model";
 import clientModel from "../models/client.model";
+import { sendPackageCreatedNotification } from "../services/notification.service";
 
 
 
@@ -1190,6 +1191,9 @@ export const createPackage = catchAsyncError(
     try {
       const freelancerUserId = req.user?._id;
  
+      if(!freelancerUserId){
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
 
       const freelancer = await resolveFreelancer(freelancerUserId, next);
       if (!freelancer) return;
@@ -1470,6 +1474,21 @@ export const createPackage = catchAsyncError(
  
       await session.commitTransaction();
       transactionCommitted = true;
+
+
+      sendPackageCreatedNotification(
+
+        freelancerUserId.toString(),
+        "freelancer",
+        packageDoc._id.toString(),
+        trackingNumber
+
+      ).catch(error => {
+
+        console.error('Package created notification failed:', error);
+        // Will implement proper logging later
+        
+      });
  
 
       return res.status(201).json({

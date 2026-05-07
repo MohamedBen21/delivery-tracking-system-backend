@@ -18,6 +18,7 @@ import VehicleModel from "../models/vehicle.model";
 import { deleteImage } from "../utils/Multer.util";
 import { buildUserFieldUpdates } from "./manager.controller";
 import PaymentModel from "../models/payment.model";
+import { notifyAdminsNewEntityPending, sendDelivererAccountCreatedNotification, sendDelivererBlockStatusNotification, sendDeliveryFailedNotification, sendFreelancerAccountCreatedNotification, sendFreelancerBlockStatusNotification, sendPackageCancelledNotification, sendPackageCreatedNotification, sendPackageIssueReportedNotification, sendPackageIssueResolvedNotification, sendPackageReturnedToBranchNotification, sendPackageStatusUpdatedNotification, sendTransporterAccountCreatedNotification, sendTransporterBlockStatusNotification } from "../services/notification.service";
 
 
 interface ILocationBody {
@@ -213,6 +214,31 @@ export const createDeliverer = catchAsyncError(
 
       await session.commitTransaction();
       transactionCommitted = true;
+
+
+      const branchName = branch?.name || "Branch";
+
+      // Send notifications for new deliverer
+      Promise.allSettled([
+
+        sendDelivererAccountCreatedNotification(
+          user[0]._id.toString(),
+          firstName,
+          lastName,
+          deliverer[0]._id.toString(),
+          branchName
+        ),
+
+        notifyAdminsNewEntityPending(
+          deliverer[0]._id.toString(),
+          "Deliverer",
+          `${firstName} ${lastName}`
+        )
+      ]).catch(error => {
+
+        console.error('Deliverer creation notifications failed:', error);
+
+      });
 
       const populatedDeliverer = await DelivererModel.findById(deliverer[0]._id)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
@@ -482,6 +508,17 @@ export const toggleBlockDeliverer = catchAsyncError(
 
       await session.commitTransaction();
       transactionCommitted = true;
+
+      sendDelivererBlockStatusNotification(
+
+        deliverer.userId.toString(),
+        delivererId.toString(),
+        !newIsActive
+      ).catch(error => {
+
+        console.error('Deliverer block status notification failed:', error);
+
+      });
 
       const updatedDeliverer = await DelivererModel.findById(delivererId)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
@@ -828,6 +865,28 @@ export const createTransporter = catchAsyncError(
       await session.commitTransaction();
       transactionCommitted = true;
 
+
+      Promise.allSettled([
+        sendTransporterAccountCreatedNotification(
+          user[0]._id.toString(),
+          firstName,
+          lastName,
+          transporter[0]._id.toString(),
+          company?.name || "Company"
+        ),
+
+        notifyAdminsNewEntityPending(
+          transporter[0]._id.toString(),
+          "Transporter",
+          `${firstName} ${lastName}`
+        )
+
+      ]).catch(error => {
+
+        console.error('Transporter creation notifications failed:', error);
+
+      });
+
       const populatedTransporter = await TransporterModel.findById(transporter[0]._id)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("companyId", "name businessType status")
@@ -1090,6 +1149,16 @@ export const toggleBlockTransporter = catchAsyncError(
 
       await session.commitTransaction();
       transactionCommitted = true;
+
+      sendTransporterBlockStatusNotification(
+        transporter.userId.toString(),
+        transporterId.toString(),
+        !newIsActive
+      ).catch(error => {
+
+        console.error('Transporter block status notification failed:', error);
+
+      });
 
       const updatedTransporter = await TransporterModel.findById(transporterId)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
@@ -1891,6 +1960,20 @@ export const createPackage = catchAsyncError(
       await session.commitTransaction();
       transactionCommitted = true;
 
+
+      sendPackageCreatedNotification(
+
+        senderId.toString(),
+        senderType,
+        packageData[0]._id.toString(),
+        trackingNumber
+
+      ).catch(error => {
+
+        console.error('Package created notification failed:', error);
+        // Will implement proper logging later
+      });
+
       const populatedPackage = await PackageModel.findById(packageData[0]._id)
         .populate("senderId", "firstName lastName email phone role")
         .populate("clientId", "firstName lastName email phone")
@@ -2125,6 +2208,25 @@ export const updatePackage = catchAsyncError(
       await session.commitTransaction();
       transactionCommitted = true;
 
+
+      if (body.status && body.status !== packageDoc.status) {
+        sendPackageStatusUpdatedNotification(
+
+          packageDoc.senderId.toString(),
+          packageDoc.senderType,
+          packageId.toString(),
+          packageDoc.trackingNumber,
+          body.status,
+          body.assignedDelivererId
+
+        ).catch(error => {
+
+          console.error('Package status update notification failed:', error);
+          // Will implement proper logging later
+
+        });
+      }
+
       const updatedPackage = await PackageModel.findById(packageId)
         .populate("senderId", "firstName lastName email phone role")
         .populate("clientId", "firstName lastName email phone")
@@ -2140,6 +2242,7 @@ export const updatePackage = catchAsyncError(
         message: "Package updated successfully",
         data: updatedPackage,
       });
+
     } catch (error: any) {
 
       if (error.name === "ValidationError") {
@@ -2273,6 +2376,22 @@ export const toggleCancelPackage = catchAsyncError(
 
       await session.commitTransaction();
       transactionCommitted = true;
+
+      if (newStatus === "cancelled") {
+
+        sendPackageCancelledNotification(
+          
+          packageDoc.senderId.toString(),
+          packageDoc.senderType,
+          packageId.toString(),
+          packageDoc.trackingNumber
+
+        ).catch(error => {
+
+          console.error('Package cancelled notification failed:', error);
+
+        });
+      }
 
       const updatedPackage = await PackageModel.findById(packageId)
         .populate("clientId", "firstName lastName email phone username")
@@ -2583,6 +2702,19 @@ export const addPackageIssue = catchAsyncError(
       await session.commitTransaction();
       transactionCommitted = true;
 
+
+      sendPackageIssueReportedNotification(
+        packageDoc.senderId.toString(),
+        packageDoc.senderType,
+        packageId.toString(),
+        packageDoc.trackingNumber,
+        type
+      ).catch(error => {
+
+        console.error('Package issue notification failed:', error);
+
+      });
+
       const updatedPackage = await PackageModel.findById(packageId)
         .populate("clientId", "firstName lastName email phone username")
         .lean();
@@ -2719,6 +2851,20 @@ export const resolvePackageIssue = catchAsyncError(
 
       await session.commitTransaction();
       transactionCommitted = true;
+
+
+      sendPackageIssueResolvedNotification(
+
+        packageDoc.senderId.toString(),
+        packageDoc.senderType,
+        packageId.toString(),
+        packageDoc.trackingNumber
+
+      ).catch(error => {
+
+        console.error('Package issue resolved notification failed:', error);
+
+      });
 
       const updatedPackage = await PackageModel.findById(packageId)
         .populate("clientId", "firstName lastName email phone username")
@@ -2924,6 +3070,26 @@ export const createFreelancer = catchAsyncError(
 
       await session.commitTransaction();
       transactionCommitted = true;
+
+
+      Promise.allSettled([
+        
+        sendFreelancerAccountCreatedNotification(
+          user[0]._id.toString(),
+          firstName,
+          lastName,
+          freelancer[0]._id.toString()
+        ),
+        notifyAdminsNewEntityPending(
+          freelancer[0]._id.toString(),
+          "Freelancer",
+          `${firstName} ${lastName}`
+        )
+      ]).catch(error => {
+
+        console.error('Freelancer creation notifications failed:', error);
+
+      });
 
       const populatedFreelancer = await FreelancerModel.findById(freelancer[0]._id)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
@@ -3189,6 +3355,18 @@ export const toggleBlockFreelancer = catchAsyncError(
 
       await session.commitTransaction();
       transactionCommitted = true;
+
+
+      sendFreelancerBlockStatusNotification(
+
+        freelancer.userId.toString(),
+        freelancerId.toString(),
+        newStatus === 'suspended'
+      ).catch(error => {
+
+        console.error('Freelancer block status notification failed:', error);
+
+      });
 
       const updatedFreelancer = await FreelancerModel.findById(freelancerId)
         .populate("userId", "firstName lastName email phone username imageUrl role status")
@@ -5277,6 +5455,21 @@ export const cancelPackage = catchAsyncError(
       await session.commitTransaction();
       transactionCommitted = true;
 
+
+      sendPackageCancelledNotification(
+
+        packageDoc.senderId.toString(),
+        packageDoc.senderType,
+        packageId.toString(),
+        packageDoc.trackingNumber,
+        reason
+
+      ).catch(error => {
+
+        console.error('Package cancelled notification failed:', error);
+
+      });
+
       const updatedPackage = await PackageModel.findById(packageId)
         .populate("senderId", "firstName lastName email phone role")
         .populate("originBranchId", "name code address")
@@ -7060,6 +7253,25 @@ export const deliverPackageFail = catchAsyncError(
       await session.commitTransaction();
       transactionCommitted = true;
 
+
+      sendDeliveryFailedNotification(
+
+        packageDoc.senderId.toString(),
+        packageDoc.senderType,
+        packageId.toString(),
+        packageDoc.trackingNumber,
+        newAttemptCount,
+        packageDoc.maxAttempts,
+        reason.trim(),
+        branchId.toString(),
+        nextAttemptDate
+
+      ).catch(error => {
+
+        console.error('Delivery failed notification failed:', error);
+
+      });
+
       return res.status(200).json({
         success: true,
         message: maxReached
@@ -7245,6 +7457,21 @@ export const deliveryReturnPackage = catchAsyncError(
 
       await session.commitTransaction();
       transactionCommitted = true;
+
+
+
+      sendPackageReturnedToBranchNotification(
+        packageDoc.senderId.toString(),
+        packageDoc.senderType,
+        packageId.toString(),
+        packageDoc.trackingNumber,
+        returnReason,
+        branchId.toString(),
+      ).catch(error => {
+
+        console.error('Package returned notification failed:', error);
+
+      });
 
       return res.status(200).json({
         success: true,

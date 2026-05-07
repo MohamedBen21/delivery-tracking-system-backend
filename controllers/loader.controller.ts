@@ -9,6 +9,7 @@ import PackageHistoryModel from "../models/package-history.model";
 import BranchModel from "../models/branch.model";
 import VehicleModel from "../models/vehicle.model";
 import userModel from "../models/user.model";
+import { sendManifestArrivedNotification, sendManifestDepartedNotification, sendManifestDiscrepancyNotification, sendManifestLoadedOnTruckNotification, sendManifestSealedNotification } from "../services/notification.service";
 
 
 
@@ -852,6 +853,20 @@ export const sealManifest = catchAsyncError(
       await session.commitTransaction();
       committed = true;
 
+
+
+      sendManifestSealedNotification(
+        manifest._id.toString(),
+        manifest.manifestCode,
+        manifest.destinationBranchId.toString(),
+        manifest.packageCount
+
+      ).catch(error => {
+
+        console.error('Manifest sealed notification failed:', error);
+
+      });
+
       return res.status(200).json({
         success: true,
         message: `Manifest ${manifest.manifestCode} sealed successfully.`,
@@ -1076,6 +1091,20 @@ export const loadManifestOnTruck = catchAsyncError(
       await session.commitTransaction();
       committed = true;
 
+
+      sendManifestLoadedOnTruckNotification(
+        manifest._id.toString(),
+        manifest.manifestCode,
+        manifest.packageCount,
+        transporterUserId,
+        transporterUserId, 
+        manifest.destinationBranchId.toString()
+      ).catch(error => {
+
+        console.error('Manifest loaded notification failed:', error);
+
+      });
+
       return res.status(200).json({
         success: true,
         message: `Manifest ${manifest.manifestCode} loaded onto vehicle. Ready for departure.`,
@@ -1123,6 +1152,10 @@ export const markManifestDeparted = catchAsyncError(
       const loaderUserId = req.user?._id;
       const { manifestId } = req.params;
       const { notes } = req.body as { notes?: string };
+
+      if(!loaderUserId){
+        return next(new ErrorHandler("Unauthorized.", 401));
+      }
 
       if (!mongoose.Types.ObjectId.isValid(manifestId.toString())) {
         return next(new ErrorHandler("Invalid manifestId.", 400));
@@ -1216,6 +1249,19 @@ export const markManifestDeparted = catchAsyncError(
 
       await session.commitTransaction();
       committed = true;
+
+      sendManifestDepartedNotification(
+        manifest._id.toString(),
+        manifest.manifestCode,
+        packageIds.length,
+        manifest.transportLeg?.transporterId?.toString() || loaderUserId.toString(),
+        manifest.destinationBranchId.toString(),
+        manifest.estimatedArrival
+      ).catch(error => {
+
+        console.error('Manifest departed notification failed:', error);
+
+      });
 
       return res.status(200).json({
         success: true,
@@ -1374,6 +1420,16 @@ export const markManifestArrived = catchAsyncError(
 
       await session.commitTransaction();
       committed = true;
+
+      sendManifestArrivedNotification(
+        manifest._id.toString(),
+        manifest.manifestCode,
+        packageIds.length
+      ).catch(error => {
+
+        console.error('Manifest arrived notification failed:', error);
+        // Will implement proper logging later
+      });
 
       return res.status(200).json({
         success: true,
@@ -2172,6 +2228,19 @@ export const flagDiscrepancy = catchAsyncError(
 
       await session.commitTransaction();
       committed = true;
+
+
+      sendManifestDiscrepancyNotification(
+        manifest._id.toString(),
+        manifest.manifestCode,
+        missingIds.length,
+        extraIds.length
+        
+      ).catch(error => {
+
+        console.error('Manifest discrepancy notification failed:', error);
+        // Will implement proper logging later
+      });
 
       return res.status(200).json({
         success: true,
