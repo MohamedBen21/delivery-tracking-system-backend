@@ -404,3 +404,162 @@ export async function sendPackageStatusUpdatedNotification(
 }
 
 
+/**
+ * Triggered: supervisor_controller → toggleCancelPackage.
+ * Recipient: the sender (freelancer/client).
+ */
+
+export async function sendPackageCancelledNotification(
+  senderUserId: string,
+  senderType: string,
+  packageId: string,
+  trackingNumber: string,
+  reason?: string,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(senderUserId);
+    const title = "Package Cancelled";
+
+    const message = reason
+      ? `Package ${trackingNumber} has been cancelled. Reason: ${reason}.`
+      : `Package ${trackingNumber} has been cancelled. Contact support for more details.`;
+    const iconType: IconType = senderType === "freelancer" ? "freelancer_app" : "client_app";
+
+    const notificationData = {
+
+      type: "package_cancelled",
+      route: `/packages/${packageId}`,
+      id: packageId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: senderUserId,
+      notificationType: "package_cancelled",
+      referenceId: packageId,
+      referenceType: "Package",
+      title,
+      message,
+      priority: "high",
+      userType: senderType,
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store package cancelled notification:", err));
+
+  } catch (error) {
+    console.error("Failed to send package cancelled notification:", error);
+  }
+}
+
+
+/**
+ * Triggered: supervisor_controller → addPackageIssue.
+ * Recipient: the sender (freelancer/client) when a problem is flagged on their package.
+ */
+
+export async function sendPackageIssueReportedNotification(
+  senderUserId: string,
+  senderType: string,
+  packageId: string,
+  trackingNumber: string,
+  issueType: string,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(senderUserId);
+    const title = "Issue Reported on Your Package ⚠️";
+
+    const message = `An issue of type "${issueType}" has been reported on package ${trackingNumber}. Our team is looking into it.`;
+    const iconType: IconType = senderType === "freelancer" ? "freelancer_app" : "client_app";
+
+    const notificationData = {
+      type: "package_issue",
+      route: `/packages/${packageId}`,
+      id: packageId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: senderUserId,
+      notificationType: "package_issue",
+      referenceId: packageId,
+      referenceType: "Package",
+      title,
+      message,
+      priority: "high",
+      userType: senderType,
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store package issue notification:", err));
+
+  } catch (error) {
+    console.error("Failed to send package issue notification:", error);
+  }
+}
+
+
+/**
+ * Triggered: supervisor_controller → resolvePackageIssue.
+ * Recipient: the sender when the issue on their package is resolved.
+ */
+
+export async function sendPackageIssueResolvedNotification(
+  senderUserId: string,
+  senderType: string,
+  packageId: string,
+  trackingNumber: string,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(senderUserId);
+    const title = "Package Issue Resolved";
+
+    const message = `The issue reported on package ${trackingNumber} has been resolved. Delivery will continue as normal.`;
+    const iconType: IconType = senderType === "freelancer" ? "freelancer_app" : "client_app";
+
+    const notificationData = {
+      type: "package_issue_resolved",
+      route: `/packages/${packageId}`,
+      id: packageId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: senderUserId,
+      notificationType: "package_issue_resolved",
+      referenceId: packageId,
+      referenceType: "Package",
+      title,
+      message,
+      priority: "normal",
+      userType: senderType,
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store issue resolved notification:", err));
+
+  } catch (error) {
+    console.error("Failed to send package issue resolved notification:", error);
+  }
+}
+
+
+
