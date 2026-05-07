@@ -775,3 +775,293 @@ export async function sendFreelancerBlockStatusNotification(
 
 
 
+//  DELIVERER ACCOUNT & ASSIGNMENT EVENTS  (triggered from supervisor_controller)
+
+/**
+ * Triggered: supervisor_controller → assignDeliverer.
+ * Recipient: the new deliverer.
+ */
+
+export async function sendDelivererAccountCreatedNotification(
+  delivererUserId: string,
+  firstName: string,
+  lastName: string,
+  delivererId: string,
+  branchName: string,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(delivererUserId);
+    const title = "You've Been Assigned as a Deliverer 🚚";
+
+    const message = `Dear ${firstName} ${lastName}, you have been assigned as a deliverer at ${branchName}. Log in to view your deliveries.`;
+    const iconType: IconType = "delivery_app";
+
+    const notificationData = {
+      type: "account_created",
+      route: "/deliverer/dashboard",
+      id: delivererId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: delivererUserId,
+      notificationType: "account_created",
+      referenceId: delivererId,
+      referenceType: "Deliverer",
+      title,
+      message,
+      priority: "normal",
+      userType: "deliverer",
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store deliverer account notification:", err));
+
+  } catch (error) {
+    console.error("Failed to send deliverer account created notification:", error);
+  }
+}
+
+
+/**
+ * Triggered: supervisor_controller → toggleBlockDeliverer.
+ * Recipient: the deliverer being blocked or unblocked.
+ */
+
+
+export async function sendDelivererBlockStatusNotification(
+  delivererUserId: string,
+  delivererId: string,
+  isBlocked: boolean,
+) {
+  try {
+
+    const fcmToken = await getFcmToken(delivererUserId);
+    const title = isBlocked ? "Account Suspended" : "Account Reactivated";
+
+    const message = isBlocked
+      ? "Your deliverer account has been suspended. Please contact your supervisor for more information."
+      : "Your deliverer account has been reactivated. You can resume accepting deliveries.";
+    const iconType: IconType = "delivery_app";
+
+    const notificationData = {
+      type: isBlocked ? "account_blocked" : "account_unblocked",
+      route: "/deliverer/account-status",
+      id: delivererId,
+      iconType,
+    };
+
+    if (fcmToken) {
+      await sendNotificationToDevice(fcmToken, title, message, notificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: delivererUserId,
+      notificationType: isBlocked ? "account_blocked" : "account_unblocked",
+      referenceId: delivererId,
+      referenceType: "Deliverer",
+      title,
+      message,
+      priority: "high",
+      userType: "deliverer",
+      route: notificationData.route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store deliverer block status notification:", err));
+
+  } catch (error) {
+    console.error("Failed to send deliverer block status notification:", error);
+  }
+}
+
+
+
+//  MANIFEST / LOADER EVENTS  (triggered from loader_controller)
+
+
+/**
+ * Triggered: loader_controller → sealManifest.
+ * Recipient: supervisors of the destination branch – a sealed manifest is on its way.
+ * Uses multi-device send since there may be multiple supervisors.
+ */
+
+export async function sendManifestSealedNotification(
+  manifestId: string,
+  manifestCode: string,
+  destinationBranchId: string,
+  packageCount: number,
+) {
+  try {
+
+    const supervisors = await userModel
+      .find({ role: "supervisor", fcm_token: { $exists: true, $ne: null } })
+      .select("fcm_token _id")
+      .lean();
+
+    // We target all supervisors for now; if you have a branch-supervisor join
+    // model you can filter by destinationBranchId here.
+
+    const tokens = supervisors
+      .map((s) => (s as any).fcm_token as string)
+      .filter(Boolean);
+
+    if (!tokens.length) return;
+
+    const title = "Manifest Sealed & Dispatched ";
+    const message = `Manifest ${manifestCode} containing ${packageCount} package(s) has been sealed and is heading to your branch.`;
+    const iconType: IconType = "manager_app";
+    const notificationData = {
+      type: "manifest_sealed",
+      route: `/manifests/${manifestId}`,
+      id: manifestId,
+      iconType,
+    };
+
+    await sendNotificationToMultipleDevices(tokens, title, message, notificationData);
+  } catch (error) {
+    console.error("Failed to send manifest sealed notification:", error);
+  }
+}
+
+
+/**
+ * Triggered: loader_controller → markManifestArrived.
+ * Recipient: supervisors – an inbound manifest has arrived and needs unloading.
+ */
+
+export async function sendManifestArrivedNotification(
+  manifestId: string,
+  manifestCode: string,
+  packageCount: number,
+) {
+  try {
+
+    const supervisors = await userModel
+      .find({ role: "supervisor", fcm_token: { $exists: true, $ne: null } })
+      .select("fcm_token")
+      .lean();
+
+    const tokens = supervisors
+      .map((s) => (s as any).fcm_token as string)
+      .filter(Boolean);
+
+    if (!tokens.length) return;
+
+    const title = "Manifest Arrived ";
+    const message = `Manifest ${manifestCode} with ${packageCount} package(s) has arrived at your branch and is ready for unloading.`;
+
+    const iconType: IconType = "manager_app";
+
+    const notificationData = {
+      type: "manifest_arrived",
+      route: `/manifests/${manifestId}`,
+      id: manifestId,
+      iconType,
+    };
+
+    await sendNotificationToMultipleDevices(tokens, title, message, notificationData);
+
+  } catch (error) {
+    console.error("Failed to send manifest arrived notification:", error);
+  }
+}
+
+
+/**
+ * Triggered: loader_controller → flagDiscrepancy.
+ * Recipient: supervisors – a discrepancy was found during manifest unloading.
+ */
+
+export async function sendManifestDiscrepancyNotification(
+  manifestId: string,
+  manifestCode: string,
+  missingCount: number,
+  extraCount: number,
+) {
+  try {
+
+    const supervisors = await userModel
+      .find({ role: "supervisor", fcm_token: { $exists: true, $ne: null } })
+      .select("fcm_token")
+      .lean();
+
+    const tokens = supervisors
+      .map((s) => (s as any).fcm_token as string)
+      .filter(Boolean);
+
+    if (!tokens.length) return;
+
+    const title = "Manifest Discrepancy Reported ⚠️";
+    const message = `A discrepancy was flagged on manifest ${manifestCode}: ${missingCount} missing, ${extraCount} extra package(s). Supervisor review required.`;
+
+    const iconType: IconType = "manager_app";
+
+    const notificationData = {
+      type: "manifest_discrepancy",
+      route: `/manifests/${manifestId}`,
+      id: manifestId,
+      iconType,
+    };
+
+    await sendNotificationToMultipleDevices(tokens, title, message, notificationData);
+
+  } catch (error) {
+    console.error("Failed to send manifest discrepancy notification:", error);
+  }
+}
+
+
+
+//  ADMIN / BROADCAST EVENTS
+
+
+/**
+ * Triggered: supervisor_controller → createFreelancer / auth_controller → createManager.
+ * Recipient: all admins – a new entity is pending review.
+ * Generic helper used for any "admin attention required" scenario.
+ */
+
+
+export async function notifyAdminsNewEntityPending(
+  entityId: string,
+  entityType: "Freelancer" | "Manager" | "Deliverer" | "Transporter",
+  displayName: string,
+) {
+  try {
+
+    const admins = await userModel
+      .find({ role: "admin", fcm_token: { $exists: true, $ne: null } })
+      .select("fcm_token")
+      .lean();
+
+    const tokens = admins
+      .map((a) => (a as any).fcm_token as string)
+      .filter(Boolean);
+
+    if (!tokens.length) return;
+
+    const title = `New ${entityType} Registered`;
+    const message = `${entityType} "${displayName}" has completed registration and may require your attention.`;
+
+    const iconType: IconType = "manager_app";
+
+    const notificationData = {
+      type: "account_created",
+      route: "/admin/dashboard",
+      id: entityId,
+      iconType,
+    };
+
+    await sendNotificationToMultipleDevices(tokens, title, message, notificationData);
+    
+  } catch (error) {
+    console.error(`Failed to notify admins of new ${entityType}:`, error);
+  }
+}
