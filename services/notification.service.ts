@@ -1514,3 +1514,194 @@ export async function sendSupervisorBlockStatusNotification(
 }
 
 
+//  DELIVERER FIELD EVENTS  (triggered from supervisor_controller)
+
+
+/**
+ * Triggered: supervisor_controller → deliverPackageFail.
+ * Recipients:
+ *   - The sender – delivery attempt failed, with attempt count context.
+ *   - Branch supervisors – a failed delivery may require their intervention,
+ *     especially when max attempts are reached and the package will be returned.
+ */
+
+export async function sendDeliveryFailedNotification(
+  senderUserId: string,
+  senderType: string,
+  packageId: string,
+  trackingNumber: string,
+  attemptCount: number,
+  maxAttempts: number,
+  reason: string,
+  branchId: string,
+  nextAttemptDate?: Date,
+) {
+  try {
+    const maxReached = attemptCount >= maxAttempts;
+    const iconType: IconType = senderType === "freelancer" ? "freelancer_app" : "client_app";
+    const route = `/packages/${packageId}`;
+
+
+    const senderFcmToken = await getFcmToken(senderUserId);
+
+    const senderTitle = maxReached
+      ? "Package Being Returned 🔄"
+      : `Delivery Attempt ${attemptCount}/${maxAttempts} Failed`;
+
+    const senderMessage = maxReached
+      ? `All ${maxAttempts} delivery attempts for package ${trackingNumber} have been exhausted. The package will be returned to the branch.`
+      : `Delivery attempt ${attemptCount} of ${maxAttempts} for package ${trackingNumber} was unsuccessful. Reason: ${reason}.${
+          nextAttemptDate ? ` Next attempt: ${nextAttemptDate.toLocaleDateString()}.` : ""
+        }`;
+
+    const senderNotificationData = {
+      type: "package_status_update",
+      status: maxReached ? "returned" : "failed_delivery",
+      route,
+      id: packageId,
+      iconType,
+    };
+
+    if (senderFcmToken) {
+      await sendNotificationToDevice(senderFcmToken, senderTitle, senderMessage, senderNotificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: senderUserId,
+      notificationType: "package_status_update",
+      referenceId: packageId,
+      referenceType: "Package",
+      title: senderTitle,
+      message: senderMessage,
+      priority: "high",
+      userType: senderType,
+      route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store delivery failed notification (sender):", err));
+
+
+    const supervisors = await userModel
+      .find({ role: "supervisor", fcm_token: { $exists: true, $ne: null } })
+      .select("fcm_token _id")
+      .lean();
+
+    const tokens = supervisors
+      .map((s) => (s as any).fcm_token as string)
+      .filter(Boolean);
+
+    if (tokens.length) {
+      const supervisorTitle = maxReached
+        ? `Package ${trackingNumber} — Max Attempts Reached ⚠️`
+        : `Delivery Failed — ${trackingNumber} (Attempt ${attemptCount}/${maxAttempts})`;
+
+      const supervisorMessage = maxReached
+        ? `Package ${trackingNumber} has exhausted all ${maxAttempts} delivery attempts. It will be returned to the branch. Action may be required.`
+        : `Deliverer reported a failed attempt on package ${trackingNumber}. Reason: ${reason}. Attempt ${attemptCount} of ${maxAttempts}.`;
+
+      const supervisorNotificationData = {
+        type: "package_status_update",
+        status: maxReached ? "returned" : "failed_delivery",
+        route: `/branch/packages/${packageId}`,
+        id: packageId,
+        iconType: "manager_app" as IconType,
+      };
+
+      await sendNotificationToMultipleDevices(
+        tokens,
+        supervisorTitle,
+        supervisorMessage,
+        supervisorNotificationData,
+      );
+    }
+  } catch (error) {
+    console.error("Failed to send delivery failed notification:", error);
+  }
+}
+
+
+/**
+ * Triggered: supervisor_controller → deliveryReturnPackage (status → returned).
+ * Recipients:
+ *   - The sender – their package has physically arrived back at the branch.
+ *   - Branch supervisors – a returned package is back in the branch and needs handling.
+ */
+
+export async function sendPackageReturnedToBranchNotification(
+  senderUserId: string,
+  senderType: string,
+  packageId: string,
+  trackingNumber: string,
+  reason: string,
+  branchId: string,
+) {
+  try {
+
+    const iconType: IconType = senderType === "freelancer" ? "freelancer_app" : "client_app";
+    const route = `/packages/${packageId}`;
+
+
+    const senderFcmToken = await getFcmToken(senderUserId);
+    const senderTitle = "Package Returned to Branch";
+    const senderMessage = `Your package ${trackingNumber} could not be delivered and has been returned to the branch. Reason: ${reason}. Please contact support to arrange redelivery or pickup.`;
+
+    const senderNotificationData = {
+      type: "package_status_update",
+      status: "returned",
+      route,
+      id: packageId,
+      iconType,
+    };
+
+    if (senderFcmToken) {
+      await sendNotificationToDevice(senderFcmToken, senderTitle, senderMessage, senderNotificationData);
+    }
+
+    storeNotificationInDB({
+
+      userId: senderUserId,
+      notificationType: "package_status_update",
+      referenceId: packageId,
+      referenceType: "Package",
+      title: senderTitle,
+      message: senderMessage,
+      priority: "high",
+      userType: senderType,
+      route,
+      iconType,
+
+    }).catch((err) => console.error("Failed to store package returned notification (sender):", err));
+
+
+    const supervisors = await userModel
+      .find({ role: "supervisor", fcm_token: { $exists: true, $ne: null } })
+      .select("fcm_token _id")
+      .lean();
+
+    const tokens = supervisors
+      .map((s) => (s as any).fcm_token as string)
+      .filter(Boolean);
+
+    if (tokens.length) {
+      const supervisorTitle = `Returned Package at Branch — ${trackingNumber}`;
+      const supervisorMessage = `Package ${trackingNumber} has been physically returned to the branch by the deliverer. Reason: ${reason}. Please process the return.`;
+      const supervisorNotificationData = {
+        type: "package_status_update",
+        status: "returned",
+        route: `/branch/packages/${packageId}`,
+        id: packageId,
+        iconType: "manager_app" as IconType,
+      };
+
+      await sendNotificationToMultipleDevices(
+        tokens,
+        supervisorTitle,
+        supervisorMessage,
+        supervisorNotificationData,
+      );
+    }
+  } catch (error) {
+    console.error("Failed to send package returned to branch notification:", error);
+  }
+}
