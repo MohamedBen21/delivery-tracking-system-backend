@@ -9,6 +9,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { socketAuth } from './middleware/socketAuth';
 import { SocketService } from './services/socket.service';
+import { startStalePresenceCleanup } from './Cron/cleanupStalePresence.job'; 
 
 const port = process.env.PORT || 8080;
 
@@ -20,6 +21,8 @@ async function bootstrap() {
   connectRedis();
 
 
+  startStalePresenceCleanup();
+
   const httpServer = createServer(app);
   
 
@@ -28,7 +31,14 @@ async function bootstrap() {
       origin: process.env.ORIGIN || "http://localhost:5173",
       methods: ["GET", "POST"],
       credentials: true
-    }
+    },
+
+    pingTimeout: 20000,   // disconnect after 20 seconds of no pong from client
+    pingInterval: 25000,  // send ping to client every 25 seconds
+    transports: ["websocket"], // prefer WebSocket over polling
+    allowUpgrades: true,  // allow upgrade from polling to WebSocket
+    upgradeTimeout: 10000, // timeout for upgrade to WebSocket (10 seconds)
+
   });
   
 
@@ -44,6 +54,8 @@ async function bootstrap() {
   const server = httpServer.listen(port, () => {
 
     console.log(`App is running on port ${port} with Socket.IO support`);
+    console.log(`Socket.IO settings: pingTimeout=20s, pingInterval=25s, grace-period=30s`);
+    
     startScheduler();
   });
 

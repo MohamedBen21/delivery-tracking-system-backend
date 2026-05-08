@@ -13,6 +13,8 @@ import { IUser } from "../models/user.model";
 import sendSMS from "../utils/sendSMS";
 import PaymentModel from "../models/payment.model";
 
+import { PresenceService } from "./presence.service";
+
 
 
 export type DeliveryUserRole = "deliverer" | "transporter" | "client" | "freelancer" | "supervisor" | "manager" | "admin";
@@ -58,7 +60,8 @@ export class SocketService {
   // packageId -> { code, expiresAt } -- in-memory, short-lived (10 min)
   private deliveryOTPs: Map<string, { code: string; expiresAt: number }> = new Map();
 
-
+  // userId → pending offline timer (grace period for mobile reconnects)
+  private disconnectTimers: Map<string, NodeJS.Timeout> = new Map();
 
 
   private getPackageRoom(packageId: string): string {
@@ -129,6 +132,21 @@ export class SocketService {
 
       // Register socket by role
       this.registerSocket(userId, role, socket.id);
+
+      // ── PRESENCE: cancel grace-period timer if user reconnected in time ──
+      if (role === "deliverer" || role === "transporter") {
+        const pending = this.disconnectTimers.get(userId);
+        if (pending) {
+          clearTimeout(pending);
+          this.disconnectTimers.delete(userId);
+          console.log(`[Socket] Reconnected within grace period: userId=${userId}`);
+        }
+        // Mark online in Redis (HHASH + SET)
+        await PresenceService.setOnline(userId, role).catch((err) =>
+          console.error("[Socket] PresenceService.setOnline failed:", err.message)
+        );
+      }
+      // ─────────────────────────────────────────────────────────────────────
 
       // Join company / branch rooms (populated by middleware or from DB)
       await this.joinRoleRooms(socket, userId, role);
@@ -2070,40 +2088,51 @@ export class SocketService {
       //  DISCONNECT
       // ══════════════════════════════════════════════════════════════════════
 
-      socket.on("disconnect", async () => {
-        console.log(`[Socket] Disconnected: userId=${userId} role=${role} socketId=${socket.id}`);
+      socket.on("disconnect", async (reason) => {
+
+        console.log(`[Socket] Disconnected: userId=${userId} role=${role} reason=${reason}`);
 
         this.unregisterSocket(userId, role);
 
-        // Mark offline in DB
-        try {
-          if (role === "deliverer") {
-            // Do NOT forcibly change availabilityStatus on disconnect —
-            // the deliverer may just be reconnecting. The last known status stays.
-            await DelivererModel.findOneAndUpdate(
-              { userId },
-              { lastActiveAt: new Date() }
-            );
-            await this.broadcastOnlineStatus(userId, role, false);
-          } else if (role === "transporter") {
-            await TransporterModel.findOneAndUpdate(
-              { userId },
-              { lastActiveAt: new Date() }
-            );
-            await this.broadcastOnlineStatus(userId, role, false);
-          }
-        } catch (err) {
-          console.error("[Socket] Error on disconnect cleanup:", err);
-        }
+        if (role === "deliverer" || role === "transporter") {
+          // ── Grace period: wait 30s before treating as truly offline ────────
+          // Covers mobile network switches, tunnels, brief signal loss.
+          const timer = setTimeout(async () => {
+            this.disconnectTimers.delete(userId);
 
-        // Notify clients actively tracking a package this deliverer is on
-        if (role === "deliverer") {
-          await this.notifyDelivererOfflineToTrackers(userId);
-        }
+            // User didn't reconnect — mark as offline
+            try {
+              if (role === "deliverer") {
+                await DelivererModel.findOneAndUpdate(
+                  { userId },
+                  { isOnline: false, lastActiveAt: new Date() }
+                );
+                await this.broadcastOnlineStatus(userId, role, false);
+                await this.notifyDelivererOfflineToTrackers(userId);
 
-        // Notify branch room about transporter going offline
-        if (role === "transporter") {
-          await this.notifyTransporterOfflineToBranch(userId);
+              } else if (role === "transporter") {
+                
+                await TransporterModel.findOneAndUpdate(
+                  { userId },
+                  { isOnline: false, lastActiveAt: new Date() }
+                );
+                await this.broadcastOnlineStatus(userId, role, false);
+                await this.notifyTransporterOfflineToBranch(userId);
+              }
+
+              // Remove from Redis (HASH + SET)
+              await PresenceService.setOffline(userId, role).catch((err) =>
+                console.error("[Socket] PresenceService.setOffline failed:", err.message)
+              );
+
+              console.log(`[Socket] Marked offline after grace period: userId=${userId} role=${role}`);
+            } catch (err) {
+              console.error("[Socket] Error on disconnect cleanup:", err);
+            }
+          }, 30000); // 30-second grace period
+
+          this.disconnectTimers.set(userId, timer);
+          console.log(`[Socket] Grace period started: userId=${userId} (30s to reconnect)`);
         }
       });
     });
