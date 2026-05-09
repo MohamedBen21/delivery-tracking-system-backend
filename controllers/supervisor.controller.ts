@@ -10102,3 +10102,149 @@ export const getMyDeliveries = catchAsyncError(
 );
 
 
+export const getMyDeliveryById = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+
+    if (!req.user?._id) {
+      return next(new ErrorHandler("Authentication required.", 401));
+    }
+
+
+    const { packageId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(packageId.toString())) {
+      return next(new ErrorHandler("Invalid package ID.", 400));
+    }
+
+    const userId      = req.user?._id;
+    const delivererId = await resolveDelivererId(userId, next);
+    if (!delivererId) return;
+
+
+
+    const pkg = await PackageModel.findOne({
+      _id:                 new mongoose.Types.ObjectId(packageId.toString()),
+      assignedDelivererId: delivererId,
+    }).lean();
+
+    if (!pkg) {
+      return next(
+        new ErrorHandler(
+          "Delivery not found or not assigned to you.",
+          404,
+        ),
+      );
+    }
+
+
+    const detail = {
+      id:             pkg._id,
+      trackingNumber: pkg.trackingNumber,
+      status:         pkg.status,
+      type:           pkg.type,
+      isFragile:      pkg.isFragile,
+      description:    pkg.description ?? null,
+      images:         pkg.images ?? [],
+
+
+
+      weight:     pkg.weight,
+      volume:     pkg.volume ?? null,
+      dimensions: pkg.dimensions ?? null,
+
+
+      destination: {
+        recipientName:    pkg.destination.recipientName,
+        recipientPhone:   pkg.destination.recipientPhone,
+        alternativePhone: pkg.destination.alternativePhone ?? null,
+        address:          pkg.destination.address,
+        city:             pkg.destination.city,
+        state:            pkg.destination.state,
+        postalCode:       pkg.destination.postalCode ?? null,
+        coordinates:      pkg.destination.location?.coordinates ?? null,
+        notes:            pkg.destination.notes ?? null,
+      },
+
+
+      deliveryType:          pkg.deliveryType,
+      deliveryPriority:      pkg.deliveryPriority,
+      estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
+      destinationBranchId:   pkg.destinationBranchId ?? null,
+
+
+      totalPrice:    pkg.totalPrice,
+      paymentStatus: pkg.paymentStatus,
+      paymentMethod: pkg.paymentMethod ?? null,
+      paidAt:        pkg.paidAt ?? null,
+
+
+      assignedDelivererId:   pkg.assignedDelivererId,
+      assignedTransporterId: pkg.assignedTransporterId ?? null,
+      assignedVehicleId:     pkg.assignedVehicleId ?? null,
+      currentRouteId:        pkg.currentRouteId ?? null,
+
+
+      attemptCount:    pkg.attemptCount,
+      maxAttempts:     pkg.maxAttempts,
+      lastAttemptDate: pkg.lastAttemptDate ?? null,
+      nextAttemptDate: pkg.nextAttemptDate ?? null,
+
+
+      returnInfo: {
+        isReturn:     pkg.returnInfo?.isReturn ?? false,
+        reason:       pkg.returnInfo?.reason ?? null,
+        returnDate:   pkg.returnInfo?.returnDate ?? null,
+        refundAmount: pkg.returnInfo?.refundAmount ?? null,
+        refundStatus: pkg.returnInfo?.refundStatus ?? null,
+        returnNotes:  pkg.returnInfo?.returnNotes ?? null,
+      },
+
+
+      issues: (pkg.issues ?? []).map((issue: any) => ({
+        type:        issue.type,
+        description: issue.description,
+        reportedBy:  issue.reportedBy,
+        reportedAt:  issue.reportedAt,
+        resolved:    issue.resolved,
+        resolvedAt:  issue.resolvedAt ?? null,
+        resolution:  issue.resolution ?? null,
+        priority:    issue.priority ?? null,
+      })),
+      unresolvedIssuesCount: (pkg.issues ?? []).filter((i: any) => !i.resolved).length,
+
+
+      trackingHistory: (pkg.trackingHistory ?? [])
+        .slice()
+        .sort(
+          (a: any, b: any) =>
+            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+        )
+        .map((event: any) => ({
+          status:    event.status,
+          location:  event.location ?? null,
+          branchId:  event.branchId ?? null,
+          notes:     event.notes ?? null,
+          timestamp: event.timestamp,
+        })),
+
+
+        deliveryOtp: pkg.deliveryOtp
+        ? {
+            code:        pkg.deliveryOtp.code,
+            expiresAt:   pkg.deliveryOtp.expiresAt,
+            verified:    pkg.deliveryOtp.verified,
+            verifiedAt:  pkg.deliveryOtp.verifiedAt ?? null,
+          }
+        : null,
+
+
+        createdAt:   pkg.createdAt,
+      updatedAt:   pkg.updatedAt,
+      deliveredAt: pkg.deliveredAt ?? null,
+    };
+
+    res.status(200).json({
+      success: true,
+      data: { delivery: detail },
+    });
+  },
+);
