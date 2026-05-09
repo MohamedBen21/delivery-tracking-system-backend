@@ -4,6 +4,8 @@ import {
   arrivedAtBranchOutForDelivery,
   deliverPackageFail,
   deliveryReturnPackage,
+  getMyDeliveries,
+  getMyDeliveryById,
   toggleOnlineStatus,
 } from "../controllers/supervisor.controller";
 
@@ -27,5 +29,10 @@ delivererRouter.post(
   deliveryReturnPackage,
 );
 delivererRouter.patch("/online/toggle", ...chain, toggleOnlineStatus);
+
+
+delivererRouter.get("/deliverer/deliveries", ...chain , getMyDeliveries);
+
+delivererRouter.get("/deliverer/deliveries", ...chain , getMyDeliveryById);
 
 export default delivererRouter;
