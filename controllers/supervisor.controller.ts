@@ -19,6 +19,7 @@ import { deleteImage } from "../utils/Multer.util";
 import { buildUserFieldUpdates } from "./manager.controller";
 import PaymentModel from "../models/payment.model";
 import { notifyAdminsNewEntityPending, sendDelivererAccountCreatedNotification, sendDelivererBlockStatusNotification, sendDeliveryFailedNotification, sendFreelancerAccountCreatedNotification, sendFreelancerBlockStatusNotification, sendPackageCancelledNotification, sendPackageCreatedNotification, sendPackageIssueReportedNotification, sendPackageIssueResolvedNotification, sendPackageReturnedToBranchNotification, sendPackageStatusUpdatedNotification, sendTransporterAccountCreatedNotification, sendTransporterBlockStatusNotification } from "../services/notification.service";
+import ManifestModel from "../models/manifest.model";
 
 
 interface ILocationBody {
@@ -6409,31 +6410,70 @@ async function writeHistory(
 
 
 
-//  TRANSPORTER — MARK PACKAGES IN TRANSIT
-//  called when the transporter taps "Start Transport".
-export const transporterMarkPackagesInTransit = catchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
+// ─────────────────────────────────────────────────────────────────────────────
+//  transporter.controller.ts  (hub-model section)
+//
+//  Two controllers are updated here:
+//
+//  1. transporterMarkManifestsInTransit
+//     Replaces the old "mark packages in transit" action.
+//     The transporter taps "Start Trip" — all manifests on the route are
+//     marked in_transit.  For hub_to_hub routes the single destination manifest
+//     group departs; for hub_to_branch routes every stop's manifest bags depart.
+//
+//  2. transporterMarkArrivedAtStop
+//     Replaces "mark packages arrived at branch".
+//     Called when the transporter arrives at each stop (branch or destination hub).
+//     Marks the manifests for THAT stop as `arrived` and, if it is the last stop,
+//     closes the route.
+//
+//  NOTE: raw-package status updates (in_transit_to_branch, at_destination_branch)
+//  are now driven by manifest events, NOT by the transporter controller directly.
+//  The ManifestModel.markDeparted() and ManifestModel.markArrived() hooks cascade
+//  status changes to their contained packages.
+// ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  HELPER — collect manifest IDs from the route (all stops, or a single stop)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function manifestIdsFromRoute(route: any): mongoose.Types.ObjectId[] {
+  return route.stops.flatMap(
+    (stop: any) =>
+      (stop.manifestIds ?? []).map(
+        (id: any) => new mongoose.Types.ObjectId(id.toString()),
+      ),
+  );
+}
+
+function manifestIdsFromStop(stop: any): mongoose.Types.ObjectId[] {
+  return (stop.manifestIds ?? []).map(
+    (id: any) => new mongoose.Types.ObjectId(id.toString()),
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  1.  MARK MANIFESTS IN TRANSIT  (transporter taps "Start Trip")
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const transporterMarkManifestsInTransit = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
     const session = await mongoose.startSession();
     session.startTransaction();
-
     let transactionCommitted = false;
 
     try {
       const transporterUserId = req.user?._id;
-      const { routeId } = req.params;
-      const { notes } = req.body as { notes?: string };
+      const { routeId }       = req.params;
+      const { notes }         = req.body as { notes?: string };
 
       if (!transporterUserId) {
-
-        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+        return next(new ErrorHandler('Unauthorized, you are not authenticated.', 401));
       }
-
       if (!routeId || !mongoose.Types.ObjectId.isValid(routeId.toString())) {
-
-        return next(new ErrorHandler("Invalid route ID", 400));
+        return next(new ErrorHandler('Invalid route ID', 400));
       }
-
 
       const [transporter, route] = await Promise.all([
         TransporterModel.findOne({ userId: transporterUserId }).session(session),
@@ -6441,90 +6481,73 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
       ]);
 
       if (!transporter || !transporter.isActive || transporter.isSuspended) {
-
-        throw new ErrorHandler("Transporter account is not active", 403);
+        throw new ErrorHandler('Transporter account is not active', 403);
       }
-
-      if (transporter.verificationStatus !== "verified") {
-
-        throw new ErrorHandler("Transporter is not verified", 403);
+      if (transporter.verificationStatus !== 'verified') {
+        throw new ErrorHandler('Transporter is not verified', 403);
       }
-
       if (!route) {
-
-        throw new ErrorHandler("Route not found", 404);
+        throw new ErrorHandler('Route not found', 404);
       }
-
-
       if (!route.assignedTransporterId?.equals(transporter._id)) {
-
-        throw new ErrorHandler("You are not assigned to this route", 403);
+        throw new ErrorHandler('You are not assigned to this route', 403);
       }
-
-      if (route.status === "active") {
-
-        throw new ErrorHandler("Route is already active", 400);
+      if (route.status === 'active') {
+        throw new ErrorHandler('Route is already active', 400);
       }
-
-      if (!["planned", "assigned"].includes(route.status)) {
+      if (!['planned', 'assigned'].includes(route.status)) {
         throw new ErrorHandler(
           `Cannot start a route with status '${route.status}'`,
           400,
         );
       }
 
+      // ── Gather all manifest IDs from the route ──────────────────────────────
+      const allManifestIds = manifestIdsFromRoute(route);
 
-      const allPackageIds: mongoose.Types.ObjectId[] = route.stops.flatMap(
-        (stop) => stop.packageIds.map((id) => new mongoose.Types.ObjectId(id.toString())),
+      if (allManifestIds.length === 0) {
+        throw new ErrorHandler('Route has no manifests assigned', 400);
+      }
+
+      // ── Validate manifests are sealed and loaded ────────────────────────────
+      const manifests = await ManifestModel.find({
+        _id: { $in: allManifestIds },
+      }).session(session);
+
+      const notReady = manifests.filter(
+        (m) => !['sealed', 'loaded'].includes(m.status),
       );
-
-      if (allPackageIds.length === 0) {
-        throw new ErrorHandler("Route has no packages assigned", 400);
+      if (notReady.length > 0) {
+        throw new ErrorHandler(
+          `${notReady.length} manifest(s) are not sealed/loaded yet: ` +
+            notReady.map((m) => m.manifestCode).join(', '),
+          400,
+        );
       }
 
       const now = new Date();
 
-
-      await PackageModel.updateMany(
-        { _id: { $in: allPackageIds } },
+      // ── Mark every manifest as in_transit ──────────────────────────────────
+      await ManifestModel.updateMany(
+        { _id: { $in: allManifestIds } },
         {
           $set: {
-            status: "in_transit_to_branch",
-            assignedTransporterId: transporter._id,
-            currentRouteId: route._id,
-          },
-          $push: {
-            trackingHistory: {
-              status: "in_transit_to_branch",
-              userId: transporterUserId,
-              notes: notes || "Transporter started route — packages in transit",
-              timestamp: now,
-            },
+            status: 'in_transit',
+            departedAt: now,
+            'transportLeg.departedAt': now,
           },
         },
         { session },
       );
 
-
-      await writeHistory(
-        allPackageIds.map((pid) => ({
-          packageId: pid,
-          status: "in_transit_to_branch" as PackageStatus,
-          handledBy: new mongoose.Types.ObjectId(transporterUserId.toString()),
-          handlerRole: "transporter" as const,
-          notes: notes || "Transporter started route — packages in transit",
-        })),
-        session,
-      );
-
-
+      // ── Update route + transporter ──────────────────────────────────────────
       await Promise.all([
         RouteModel.findByIdAndUpdate(
           routeId,
           {
             $set: {
-              status: "active",
-              actualStart: now,
+              status:           'active',
+              actualStart:      now,
               currentStopIndex: 0,
             },
           },
@@ -6534,9 +6557,342 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
           transporter._id,
           {
             $set: {
-              availabilityStatus: "on_route",
-              currentRouteId: route._id,
-              lastActiveAt: now,
+              availabilityStatus: 'on_route',
+              currentRouteId:     route._id,
+              lastActiveAt:       now,
+            },
+          },
+          { session },
+        ),
+      ]);
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `Trip started — ${allManifestIds.length} manifest(s) now in transit`,
+        data: {
+          routeId:        route._id,
+          routeNumber:    route.routeNumber,
+          routeType:      route.type,
+          totalManifests: allManifestIds.length,
+          status:         'in_transit',
+          startedAt:      now,
+        },
+      });
+
+    } catch (error: any) {
+      if (error.name === 'ValidationError') {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(', '),
+            400,
+          ),
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
+  },
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  2.  MARK ARRIVED AT STOP  (transporter arrives at a branch or destination hub)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const transporterMarkArrivedAtStop = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const transporterUserId = req.user?._id;
+      const { routeId, stopId } = req.params;
+      const { notes }           = req.body as { notes?: string };
+
+      if (!transporterUserId) {
+        return next(new ErrorHandler('Unauthorized, you are not authenticated.', 401));
+      }
+      if (!routeId || !mongoose.Types.ObjectId.isValid(routeId.toString())) {
+        return next(new ErrorHandler('Invalid route ID', 400));
+      }
+      if (!stopId || !mongoose.Types.ObjectId.isValid(stopId.toString())) {
+        return next(new ErrorHandler('Invalid stop ID', 400));
+      }
+
+      const [transporter, route] = await Promise.all([
+        TransporterModel.findOne({ userId: transporterUserId }).session(session),
+        RouteModel.findById(routeId).session(session),
+      ]);
+
+      if (!transporter || !transporter.isActive || transporter.isSuspended) {
+        throw new ErrorHandler('Transporter account is not active', 403);
+      }
+      if (!route) {
+        throw new ErrorHandler('Route not found', 404);
+      }
+      if (!route.assignedTransporterId?.equals(transporter._id)) {
+        throw new ErrorHandler('You are not assigned to this route', 403);
+      }
+      if (route.status !== 'active') {
+        throw new ErrorHandler(
+          `Route must be active to mark arrivals (current: ${route.status})`,
+          400,
+        );
+      }
+
+      // ── Locate stop ─────────────────────────────────────────────────────────
+      const stopIndex = route.stops.findIndex(
+        (s: any) => s._id?.toString() === stopId,
+      );
+      if (stopIndex === -1) {
+        throw new ErrorHandler('Stop not found in this route', 404);
+      }
+
+      const stop = route.stops[stopIndex];
+
+      if (stop.status === 'completed') {
+        throw new ErrorHandler('This stop is already completed', 400);
+      }
+
+      const stopManifestIds = manifestIdsFromStop(stop);
+
+      if (stopManifestIds.length === 0) {
+        throw new ErrorHandler('No manifests assigned to this stop', 400);
+      }
+
+      const stopBranchOid = stop.branchId
+        ? new mongoose.Types.ObjectId(stop.branchId.toString())
+        : null;
+
+      const now         = new Date();
+      const isLastStop  = stopIndex === route.stops.length - 1;
+
+      // ── Mark manifests as arrived ───────────────────────────────────────────
+      //
+      //  hub_to_hub route:  the stop IS the destination hub → mark `arrived`
+      //                     and the branch staff will begin unloading.
+      //  hub_to_branch route: each stop is a local branch.  Same logic: arrived.
+      //
+      //  The ManifestModel pre-save / post-save hooks (or a separate job) are
+      //  responsible for cascading `arrived` → package status updates.
+      //  We do NOT touch packages directly here — that is the manifest's concern.
+
+      await ManifestModel.updateMany(
+        { _id: { $in: stopManifestIds } },
+        {
+          $set: {
+            status:                    'arrived',
+            arrivedAt:                 now,
+            'transportLeg.arrivedAt':  now,
+          },
+        },
+        { session },
+      );
+
+      // ── Update route stop + route head ──────────────────────────────────────
+      await RouteModel.findByIdAndUpdate(
+        routeId,
+        {
+          $set: {
+            [`stops.${stopIndex}.status`]:          'completed',
+            [`stops.${stopIndex}.actualArrival`]:   now,
+            [`stops.${stopIndex}.actualDeparture`]: now,
+            currentStopIndex: stopIndex + 1,
+            completedStops:   route.completedStops + 1,
+
+            ...(isLastStop && {
+              status:     'completed',
+              actualEnd:  now,
+              actualTime: route.actualStart
+                ? Math.round(
+                    (now.getTime() - new Date(route.actualStart).getTime()) /
+                      60000,
+                  )
+                : undefined,
+            }),
+          },
+        },
+        { session },
+      );
+
+      // ── Release transporter when the last stop is completed ─────────────────
+      if (isLastStop) {
+        await TransporterModel.findByIdAndUpdate(
+          transporter._id,
+          {
+            $set: {
+              availabilityStatus: 'available',
+              currentRouteId:     undefined,
+              lastActiveAt:       now,
+            },
+            $inc: {
+              totalTrips:     1,
+              completedTrips: 1,
+            },
+          },
+          { session },
+        );
+      }
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      return res.status(200).json({
+        success: true,
+        message:
+          `Arrived at stop — ${stopManifestIds.length} manifest(s) marked arrived` +
+          (isLastStop ? ' — route complete' : ''),
+        data: {
+          routeId:          route._id,
+          stopId:           stop._id,
+          branchId:         stopBranchOid,
+          arrivedAt:        now,
+          manifestsArrived: stopManifestIds.length,
+          routeCompleted:   isLastStop,
+        },
+      });
+
+    } catch (error: any) {
+      if (error.name === 'ValidationError') {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(', '),
+            400,
+          ),
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
+  },
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  LEGACY — kept for backward compatibility with branches not yet on hub model
+//  (raw-package routes created before the manifest migration).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const transporterMarkPackagesInTransit = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const transporterUserId = req.user?._id;
+      const { routeId }       = req.params;
+      const { notes }         = req.body as { notes?: string };
+
+      if (!transporterUserId) {
+        return next(new ErrorHandler('Unauthorized, you are not authenticated.', 401));
+      }
+      if (!routeId || !mongoose.Types.ObjectId.isValid(routeId.toString())) {
+        return next(new ErrorHandler('Invalid route ID', 400));
+      }
+
+      const [transporter, route] = await Promise.all([
+        TransporterModel.findOne({ userId: transporterUserId }).session(session),
+        RouteModel.findById(routeId).session(session),
+      ]);
+
+      if (!transporter || !transporter.isActive || transporter.isSuspended) {
+        throw new ErrorHandler('Transporter account is not active', 403);
+      }
+      if (transporter.verificationStatus !== 'verified') {
+        throw new ErrorHandler('Transporter is not verified', 403);
+      }
+      if (!route) {
+        throw new ErrorHandler('Route not found', 404);
+      }
+      if (!route.assignedTransporterId?.equals(transporter._id)) {
+        throw new ErrorHandler('You are not assigned to this route', 403);
+      }
+      if (route.status === 'active') {
+        throw new ErrorHandler('Route is already active', 400);
+      }
+      if (!['planned', 'assigned'].includes(route.status)) {
+        throw new ErrorHandler(
+          `Cannot start a route with status '${route.status}'`,
+          400,
+        );
+      }
+
+      const allPackageIds: mongoose.Types.ObjectId[] = route.stops.flatMap(
+        (stop: any) =>
+          stop.packageIds.map(
+            (id: any) => new mongoose.Types.ObjectId(id.toString()),
+          ),
+      );
+
+      if (allPackageIds.length === 0) {
+        throw new ErrorHandler('Route has no packages assigned', 400);
+      }
+
+      const now = new Date();
+
+      await (await import('../models/package.model')).default.updateMany(
+        { _id: { $in: allPackageIds } },
+        {
+          $set: {
+            status:               'in_transit_to_branch',
+            assignedTransporterId: transporter._id,
+            currentRouteId:        route._id,
+          },
+          $push: {
+            trackingHistory: {
+              status:    'in_transit_to_branch',
+              userId:    transporterUserId,
+              notes:     notes || 'Transporter started route — packages in transit',
+              timestamp: now,
+            },
+          },
+        },
+        { session },
+      );
+
+      await writeHistory(
+        allPackageIds.map((pid) => ({
+          packageId:    pid,
+          status:       'in_transit_to_branch' as PackageStatus,
+          handledBy:    new mongoose.Types.ObjectId(transporterUserId.toString()),
+          handlerRole:  'transporter' as const,
+          notes:        notes || 'Transporter started route — packages in transit',
+        })),
+        session,
+      );
+
+      await Promise.all([
+        RouteModel.findByIdAndUpdate(
+          routeId,
+          {
+            $set: {
+              status:           'active',
+              actualStart:      now,
+              currentStopIndex: 0,
+            },
+          },
+          { session },
+        ),
+        TransporterModel.findByIdAndUpdate(
+          transporter._id,
+          {
+            $set: {
+              availabilityStatus: 'on_route',
+              currentRouteId:     route._id,
+              lastActiveAt:       now,
             },
           },
           { session },
@@ -6550,76 +6906,54 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
         success: true,
         message: `Route started — ${allPackageIds.length} package(s) marked in transit`,
         data: {
-          routeId: route._id,
-          routeNumber: route.routeNumber,
-          totalPackages: allPackageIds.length,
-          status: "in_transit_to_branch",
-          startedAt: now,
+          routeId:        route._id,
+          routeNumber:    route.routeNumber,
+          totalPackages:  allPackageIds.length,
+          status:         'in_transit_to_branch',
+          startedAt:      now,
         },
       });
+
     } catch (error: any) {
-
-      if (error.name === "ValidationError") {
-        return next(new ErrorHandler(
-          Object.values(error.errors).map((e: any) => e.message).join(", "), 400
-        ));
+      if (error.name === 'ValidationError') {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(', '),
+            400,
+          ),
+        );
       }
-
       return next(error);
-
     } finally {
-
       if (!transactionCommitted) {
         await session.abortTransaction().catch(() => {});
       }
-
       await session.endSession();
-
     }
   },
 );
 
 
-
-
-
-// TRANSPORTER — MARK PACKAGES ARRIVED AT BRANCH
-//  Called when the transporter physically arrives at a stop (branch).
-//  For each package assigned to this stop:
-//    • If package.destinationBranchId === this stop's branchId
-//      → status: at_destination_branch  (final branch, ready for delivery)
-//    • Otherwise
-//      → status: in_transit_to_branch   (intermediate branch, will re-transit)
-//  currentBranchId is updated to this stop's branchId for every package.
-
-
 export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-
     const session = await mongoose.startSession();
     session.startTransaction();
-
     let transactionCommitted = false;
 
     try {
-      const transporterUserId = req.user?._id;
-      const { routeId, stopId } = req.params;
-      const { notes } = req.body as { notes?: string };
+      const transporterUserId       = req.user?._id;
+      const { routeId, stopId }     = req.params;
+      const { notes }               = req.body as { notes?: string };
 
       if (!transporterUserId) {
-
-        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+        return next(new ErrorHandler('Unauthorized, you are not authenticated.', 401));
       }
-
       if (!routeId || !mongoose.Types.ObjectId.isValid(routeId.toString())) {
-        return next(new ErrorHandler("Invalid route ID", 400));
+        return next(new ErrorHandler('Invalid route ID', 400));
       }
-
       if (!stopId || !mongoose.Types.ObjectId.isValid(stopId.toString())) {
-
-        return next(new ErrorHandler("Invalid stop ID", 400));
+        return next(new ErrorHandler('Invalid stop ID', 400));
       }
-
 
       const [transporter, route] = await Promise.all([
         TransporterModel.findOne({ userId: transporterUserId }).session(session),
@@ -6627,59 +6961,46 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
       ]);
 
       if (!transporter || !transporter.isActive || transporter.isSuspended) {
-
-        throw new ErrorHandler("Transporter account is not active", 403);
+        throw new ErrorHandler('Transporter account is not active', 403);
       }
-
       if (!route) {
-
-        throw new ErrorHandler("Route not found", 404);
+        throw new ErrorHandler('Route not found', 404);
       }
-
       if (!route.assignedTransporterId?.equals(transporter._id)) {
-
-        throw new ErrorHandler("You are not assigned to this route", 403);
+        throw new ErrorHandler('You are not assigned to this route', 403);
       }
-
-      if (route.status !== "active") {
-
+      if (route.status !== 'active') {
         throw new ErrorHandler(
           `Route must be active to mark arrivals (current: ${route.status})`,
           400,
         );
       }
 
-
       const stopIndex = route.stops.findIndex(
-        (s) => s._id?.toString() === stopId,
+        (s: any) => s._id?.toString() === stopId,
       );
-
       if (stopIndex === -1) {
-
-        throw new ErrorHandler("Stop not found in this route", 404);
+        throw new ErrorHandler('Stop not found in this route', 404);
       }
 
       const stop = route.stops[stopIndex];
 
       if (!stop.branchId) {
-
-        throw new ErrorHandler("Stop has no branch associated", 400);
+        throw new ErrorHandler('Stop has no branch associated', 400);
       }
-
-      if (stop.status === "completed") {
-        throw new ErrorHandler("This stop is already completed", 400);
+      if (stop.status === 'completed') {
+        throw new ErrorHandler('This stop is already completed', 400);
       }
-
       if (stop.packageIds.length === 0) {
-        throw new ErrorHandler("No packages assigned to this stop", 400);
+        throw new ErrorHandler('No packages assigned to this stop', 400);
       }
 
-      const stopBranchOid = new mongoose.Types.ObjectId(stop.branchId.toString());
-      const packageIds = stop.packageIds.map(
-        (id) => new mongoose.Types.ObjectId(id.toString()),
+      const PackageModel   = (await import('../models/package.model')).default;
+      const stopBranchOid  = new mongoose.Types.ObjectId(stop.branchId.toString());
+      const packageIds     = stop.packageIds.map(
+        (id: any) => new mongoose.Types.ObjectId(id.toString()),
       );
       const now = new Date();
-
 
       const packages = await PackageModel.find(
         { _id: { $in: packageIds } },
@@ -6688,17 +7009,15 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
         .session(session)
         .lean();
 
-
-      const finalPackageIds: mongoose.Types.ObjectId[] = [];
+      const finalPackageIds:        mongoose.Types.ObjectId[] = [];
       const intermediatePackageIds: mongoose.Types.ObjectId[] = [];
 
       for (const pkg of packages) {
         const isFinal =
           pkg.destinationBranchId &&
-          new mongoose.Types.ObjectId(pkg.destinationBranchId.toString()).equals(
-            stopBranchOid,
-          );
-
+          new mongoose.Types.ObjectId(
+            pkg.destinationBranchId.toString(),
+          ).equals(stopBranchOid);
         if (isFinal) {
           finalPackageIds.push(pkg._id as mongoose.Types.ObjectId);
         } else {
@@ -6708,83 +7027,71 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
 
       const historyEntries: Parameters<typeof writeHistory>[0] = [];
 
-
       if (finalPackageIds.length > 0) {
         await PackageModel.updateMany(
           { _id: { $in: finalPackageIds } },
           {
             $set: {
-              status: "at_destination_branch",
+              status:          'at_destination_branch',
               currentBranchId: stopBranchOid,
             },
             $push: {
               trackingHistory: {
-                status: "at_destination_branch",
-                branchId: stopBranchOid,
-                userId: transporterUserId,
-                notes:
-                  notes ||
-                  "Package arrived at destination branch — ready for delivery",
+                status:    'at_destination_branch',
+                branchId:  stopBranchOid,
+                userId:    transporterUserId,
+                notes:     notes || 'Package arrived at destination branch — ready for delivery',
                 timestamp: now,
               },
             },
           },
           { session },
         );
-
         finalPackageIds.forEach((pid) =>
           historyEntries.push({
-            packageId: pid,
-            status: "at_destination_branch",
-            handledBy: new mongoose.Types.ObjectId(transporterUserId.toString()),
-            handlerRole: "transporter",
-            branchId: stopBranchOid,
-            notes:
-              notes || "Package arrived at destination branch — ready for delivery",
+            packageId:   pid,
+            status:      'at_destination_branch',
+            handledBy:   new mongoose.Types.ObjectId(transporterUserId.toString()),
+            handlerRole: 'transporter',
+            branchId:    stopBranchOid,
+            notes:       notes || 'Package arrived at destination branch — ready for delivery',
           }),
         );
       }
-
 
       if (intermediatePackageIds.length > 0) {
         await PackageModel.updateMany(
           { _id: { $in: intermediatePackageIds } },
           {
             $set: {
-              status: "in_transit_to_branch",
+              status:          'in_transit_to_branch',
               currentBranchId: stopBranchOid,
             },
             $push: {
               trackingHistory: {
-                status: "in_transit_to_branch",
-                branchId: stopBranchOid,
-                userId: transporterUserId,
-                notes:
-                  notes ||
-                  "Package arrived at intermediate branch — will continue to destination",
+                status:    'in_transit_to_branch',
+                branchId:  stopBranchOid,
+                userId:    transporterUserId,
+                notes:     notes || 'Package arrived at intermediate branch — will continue to destination',
                 timestamp: now,
               },
             },
           },
           { session },
         );
-
         intermediatePackageIds.forEach((pid) =>
           historyEntries.push({
-            packageId: pid,
-            status: "in_transit_to_branch",
-            handledBy: new mongoose.Types.ObjectId(transporterUserId.toString()),
-            handlerRole: "transporter",
-            branchId: stopBranchOid,
-            notes:
-              notes ||
-              "Package arrived at intermediate branch — will continue to destination",
+            packageId:   pid,
+            status:      'in_transit_to_branch',
+            handledBy:   new mongoose.Types.ObjectId(transporterUserId.toString()),
+            handlerRole: 'transporter',
+            branchId:    stopBranchOid,
+            notes:       notes || 'Package arrived at intermediate branch — will continue to destination',
           }),
         );
       }
 
       await writeHistory(historyEntries, session);
-
 
       const isLastStop = stopIndex === route.stops.length - 1;
 
@@ -6792,40 +7099,37 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
         routeId,
         {
           $set: {
-            [`stops.${stopIndex}.status`]: "completed",
-            [`stops.${stopIndex}.actualArrival`]: now,
+            [`stops.${stopIndex}.status`]:          'completed',
+            [`stops.${stopIndex}.actualArrival`]:   now,
             [`stops.${stopIndex}.actualDeparture`]: now,
             currentStopIndex: stopIndex + 1,
-            completedStops: route.completedStops + 1,
-
+            completedStops:   route.completedStops + 1,
             ...(isLastStop && {
-              status: "completed",
-              actualEnd: now,
-              actualTime:
-                route.actualStart
-                  ? Math.round(
-                      (now.getTime() - new Date(route.actualStart).getTime()) /
-                        60000,
-                    )
-                  : undefined,
+              status:     'completed',
+              actualEnd:  now,
+              actualTime: route.actualStart
+                ? Math.round(
+                    (now.getTime() - new Date(route.actualStart).getTime()) /
+                      60000,
+                  )
+                : undefined,
             }),
           },
         },
         { session },
       );
 
-
       if (isLastStop) {
         await TransporterModel.findByIdAndUpdate(
           transporter._id,
           {
             $set: {
-              availabilityStatus: "available",
-              currentRouteId: undefined,
-              lastActiveAt: now,
+              availabilityStatus: 'available',
+              currentRouteId:     undefined,
+              lastActiveAt:       now,
             },
             $inc: {
-              totalTrips: 1,
+              totalTrips:     1,
               completedTrips: 1,
             },
           },
@@ -6838,22 +7142,24 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
 
       return res.status(200).json({
         success: true,
-        message: `Arrived at branch — ${finalPackageIds.length} package(s) at destination, ${intermediatePackageIds.length} intermediate`,
+        message:
+          `Arrived at branch — ${finalPackageIds.length} package(s) at destination, ` +
+          `${intermediatePackageIds.length} intermediate`,
         data: {
-          routeId: route._id,
-          stopId: stop._id,
+          routeId:  route._id,
+          stopId:   stop._id,
           branchId: stopBranchOid,
           arrivedAt: now,
           packages: {
             atDestination: {
-              count: finalPackageIds.length,
-              status: "at_destination_branch",
-              ids: finalPackageIds,
+              count:  finalPackageIds.length,
+              status: 'at_destination_branch',
+              ids:    finalPackageIds,
             },
             intermediate: {
-              count: intermediatePackageIds.length,
-              status: "in_transit_to_branch",
-              ids: intermediatePackageIds,
+              count:  intermediatePackageIds.length,
+              status: 'in_transit_to_branch',
+              ids:    intermediatePackageIds,
             },
           },
           routeCompleted: isLastStop,
@@ -6861,21 +7167,19 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
       });
 
     } catch (error: any) {
-
-      if (error.name === "ValidationError") {
-        return next(new ErrorHandler(
-          Object.values(error.errors).map((e: any) => e.message).join(", "), 400
-        ));
+      if (error.name === 'ValidationError') {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(', '),
+            400,
+          ),
+        );
       }
-
       return next(error);
-
     } finally {
-
       if (!transactionCommitted) {
         await session.abortTransaction().catch(() => {});
       }
-
       await session.endSession();
     }
   },
