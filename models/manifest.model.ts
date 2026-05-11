@@ -1,4 +1,6 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
+import PackageModel from "./package.model";
+import { writeHistory } from "../utils/packageHistory.util";
 
 /**
  * Lifecycle of a manifest from creation to closure.
@@ -693,8 +695,11 @@ manifestSchema.methods.assignTransport = function (
   return this.save();
 };
 
-manifestSchema.methods.markDeparted = function (
-  by: mongoose.Types.ObjectId
+
+
+manifestSchema.methods.markDeparted = async function (
+  by: mongoose.Types.ObjectId,
+  session?: mongoose.ClientSession
 ): Promise<IManifest> {
   if (this.status !== 'loaded') {
     throw new Error(`Cannot mark departure for a manifest with status '${this.status}'`);
@@ -706,11 +711,19 @@ manifestSchema.methods.markDeparted = function (
   this.status = 'in_transit';
   this.departedAt = new Date();
 
-  return this.save();
+
+  const saved = await this.save({ session });
+
+  await (saved as any)._cascadeDepartedToPackages(by, session);
+
+  return saved;
 };
 
-manifestSchema.methods.markArrived = function (
-  by: mongoose.Types.ObjectId
+
+manifestSchema.methods.markArrived = async function (
+
+  by: mongoose.Types.ObjectId,
+  session?: mongoose.ClientSession
 ): Promise<IManifest> {
   if (this.status !== 'in_transit') {
     throw new Error(`Cannot mark arrival for a manifest with status '${this.status}'`);
@@ -722,8 +735,193 @@ manifestSchema.methods.markArrived = function (
   this.status = 'arrived';
   this.arrivedAt = new Date();
 
-  return this.save();
+  const saved = await this.save({ session });
+
+  // Cascade to packages
+  await (saved as any)._cascadeArrivedToPackages(by, session);
+
+  return saved;
 };
+
+
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cascade Methods — update contained packages when manifest status changes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Called internally by markDeparted().
+ * Updates all packages inside this manifest to 'in_transit_to_branch'.
+ * Runs in the same transaction session if one is passed.
+ */
+
+manifestSchema.methods._cascadeDepartedToPackages = async function (
+  performedBy: mongoose.Types.ObjectId,
+  session?: mongoose.ClientSession
+): Promise<number> {
+
+  
+  if (!this.packages || this.packages.length === 0) return 0;
+
+  const packageIds = this.packages.map((p: IManifestPackageEntry) => p.packageId);
+  const now = new Date();
+
+  await PackageModel.updateMany(
+    { _id: { $in: packageIds } },
+    {
+      $set: {
+        status: 'in_transit_to_branch',
+        currentManifestId: this._id,
+        ...(this.transportLeg?.transporterId && {
+          assignedTransporterId: this.transportLeg.transporterId,
+        }),
+      },
+      $push: {
+        trackingHistory: {
+          status: 'in_transit_to_branch',
+          userId: performedBy,
+          notes: `Manifest ${this.manifestCode} departed — package in transit to branch`,
+          timestamp: now,
+        },
+      },
+    },
+    { session }
+  );
+
+  await writeHistory(
+    packageIds.map((pid : mongoose.Types.ObjectId) => ({
+      packageId: pid,
+      status: 'in_transit_to_branch' as import('./package.model').PackageStatus,
+      handledBy: performedBy,
+      handlerRole: 'transporter' as const,
+      manifestId: this._id,
+      notes: `Manifest ${this.manifestCode} departed`,
+    })),
+    session
+  );
+
+  return packageIds.length;
+};
+
+/**
+ * Called internally by markArrived().
+ * Packages whose final destination IS this branch → 'at_destination_branch'
+ * Packages just passing through → stay 'in_transit_to_branch' but update currentBranchId
+ */
+manifestSchema.methods._cascadeArrivedToPackages = async function (
+  performedBy: mongoose.Types.ObjectId,
+  session?: mongoose.ClientSession
+): Promise<{ atDestination: number; intermediate: number }> {
+
+  
+  if (!this.packages || this.packages.length === 0) {
+    return { atDestination: 0, intermediate: 0 };
+  }
+
+  const packageIds = this.packages.map((p: IManifestPackageEntry) => p.packageId);
+  const destBranchId = this.destinationBranchId;
+  const now = new Date();
+
+  // Fetch packages to determine final vs intermediate
+  const packages = await PackageModel.find(
+    { _id: { $in: packageIds } },
+    { _id: 1, destinationBranchId: 1 }
+  ).session(session || null).lean();
+
+  const finalDestinationIds: mongoose.Types.ObjectId[] = [];
+  const intermediateIds: mongoose.Types.ObjectId[] = [];
+
+  for (const pkg of packages) {
+    const isFinal = pkg.destinationBranchId &&
+      pkg.destinationBranchId.toString() === destBranchId.toString();
+    if (isFinal) {
+      finalDestinationIds.push(pkg._id);
+    } else {
+      intermediateIds.push(pkg._id);
+    }
+  }
+
+  // ── Final destination packages ──────────────────────────────────────────
+  if (finalDestinationIds.length > 0) {
+    await PackageModel.updateMany(
+      { _id: { $in: finalDestinationIds } },
+      {
+        $set: {
+          status: 'at_destination_branch',
+          currentBranchId: destBranchId,
+        },
+        $push: {
+          trackingHistory: {
+            status: 'at_destination_branch',
+            branchId: destBranchId,
+            userId: performedBy,
+            notes: `Manifest ${this.manifestCode} arrived — package at destination branch`,
+            timestamp: now,
+          },
+        },
+      },
+      { session }
+    );
+
+    await writeHistory(
+      finalDestinationIds.map(pid => ({
+        packageId: pid,
+        status: 'at_destination_branch' as import('./package.model').PackageStatus,
+        handledBy: performedBy,
+        handlerRole: 'transporter' as const,
+        branchId: destBranchId,
+        manifestId: this._id,
+        notes: `Manifest ${this.manifestCode} arrived — at destination`,
+      })),
+      session
+    );
+  }
+
+  // ── Intermediate (pass-through) packages ─────────────────────────────────
+  if (intermediateIds.length > 0) {
+    await PackageModel.updateMany(
+      { _id: { $in: intermediateIds } },
+      {
+        $set: {
+          status: 'in_transit_to_branch',
+          currentBranchId: destBranchId,
+        },
+        $push: {
+          trackingHistory: {
+            status: 'in_transit_to_branch',
+            branchId: destBranchId,
+            userId: performedBy,
+            notes: `Manifest ${this.manifestCode} arrived at intermediate hub — continuing to final destination`,
+            timestamp: now,
+          },
+        },
+      },
+      { session }
+    );
+
+    await writeHistory(
+      intermediateIds.map(pid => ({
+        packageId: pid,
+        status: 'in_transit_to_branch' as import('./package.model').PackageStatus,
+        handledBy: performedBy,
+        handlerRole: 'transporter' as const,
+        branchId: destBranchId,
+        manifestId: this._id,
+        notes: `Manifest ${this.manifestCode} arrived — intermediate hub`,
+      })),
+      session
+    );
+  }
+
+  return {
+    atDestination: finalDestinationIds.length,
+    intermediate: intermediateIds.length,
+  };
+};
+
+
 
 manifestSchema.methods.unloadPackage = function (
   packageId: mongoose.Types.ObjectId,
