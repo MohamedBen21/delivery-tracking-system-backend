@@ -2,13 +2,19 @@
 //  workerAssignmentService.ts
 //  Fetches workers who are available to be assigned a route today,
 //  and provides post-assignment update helpers.
+//
+//  Hub model change
+//  ────────────────
+//  getAvailableTransporters now includes transporterType, assignedLine,
+//  and assignedBranches in its projection so the orchestrator can build the
+//  full OptimizerWorker payload without a second TransporterModel query.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import mongoose from "mongoose";
-import DelivererModel  from "../../models/deliverer.model";
+import DelivererModel   from "../../models/deliverer.model";
 import TransporterModel from "../../models/transporter.model";
-import RouteModel from "../../models/route.model";
-import { WorkerCandidate } from "../types.util";
+import RouteModel       from "../../models/route.model";
+import { WorkerCandidate, TransporterType } from "../types.util";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  HELPERS
@@ -26,11 +32,10 @@ function dayBounds(date: Date): { start: Date; end: Date } {
 /**
  * Returns the set of worker doc _ids (Transporter or Deliverer) that already
  * have a non-cancelled/non-completed route scheduled on `date`.
- * Used to exclude workers who are already assigned today.
  */
 async function getAlreadyAssignedWorkerIds(
-  date:     Date,
-  field:    "assignedTransporterId" | "assignedDelivererId",
+  date:      Date,
+  field:     "assignedTransporterId" | "assignedDelivererId",
   companyId: mongoose.Types.ObjectId,
 ): Promise<Set<string>> {
   const { start, end } = dayBounds(date);
@@ -56,13 +61,21 @@ async function getAlreadyAssignedWorkerIds(
 //    • availabilityStatus = "available"
 //    • verificationStatus = "verified"
 //    • isActive = true, isSuspended = false
-//    • currentBranchId = branch  (physically at this branch)
-//    • no non-cancelled/completed route today
+//    • currentBranchId = branch  (physically at this branch today)
+//    • no non-cancelled/completed route already scheduled today
+//
+//  Hub fields included in projection:
+//    • transporterType    — "hub_to_hub" | "hub_to_branch" | null
+//    • assignedLine       — [hubAId, hubBId] for hub_to_hub workers
+//    • assignedBranches   — [...branchIds] for hub_to_branch workers
+//
+//  Including these here eliminates the separate TransporterModel query that
+//  the orchestrator previously had to make after fetching workers.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function getAvailableTransporters(
-  branchId:   mongoose.Types.ObjectId,
-  companyId:  mongoose.Types.ObjectId,
+  branchId:     mongoose.Types.ObjectId,
+  companyId:    mongoose.Types.ObjectId,
   scheduleDate: Date,
 ): Promise<WorkerCandidate[]> {
   const alreadyAssigned = await getAlreadyAssignedWorkerIds(
@@ -73,23 +86,50 @@ export async function getAvailableTransporters(
 
   const docs = await TransporterModel.find({
     companyId,
-    currentBranchId:      branchId,
-    availabilityStatus:   "available",
-    verificationStatus:   "verified",
-    isActive:             true,
-    isSuspended:          false,
+    currentBranchId:    branchId,
+    availabilityStatus: "available",
+    verificationStatus: "verified",
+    isActive:           true,
+    isSuspended:        false,
   })
-    .select("_id userId currentVehicleId")
+    .select(
+      "_id userId currentVehicleId " +
+      "transporterType assignedLine assignedBranches",
+    )
     .lean();
 
   return (docs as any[])
     .filter((d) => !alreadyAssigned.has(d._id.toString()))
-    .map((d) => ({
-      _id:       d._id,
-      userId:    d.userId,
-      role:      "transporter" as const,
-      vehicleId: d.currentVehicleId ?? undefined,
-    }));
+    .map((d) => {
+      const candidate: WorkerCandidate = {
+        _id:       d._id,
+        userId:    d.userId,
+        role:      "transporter" as const,
+        vehicleId: d.currentVehicleId ?? undefined,
+      };
+
+      // Attach hub fields when present — the orchestrator forwards these
+      // directly to the Python optimizer without any extra DB lookup.
+      if (d.transporterType) {
+        candidate.transporterType = d.transporterType as TransporterType;
+      }
+      if (
+        d.transporterType === "hub_to_hub" &&
+        Array.isArray(d.assignedLine) &&
+        d.assignedLine.length === 2
+      ) {
+        candidate.assignedLine = [d.assignedLine[0], d.assignedLine[1]];
+      }
+      if (
+        d.transporterType === "hub_to_branch" &&
+        Array.isArray(d.assignedBranches) &&
+        d.assignedBranches.length > 0
+      ) {
+        candidate.assignedBranches = d.assignedBranches;
+      }
+
+      return candidate;
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -99,7 +139,7 @@ export async function getAvailableTransporters(
 //    • availabilityStatus = "available"
 //    • verificationStatus = "verified"
 //    • isActive = true, isSuspended = false
-//    • branchId = branch  (note: deliverer uses branchId, not currentBranchId)
+//    • branchId = branch  (deliverer uses branchId, not currentBranchId)
 //    • no non-cancelled/completed route today
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -149,8 +189,8 @@ export async function markTransporterAssigned(
     transporterId,
     {
       $set: {
-        // "assigned" not "on_route" — the route is planned but not started yet
-        // availabilityStatus flips to on_route when transporter taps "Start"
+        // availabilityStatus stays "available" until the transporter taps
+        // "Start Trip" — the controller flips it to "on_route" at that point.
         currentRouteId:   routeId,
         currentVehicleId: vehicleId,
         lastActiveAt:     new Date(),
