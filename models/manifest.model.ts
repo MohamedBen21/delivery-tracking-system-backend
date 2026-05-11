@@ -218,9 +218,9 @@ export interface IManifest extends Document {
     estimatedArrival?: Date
   ): Promise<IManifest>;
 
-  markDeparted(by: mongoose.Types.ObjectId): Promise<IManifest>;
+  markDeparted(by: mongoose.Types.ObjectId , session?: mongoose.ClientSession): Promise<IManifest>;
 
-  markArrived(by: mongoose.Types.ObjectId): Promise<IManifest>;
+  markArrived(by: mongoose.Types.ObjectId , session?: mongoose.ClientSession ): Promise<IManifest>;
 
   unloadPackage(
     packageId: mongoose.Types.ObjectId,
