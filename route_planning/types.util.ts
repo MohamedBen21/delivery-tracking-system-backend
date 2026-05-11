@@ -1,7 +1,6 @@
 import mongoose from "mongoose";
 
 
-
 /** [longitude, latitude] */
 export type Coords = [number, number];
 
@@ -36,6 +35,26 @@ export interface PackageCandidate {
   };
 }
 
+// ── Manifest ──────────────────────────────────────────────────────────────────
+
+export type ManifestPriority = "standard" | "express" | "urgent";
+
+/**
+ * Minimal manifest representation used by the orchestrator when building
+ * hub-model transporter routes.
+ * A manifest is a sealed bag of packages — the transporter handles the bag,
+ * not the individual packages inside it.
+ */
+export interface ManifestCandidate {
+  _id:                 mongoose.Types.ObjectId;
+  manifestCode:        string;
+  totalDeclaredWeight: number;         // kg — sum of all packages inside
+  packageCount:        number;         // informational only
+  destinationBranchId: mongoose.Types.ObjectId;
+  status:              "sealed" | "loaded";
+  priority:            ManifestPriority;
+}
+
 // ── Vehicle ───────────────────────────────────────────────────────────────────
 
 export type VehicleType = "motorcycle" | "car" | "van" | "small_truck" | "large_truck";
@@ -62,11 +81,26 @@ export interface VehicleCandidate {
 
 export type WorkerRole = "transporter" | "deliverer";
 
+/**
+ * Sub-type for transporter workers in the hub model.
+ * "hub_to_hub"    — carries manifests directly between two main hubs.
+ * "hub_to_branch" — delivers manifests from a main hub to local branches.
+ * undefined       — legacy transporter (raw packages, inter_branch route).
+ */
+export type TransporterType = "hub_to_hub" | "hub_to_branch";
+
 export interface WorkerCandidate {
   _id:       mongoose.Types.ObjectId;  // Transporter / Deliverer doc _id
   userId:    mongoose.Types.ObjectId;
   role:      WorkerRole;
   vehicleId?: mongoose.Types.ObjectId; // pre-assigned if any
+
+  // Hub model fields — only set for transporter workers
+  transporterType?:  TransporterType;
+  /** hub_to_hub: exactly [hubAId, hubBId] */
+  assignedLine?:     [mongoose.Types.ObjectId, mongoose.Types.ObjectId];
+  /** hub_to_branch: array of branch IDs this transporter serves */
+  assignedBranches?: mongoose.Types.ObjectId[];
 }
 
 // ── Branch (lean) ─────────────────────────────────────────────────────────────
@@ -81,6 +115,7 @@ export interface BranchInfo {
 }
 
 // ── Bin packing ───────────────────────────────────────────────────────────────
+// (used by binPacking.util.ts — retained for legacy / non-hub branches)
 
 export interface LoadResult {
   loaded:             PackageCandidate[];
@@ -92,6 +127,7 @@ export interface LoadResult {
 }
 
 // ── TSP ───────────────────────────────────────────────────────────────────────
+// (used by tsp.util.ts — retained for legacy / non-hub branches)
 
 /** One stop fed into the TSP solver */
 export interface StopPoint {
@@ -103,7 +139,6 @@ export interface StopPoint {
   meta?:       Record<string, any>;
 }
 
-
 export interface TSPResult {
   orderedStops:      StopPoint[];
   totalDistanceKm:   number;
@@ -113,7 +148,9 @@ export interface TSPResult {
   segmentDriveMinutes: number[];
 }
 
-// ── Planned route (output of builders, input to RouteModel.create) ─────────────
+// ── Planned route (output of legacy builders) ─────────────────────────────────
+// These types are still used by transporterRouteBuilder and delivererRouteBuilder
+// for branches not yet migrated to the hub model.
 
 export type StopAction = "pickup" | "delivery" | "transfer";
 
@@ -123,19 +160,19 @@ export interface PlannedStop {
   coordinates:    Coords;
   address?:       string;
   packageIds:     mongoose.Types.ObjectId[];
+  /** Manifest IDs at this stop — only set for hub-model routes */
+  manifestIds?:   mongoose.Types.ObjectId[];
   action:         StopAction;
   /** Minutes expected to spend at this stop (unloading / handing over) */
   dwellMinutes:   number;
   expectedArrival?: Date;
 }
 
-
-
 export interface PlannedRoute {
-  type:                    "inter_branch" | "local_delivery";
+  type: "inter_branch" | "local_delivery" | "hub_to_hub" | "hub_to_branch";
   companyId:               mongoose.Types.ObjectId;
   originBranchId:          mongoose.Types.ObjectId;
-  destinationBranchId?:    mongoose.Types.ObjectId;   // last stop for transporter
+  destinationBranchId?:    mongoose.Types.ObjectId;
   assignedVehicleId:       mongoose.Types.ObjectId;
   assignedTransporterId?:  mongoose.Types.ObjectId;
   assignedDelivererId?:    mongoose.Types.ObjectId;
@@ -146,7 +183,9 @@ export interface PlannedRoute {
   estimatedTime:           number;                    // minutes (drive + dwell)
   scheduledStart:          Date;
   scheduledEnd:            Date;
-  packageIds:              mongoose.Types.ObjectId[]; // flat list for quick lookup
+  packageIds:              mongoose.Types.ObjectId[];
+  /** Flat manifest ID list — only set for hub-model routes */
+  manifestIds?:            mongoose.Types.ObjectId[];
 }
 
 
@@ -159,10 +198,13 @@ export interface BranchPlanResult {
   delivererRoutes:      number;
   packagesScheduled:    number;
   packagesUnscheduled:  number;
+  /** Manifests successfully assigned to a hub route. */
+  manifestsScheduled:   number;
+  /** Manifests that could not be assigned (no worker, capacity exceeded, etc.). */
+  manifestsUnscheduled: number;
   errors:               string[];
   durationMs:           number;
 }
-
 
 export interface DailyPlanResult {
   date:               Date;
