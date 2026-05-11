@@ -5,8 +5,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import cron from "node-cron";
-import { runDailyRoutePlanning } from "./orchestrator";
-import { DailyPlanResult } from "./types.util";
+import { runDailyRoutePlanning } from "./orchestrator_v2";
+import { DailyPlanResult, BranchPlanResult } from "./types.util";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  SCHEDULE
@@ -102,11 +102,19 @@ function nextDay(from: Date): Date {
 }
 
 function logSummary(result: DailyPlanResult): void {
+  // Aggregate manifest totals across all branches
+  const totalManifestsScheduled   = result.branchResults.reduce(
+    (s, b) => s + (b.manifestsScheduled   ?? 0), 0,
+  );
+  const totalManifestsUnscheduled = result.branchResults.reduce(
+    (s, b) => s + (b.manifestsUnscheduled ?? 0), 0,
+  );
+
   console.log(
     `[scheduler] Planning complete for ${result.date.toISOString().slice(0, 10)} | ` +
     `${result.totalRoutes} routes | ` +
-    `${result.totalScheduled} scheduled | ` +
-    `${result.totalUnscheduled} unscheduled | ` +
+    `pkg: ${result.totalScheduled} scheduled / ${result.totalUnscheduled} unscheduled | ` +
+    `manifests: ${totalManifestsScheduled} scheduled / ${totalManifestsUnscheduled} unscheduled | ` +
     `${result.totalDurationMs}ms`,
   );
 
@@ -116,6 +124,17 @@ function logSummary(result: DailyPlanResult): void {
         `[scheduler] ${b.branchName}: ${b.errors.length} warning(s)`,
       );
       b.errors.forEach((e) => console.warn(`  • ${e}`));
+    }
+
+    // Extra detail line for hub branches that handled manifests
+    const mSched   = b.manifestsScheduled   ?? 0;
+    const mUnsched = b.manifestsUnscheduled ?? 0;
+    if (mSched + mUnsched > 0) {
+      console.log(
+        `[scheduler]   ${b.branchName} | ` +
+        `${b.transporterRoutes} transporter route(s) | ` +
+        `manifests: ${mSched} scheduled / ${mUnsched} unscheduled`,
+      );
     }
   }
 }

@@ -6998,7 +6998,7 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
       const PackageModel   = (await import('../models/package.model')).default;
       const stopBranchOid  = new mongoose.Types.ObjectId(stop.branchId.toString());
       const packageIds     = stop.packageIds.map(
-        (id: any) => new mongoose.Types.ObjectId(id.toString()),
+        (id: any) => id.toString(),
       );
       const now = new Date();
 

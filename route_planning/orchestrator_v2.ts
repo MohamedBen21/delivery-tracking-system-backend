@@ -1,5 +1,7 @@
 import mongoose from "mongoose";
 import BranchModel from "../models/branch.model";
+import ManifestModel from "../models/manifest.model";
+
 import {
   BranchInfo, BranchPlanResult, DailyPlanResult,
 } from "./types.util";
@@ -19,16 +21,17 @@ import {
 } from "./services/workerAssignment.service";
 import {
   callOptimizer,
+  OptimizerManifest,
   OptimizerRequest,
   OptimizerRoute,
+  OptimizerWorker,
 } from "./services/optimizerClient";
-import { persistTransporterRoute } from "./builders/transporterRouteBuilder";
-import { persistDelivererRoute }   from "./builders/delivererRouteBuilder";
 import RouteModel from "../models/route.model";
 import PackageModel from "../models/package.model";
 
+
 // ─────────────────────────────────────────────────────────────────────────────
-//  DAILY PLAN ENTRY POINT  (unchanged signature)
+//  DAILY PLAN ENTRY POINT
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function runDailyRoutePlanning(
@@ -40,7 +43,7 @@ export async function runDailyRoutePlanning(
     status: "active",
     "location.coordinates": { $exists: true, $ne: [] },
   })
-    .select("_id name code wilaya location companyId")
+    .select("_id name code wilaya location companyId isHub hubType servedByHubId")
     .lean() as any[];
 
   if (branches.length === 0) {
@@ -75,6 +78,7 @@ export async function runDailyRoutePlanning(
       branchId: branch._id, branchName: branch.name,
       transporterRoutes: 0, delivererRoutes: 0,
       packagesScheduled: 0, packagesUnscheduled: 0,
+      manifestsScheduled: 0, manifestsUnscheduled: 0,
       errors: [(result.reason as Error)?.message ?? "Unknown error"],
       durationMs: 0,
     };
@@ -90,8 +94,9 @@ export async function runDailyRoutePlanning(
   };
 }
 
+
 // ─────────────────────────────────────────────────────────────────────────────
-//  PER-BRANCH PLANNER  (now calls Python)
+//  PER-BRANCH / PER-HUB PLANNER
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function planBranch(
@@ -101,7 +106,7 @@ async function planBranch(
   const t0     = Date.now();
   const errors: string[] = [];
 
-  // ── 1. Fetch data (Node.js responsibility) ────────────────────────────────
+  // ── 1. Fetch workers ──────────────────────────────────────────────────────
   const [
     transporterPkgs,
     delivererResult,
@@ -123,17 +128,119 @@ async function planBranch(
   const delivererPkgs = delivererResult.candidates;
   const allPackages   = [...transporterPkgs, ...delivererPkgs];
 
-  if (allPackages.length === 0) {
+  // ── 2. Fetch manifests for hub transporters at this branch ────────────────
+  //
+  //  A hub transporter's manifests are those that are:
+  //    • status: "sealed" or "loaded"  (ready to travel)
+  //    • originBranchId: this branch   (staged here for departure)
+  //
+  //  We fetch the full transporter documents (with assignedLine /
+  //  assignedBranches) so we can:
+  //    a) Filter manifests to only those whose destinationBranchId is
+  //       reachable by at least one worker.
+  //    b) Resolve destination branch coordinates before sending to Python.
+
+  // Hub fields (transporterType, assignedLine, assignedBranches) are already
+  // on each WorkerCandidate — getAvailableTransporters now projects them,
+  // so no second TransporterModel query is needed here.
+
+  // Collect all destination branch IDs reachable by any hub worker
+  const reachableHubDestinations = new Set<string>();
+  for (const t of transporters) {
+    if (t.transporterType === "hub_to_hub" && t.assignedLine) {
+      t.assignedLine.forEach((id) => reachableHubDestinations.add(id.toString()));
+    }
+    if (t.transporterType === "hub_to_branch" && t.assignedBranches) {
+      t.assignedBranches.forEach((id) => reachableHubDestinations.add(id.toString()));
+    }
+  }
+
+  // Fetch sealed/loaded manifests originating from this branch
+  const rawManifests = reachableHubDestinations.size > 0
+    ? await ManifestModel
+        .find({
+          originBranchId:      branch._id,
+          status:              { $in: ["sealed", "loaded"] },
+          destinationBranchId: { $in: Array.from(reachableHubDestinations) },
+        })
+        .select("_id manifestCode totalDeclaredWeight packageCount destinationBranchId status priority")
+        .lean()
+    : [];
+
+  // Resolve destination branch coordinates for every manifest
+  // (Python needs them — it has no DB access)
+  const destBranchIds = [...new Set(
+    rawManifests.map((m) => m.destinationBranchId.toString()),
+  )];
+
+  const destBranches = destBranchIds.length > 0
+    ? await BranchModel
+        .find({ _id: { $in: destBranchIds } })
+        .select("_id location")
+        .lean()
+    : [];
+
+  const branchCoordMap = new Map<string, [number, number]>(
+    destBranches
+      .filter((b) => b.location?.coordinates?.length === 2)
+      .map((b) => [b._id.toString(), b.location.coordinates as [number, number]]),
+  );
+
+  // Build OptimizerManifest list — drop manifests whose branch coords are missing
+  const optimizerManifests: OptimizerManifest[] = [];
+  for (const m of rawManifests) {
+    const coords = branchCoordMap.get(m.destinationBranchId.toString());
+    if (!coords) {
+      errors.push(
+        `Manifest ${m._id}: destination branch ${m.destinationBranchId} has no coordinates — skipped`,
+      );
+      continue;
+    }
+    optimizerManifests.push({
+      _id:                    m._id.toString(),
+      manifestCode:           m.manifestCode,
+      totalWeight:            m.totalDeclaredWeight ?? 0,
+      totalVolume:            0,   // manifests don't currently track volume
+      packageCount:           m.packageCount ?? 0,
+      destinationBranchId:    m.destinationBranchId.toString(),
+      destinationCoordinates: coords,
+      priority:               (m.priority as "standard" | "express" | "urgent") ?? "standard",
+    });
+  }
+
+  // ── 3. Early-exit if nothing to do ────────────────────────────────────────
+  if (allPackages.length === 0 && optimizerManifests.length === 0) {
     return {
       branchId: branch._id, branchName: branch.name,
       transporterRoutes: 0, delivererRoutes: 0,
       packagesScheduled: 0, packagesUnscheduled: delivererResult.skipped.length,
+      manifestsScheduled: 0, manifestsUnscheduled: 0,
       errors, durationMs: Date.now() - t0,
     };
   }
 
-  // ── 2. Build optimizer request ────────────────────────────────────────────
+  // ── 4. Build optimizer request ────────────────────────────────────────────
   const allWorkers = [...transporters, ...deliverers];
+
+  // Hub fields come directly from WorkerCandidate (projected by workerAssignment.service)
+  const workerPayload: OptimizerWorker[] = allWorkers.map((w) => {
+    const base: OptimizerWorker = {
+      _id:    w._id.toString(),
+      userId: w.userId.toString(),
+      role:   w.role as "transporter" | "deliverer",
+    };
+    if (w.transporterType === "hub_to_hub" && w.assignedLine?.length === 2) {
+      base.transporterType = "hub_to_hub";
+      base.assignedLine    = [
+        w.assignedLine[0].toString(),
+        w.assignedLine[1].toString(),
+      ];
+    } else if (w.transporterType === "hub_to_branch" && w.assignedBranches?.length) {
+      base.transporterType  = "hub_to_branch";
+      base.assignedBranches = w.assignedBranches.map((id) => id.toString());
+    }
+    return base;
+  });
 
   const payload: OptimizerRequest = {
     branch: {
@@ -148,29 +255,26 @@ async function planBranch(
       supportsFragile:    v.supportsFragile,
       registrationNumber: v.registrationNumber,
     })),
-    workers: allWorkers.map((w) => ({
-      _id:    w._id.toString(),
-      userId: w.userId.toString(),
-      role:   w.role,
-    })),
+    workers:   workerPayload,
+    manifests: optimizerManifests,
     packages: [
       ...transporterPkgs.map((p) => ({
-        _id:                  p._id.toString(),
-        weight:               p.weight,
-        volume:               p.volume,
-        isFragile:            p.isFragile,
-        deliveryType:         p.deliveryType,
-        deliveryPriority:     p.deliveryPriority,
-        destinationBranchId:  p.destinationBranchId?.toString(),
+        _id:                 p._id.toString(),
+        weight:              p.weight,
+        volume:              p.volume,
+        isFragile:           p.isFragile,
+        deliveryType:        p.deliveryType,
+        deliveryPriority:    p.deliveryPriority,
+        destinationBranchId: p.destinationBranchId?.toString(),
       })),
       ...delivererPkgs.map((p) => ({
-        _id:             p._id.toString(),
-        weight:          p.weight,
-        volume:          p.volume,
-        isFragile:       p.isFragile,
-        deliveryType:    p.deliveryType,
-        deliveryPriority:p.deliveryPriority,
-        destination:     p.destination
+        _id:              p._id.toString(),
+        weight:           p.weight,
+        volume:           p.volume,
+        isFragile:        p.isFragile,
+        deliveryType:     p.deliveryType,
+        deliveryPriority: p.deliveryPriority,
+        destination: p.destination
           ? {
               coordinates:    p.destination.coordinates,
               recipientName:  p.destination.recipientName,
@@ -184,15 +288,16 @@ async function planBranch(
     ],
   };
 
-  // ── 3. Call Python optimizer ──────────────────────────────────────────────
+  // ── 5. Call Python optimizer ──────────────────────────────────────────────
   let optimizerResult;
   try {
     optimizerResult = await callOptimizer(payload);
     console.log(
       `[orchestrator] [${branch.name}] Optimizer: ` +
       `${optimizerResult.routes.length} routes, ` +
-      `${optimizerResult.unscheduled.length} unscheduled, ` +
-      `${optimizerResult.meta.durationMs}ms (optimizer)`,
+      `unscheduled_pkg=${optimizerResult.unscheduled.length} ` +
+      `unscheduled_man=${optimizerResult.unscheduledManifests.length} ` +
+      `${optimizerResult.meta.durationMs}ms`,
     );
   } catch (err: any) {
     errors.push(`Optimizer failed: ${err.message}`);
@@ -200,21 +305,25 @@ async function planBranch(
       branchId: branch._id, branchName: branch.name,
       transporterRoutes: 0, delivererRoutes: 0,
       packagesScheduled: 0, packagesUnscheduled: allPackages.length,
+      manifestsScheduled: 0, manifestsUnscheduled: optimizerManifests.length,
       errors, durationMs: Date.now() - t0,
     };
   }
 
-  // Record unscheduled packages
   for (const u of optimizerResult.unscheduled) {
     errors.push(`Package ${u.packageId} unscheduled: ${u.reason}`);
   }
+  for (const u of optimizerResult.unscheduledManifests) {
+    errors.push(`Manifest ${u.manifestId} unscheduled: ${u.reason}`);
+  }
 
-  // ── 4. Persist routes (Node.js responsibility — keeps transactions here) ───
+  // ── 6. Persist routes ─────────────────────────────────────────────────────
   const scheduledStart = buildScheduledStart(scheduledDate);
 
   let transporterRoutes  = 0;
   let delivererRoutes    = 0;
   let packagesScheduled  = 0;
+  let manifestsScheduled = 0;
 
   for (const route of optimizerResult.routes) {
     const session = await mongoose.startSession();
@@ -228,12 +337,16 @@ async function planBranch(
         session,
       });
 
-      // Mark worker assigned
       const workerId  = new mongoose.Types.ObjectId(route.workerId);
       const vehicleId = new mongoose.Types.ObjectId(route.vehicleId);
       const userId    = allWorkers.find((w) => w._id.toString() === route.workerId)?.userId;
 
-      if (route.routeType === "inter_branch") {
+      const isTransporterRoute =
+        route.routeType === "hub_to_hub"    ||
+        route.routeType === "hub_to_branch" ||
+        route.routeType === "inter_branch";
+
+      if (isTransporterRoute) {
         await markTransporterAssigned(workerId, routeId, vehicleId, session);
         transporterRoutes++;
       } else {
@@ -246,13 +359,16 @@ async function planBranch(
           vehicleId,
           userId,
           branch._id,
-          route.routeType === "inter_branch" ? "transporter" : "deliverer",
+          isTransporterRoute ? "transporter" : "deliverer",
           session,
         );
       }
 
       await session.commitTransaction();
-      packagesScheduled += route.packageIds.length;
+
+      packagesScheduled  += route.packageIds.length;
+      manifestsScheduled += route.manifestIds.length;
+
     } catch (err: any) {
       await session.abortTransaction();
       const msg = `Failed to persist route for vehicle ${route.vehicleId}: ${err.message}`;
@@ -264,22 +380,22 @@ async function planBranch(
   }
 
   return {
-    branchId:            branch._id,
-    branchName:          branch.name,
+    branchId:             branch._id,
+    branchName:           branch.name,
     transporterRoutes,
     delivererRoutes,
     packagesScheduled,
-    packagesUnscheduled: optimizerResult.unscheduled.length + delivererResult.skipped.length,
+    packagesUnscheduled:  optimizerResult.unscheduled.length + delivererResult.skipped.length,
+    manifestsScheduled,
+    manifestsUnscheduled: optimizerResult.unscheduledManifests.length,
     errors,
-    durationMs:          Date.now() - t0,
+    durationMs:           Date.now() - t0,
   };
 }
 
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  PERSIST OPTIMIZED ROUTE
-//  Converts the Python optimizer output into a RouteModel document.
-//  This replaces buildTransporterRoute + buildDelivererRoute for the
-//  route construction step (the builders are only used for persistence shape).
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface PersistInput {
@@ -298,49 +414,86 @@ async function persistOptimizedRoute(
   const vehicleId    = new mongoose.Types.ObjectId(route.vehicleId);
   const workerId     = new mongoose.Types.ObjectId(route.workerId);
   const packageIds   = route.packageIds.map((id) => new mongoose.Types.ObjectId(id));
+  const manifestIds  = route.manifestIds.map((id) => new mongoose.Types.ObjectId(id));
 
   const scheduledEnd = new Date(
     scheduledStart.getTime() + route.estimatedTimeMinutes * 60_000,
   );
 
-  // Map Python stops → RouteModel stop shape
+  // ── Determine stop dwell time by route type ──────────────────────────────
+  const dwellMinutes =
+    route.routeType === "hub_to_hub"    ? 30 :
+    route.routeType === "hub_to_branch" ? 20 :
+    route.routeType === "inter_branch"  ? 20 : 8;
+
+  // ── Determine stop action ────────────────────────────────────────────────
+  const stopAction =
+    route.routeType === "hub_to_hub"    ? "transfer" :
+    route.routeType === "hub_to_branch" ? "transfer" :
+    route.routeType === "inter_branch"  ? "transfer" : "delivery";
+
+  // ── Map Python stops → RouteModel stop shape ─────────────────────────────
   const stops = route.stops.map((stop, idx) => ({
-    order:   idx + 1,
-    action:  route.routeType === "inter_branch" ? "transfer" : "delivery",
+    order:    idx + 1,
+    action:   stopAction,
     location: {
       type:        "Point" as const,
       coordinates: stop.coordinates,
     },
-    address:           stop.address ?? "",
-    branchId:          stop.destinationBranchId
+    address:             stop.address ?? "",
+    branchId:            stop.destinationBranchId
       ? new mongoose.Types.ObjectId(stop.destinationBranchId)
       : undefined,
-    packageIds:        stop.packageIds.map((id) => new mongoose.Types.ObjectId(id)),
-    status:            "pending" as const,
-    stopDuration:      route.routeType === "inter_branch" ? 20 : 8,
-    completedPackages: [],
-    failedPackages:    [],
-    skippedPackages:   [],
+    // Raw packages (deliverer / legacy transporter)
+    packageIds:          stop.packageIds.map((id) => new mongoose.Types.ObjectId(id)),
+    // Manifest bags (hub routes)
+    manifestIds:         stop.manifestIds.map((id) => new mongoose.Types.ObjectId(id)),
+    status:              "pending" as const,
+    stopDuration:        dwellMinutes,
+    completedPackages:   [],
+    failedPackages:      [],
+    skippedPackages:     [],
+    completedManifests:  [],
+    discrepancyManifests:[],
   }));
 
+  // ── Resolve destinationBranchId for the route document ───────────────────
+  //  hub_to_hub   → the single destination hub (last stop's branchId)
+  //  hub_to_branch→ undefined (multiple destinations)
+  //  inter_branch → last stop's destinationBranchId (existing behaviour)
+  //  local_delivery → undefined
+  const routeDestinationBranchId =
+    (route.routeType === "hub_to_hub" || route.routeType === "inter_branch")
+      ? (route.stops[route.stops.length - 1]?.destinationBranchId
+          ? new mongoose.Types.ObjectId(route.stops[route.stops.length - 1].destinationBranchId!)
+          : undefined)
+      : undefined;
+
+  // ── Name ─────────────────────────────────────────────────────────────────
+  const routeName =
+    route.routeType === "hub_to_hub"    ? `Hub-to-Hub route ${routeNumber}` :
+    route.routeType === "hub_to_branch" ? `Hub-to-Branch route ${routeNumber}` :
+    route.routeType === "inter_branch"  ? `Inter-branch route ${routeNumber}` :
+                                          `Delivery route ${routeNumber}`;
+
+  // ── Create route document ─────────────────────────────────────────────────
   const [created] = await RouteModel.create(
     [
       {
         routeNumber,
         companyId:             branch.companyId,
-        name:                  `${route.routeType === "inter_branch" ? "Inter-branch" : "Delivery"} route ${routeNumber}`,
+        name:                  routeName,
         type:                  route.routeType,
         originBranchId:        branch._id,
-        destinationBranchId:   route.routeType === "inter_branch"
-          ? new mongoose.Types.ObjectId(route.stops[route.stops.length - 1]?.destinationBranchId ?? "")
-          : undefined,
+        destinationBranchId:   routeDestinationBranchId,
         assignedVehicleId:     vehicleId,
-        ...(route.routeType === "inter_branch"
+        ...(route.routeType !== "local_delivery"
           ? { assignedTransporterId: workerId }
           : { assignedDelivererId:   workerId }),
         stops,
         distance:              route.distanceKm,
         estimatedTime:         route.estimatedTimeMinutes,
+        distanceSource:        route.distanceSource,
         status:                "assigned",
         currentStopIndex:      0,
         completedStops:        0,
@@ -353,14 +506,47 @@ async function persistOptimizedRoute(
     { session },
   );
 
-  await PackageModel.updateMany(
-    { _id: { $in: packageIds } },
-    { $set: { currentRouteId: created._id } },
-    { session },
-  );
+  const routeOid = created._id as mongoose.Types.ObjectId;
 
-  return created._id as mongoose.Types.ObjectId;
+  // ── Link packages to the new route ───────────────────────────────────────
+  if (packageIds.length > 0) {
+    await PackageModel.updateMany(
+      { _id: { $in: packageIds } },
+      { $set: { currentRouteId: routeOid } },
+      { session },
+    );
+  }
+
+  // ── Link manifests to the new route & populate their transport leg ────────
+  //
+  //  When Python assigns manifests to a route, the manifests already exist in
+  //  MongoDB as "sealed" or "loaded".  We now:
+  //    1. Set status → "loaded"  (if still "sealed"; already "loaded" is a no-op)
+  //    2. Set transportLeg.transporterId, vehicleId, assignedAt
+  //  The transporter controller handles the "in_transit" and "arrived"
+  //  transitions later when the trip actually departs/arrives.
+
+  if (manifestIds.length > 0) {
+    await ManifestModel.updateMany(
+      {
+        _id:    { $in: manifestIds },
+        status: { $in: ["sealed", "loaded"] },
+      },
+      {
+        $set: {
+          status:                      "loaded",
+          "transportLeg.transporterId": workerId,
+          "transportLeg.vehicleId":     vehicleId,
+          "transportLeg.assignedAt":    new Date(),
+        },
+      },
+      { session },
+    );
+  }
+
+  return routeOid;
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  HELPERS
@@ -368,7 +554,7 @@ async function persistOptimizedRoute(
 
 function buildScheduledStart(date: Date): Date {
   const d = new Date(date);
-  d.setUTCHours(5, 0, 0, 0); // 06:00 Algeria (UTC+1)
+  d.setUTCHours(5, 0, 0, 0);   // 06:00 Algeria (UTC+1)
   return d;
 }
 
@@ -378,15 +564,3 @@ function generateRouteNumber(date: Date): string {
   const yyyymmdd = date.toISOString().slice(0, 10).replace(/-/g, "");
   return `R-${yyyymmdd}-${String(routeCounter).padStart(3, "0")}`;
 }
-
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Updated orchestrator: fetches data → calls Python optimizer → persists.
-//
-//  What changed vs the original orchestrator.ts:
-//    • NO more packIntoFleet / binPacking calls
-//    • NO more buildTransporterRoute / buildDelivererRoute calls
-//    • One call to callOptimizer() replaces the entire planning loop
-//    • Persistence logic unchanged — same RouteModel, same transactions
-// ─────────────────────────────────────────────────────────────────────────────
