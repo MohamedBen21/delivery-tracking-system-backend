@@ -43,7 +43,7 @@ export async function runDailyRoutePlanning(
     status: "active",
     "location.coordinates": { $exists: true, $ne: [] },
   })
-    .select("_id name code wilaya location companyId isHub hubType servedByHubId")
+    .select("_id name code wilaya location companyId branchType servesBranches")
     .lean() as any[];
 
   if (branches.length === 0) {
@@ -66,6 +66,7 @@ export async function runDailyRoutePlanning(
           companyId:   branch.companyId,
         },
         scheduledDate,
+        branch.branchType === "regional_main_hub",
       ),
     ),
   );
@@ -102,6 +103,7 @@ export async function runDailyRoutePlanning(
 async function planBranch(
   branch: BranchInfo,
   scheduledDate: Date,
+  isHub: boolean = false,
 ): Promise<BranchPlanResult> {
   const t0     = Date.now();
   const errors: string[] = [];
@@ -114,7 +116,7 @@ async function planBranch(
     transporters,
     deliverers,
   ] = await Promise.all([
-    getTransporterCandidates(branch._id, branch.companyId),
+    getTransporterCandidates(branch._id, branch.companyId, isHub),
     getDelivererCandidates(branch._id, branch.companyId),
     getAvailableVehicles(branch._id, branch.companyId),
     getAvailableTransporters(branch._id, branch.companyId, scheduledDate),
@@ -144,19 +146,29 @@ async function planBranch(
   // on each WorkerCandidate — getAvailableTransporters now projects them,
   // so no second TransporterModel query is needed here.
 
-  // Collect all destination branch IDs reachable by any hub worker
+  // Manifests are only relevant at hubs.  Skip this entire block for regular
+  // local_branch nodes — they only deal with raw packages.
   const reachableHubDestinations = new Set<string>();
-  for (const t of transporters) {
-    if (t.transporterType === "hub_to_hub" && t.assignedLine) {
-      t.assignedLine.forEach((id) => reachableHubDestinations.add(id.toString()));
+
+  if (isHub) {
+    for (const t of transporters) {
+      if (t.transporterType === "hub_to_hub" && t.assignedLine) {
+        t.assignedLine.forEach((id) => reachableHubDestinations.add(id.toString()));
+      }
+      if (t.transporterType === "hub_to_branch" && t.assignedBranches) {
+        t.assignedBranches.forEach((id) => reachableHubDestinations.add(id.toString()));
+      }
     }
-    if (t.transporterType === "hub_to_branch" && t.assignedBranches) {
-      t.assignedBranches.forEach((id) => reachableHubDestinations.add(id.toString()));
+    if (reachableHubDestinations.size === 0 && transporters.some((t) => t.transporterType)) {
+      console.warn(
+        `[orchestrator] Hub ${branch.name} has hub-type transporters but none have ` +
+        `assignedLine/assignedBranches configured — no manifests will be fetched.`,
+      );
     }
   }
 
-  // Fetch sealed/loaded manifests originating from this branch
-  const rawManifests = reachableHubDestinations.size > 0
+  // Fetch sealed/loaded manifests originating from this branch (hubs only)
+  const rawManifests = isHub && reachableHubDestinations.size > 0
     ? await ManifestModel
         .find({
           originBranchId:      branch._id,

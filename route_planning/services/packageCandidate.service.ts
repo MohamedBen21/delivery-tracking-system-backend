@@ -2,9 +2,27 @@
 //  packageCandidateService.ts
 //  Fetches packages that are ready to be put on a route today.
 //
-//  Two separate queries because the criteria differ:
-//    • Transporter: packages that need to MOVE between branches
-//    • Deliverer:   packages that are at their final branch and need home delivery
+//  Hub model changes
+//  ──────────────────
+//  getTransporterCandidates now accepts an optional isHub flag.
+//
+//  Regular branch (isHub = false, default):
+//    status = "at_origin_branch" — package is sitting here, needs to ship out.
+//    This is the original behaviour, unchanged.
+//
+//  Hub branch (isHub = true):
+//    The hub optimizer works with MANIFESTS, not raw packages.  Raw packages
+//    only appear at a hub via the legacy (non-hub) transporter path, which
+//    means they arrived from another branch and their final destination is
+//    still elsewhere.  The correct query is:
+//      status = "at_destination_branch"     ← arrived at this hub
+//      destinationBranchId ≠ this hub       ← NOT their final stop
+//    These packages still need onward transport and would be picked up by a
+//    legacy transporter running inter_branch from the hub.
+//
+//    Note: packages whose destinationBranchId === this hub are already at
+//    their correct branch and should NOT be re-transported.  They are picked
+//    up by a deliverer, not a transporter.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import mongoose from "mongoose";
@@ -13,34 +31,46 @@ import { PackageCandidate, Coords } from "../types.util";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  TRANSPORTER CANDIDATES
-//
-//  Criteria:
-//    • status = "at_origin_branch"  (sitting at the branch, ready to ship)
-//    • currentBranchId = this branch  (physically here)
-//    • destinationBranchId exists AND ≠ currentBranchId (needs to travel)
-//    • currentRouteId is null  (not already on a route today)
-//    • senderType = "freelancer" | "client"  (any sender)
-//    • companyId matches  (scoped to this company)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function getTransporterCandidates(
   branchId:  mongoose.Types.ObjectId,
   companyId: mongoose.Types.ObjectId,
+  isHub:     boolean = false,
 ): Promise<PackageCandidate[]> {
-  const docs = await PackageModel.find({
-    companyId,
-    currentBranchId:      branchId,
-    status:               "at_origin_branch",
-    destinationBranchId:  { $exists: true, $ne: branchId },
-    currentRouteId:       null,
-  })
+
+  let query: Record<string, any>;
+
+  if (isHub) {
+    // Hub: pick up packages that transited through and need to continue.
+    // These are packages that arrived here but whose final destination is
+    // a different branch — they need another transporter leg.
+    query = {
+      companyId,
+      currentBranchId:     branchId,
+      status:              "at_destination_branch",
+      destinationBranchId: { $exists: true, $ne: branchId },
+      currentRouteId:      null,
+    };
+  } else {
+    // Regular branch: packages sitting here, ready to ship out.
+    query = {
+      companyId,
+      currentBranchId:     branchId,
+      status:              "at_origin_branch",
+      destinationBranchId: { $exists: true, $ne: branchId },
+      currentRouteId:      null,
+    };
+  }
+
+  const docs = await PackageModel.find(query)
     .select(
       "_id weight volume isFragile deliveryType deliveryPriority " +
       "destinationBranchId",
     )
     .lean();
 
-  return docs.map((d: any) => ({
+  return (docs as any[]).map((d) => ({
     _id:                d._id,
     weight:             d.weight,
     volume:             d.volume ?? 0,
@@ -53,22 +83,12 @@ export async function getTransporterCandidates(
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  DELIVERER CANDIDATES
-//
-//  Criteria:
-//    • status = "at_destination_branch"  (arrived, waiting for last-mile)
-//    • currentBranchId = this branch
-//    • deliveryType = "home"  (branch_pickup packages are self-collected)
-//    • destination.location.coordinates exists  (need GPS to route)
-//    • currentRouteId is null
-//    • companyId matches
-//
-//  Packages without destination.location.coordinates are returned separately
-//  in `skipped` so the orchestrator can log them without silently dropping them.
+//  Unchanged — deliverers always pick up from "at_destination_branch" at
+//  their home branch and deliver to customer addresses.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface DelivererCandidateResult {
   candidates: PackageCandidate[];
-  /** Packages skipped because destination coordinates are missing */
   skipped:    { _id: mongoose.Types.ObjectId; reason: string }[];
 }
 
@@ -81,6 +101,8 @@ export async function getDelivererCandidates(
     currentBranchId: branchId,
     status:          "at_destination_branch",
     deliveryType:    "home",
+    // Only packages whose final destination IS this branch
+    destinationBranchId: branchId,
     currentRouteId:  null,
   })
     .select(
@@ -111,7 +133,7 @@ export async function getDelivererCandidates(
       deliveryType:     d.deliveryType,
       deliveryPriority: d.deliveryPriority ?? "standard",
       destination: {
-        coordinates:   coords,
+        coordinates:    coords,
         recipientName:  d.destination.recipientName,
         recipientPhone: d.destination.recipientPhone,
         address:        d.destination.address ?? "",
