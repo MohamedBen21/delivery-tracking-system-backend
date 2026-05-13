@@ -990,7 +990,7 @@ export const getVehicle = catchAsyncError(
 
     return res.status(200).json({
       success: true,
-      data: vehicle,
+      vehicle,
     });
   }
 );
@@ -1480,4 +1480,55 @@ export const releaseVehicle = catchAsyncError(
       await session.endSession();
     }
   }
+);
+
+
+
+
+export const getVehicleById = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+
+      const userId = req.user?._id;
+
+      if(!userId){
+        return next(new ErrorHandler("Authentication required.", 401));
+      }
+
+      const user = await userModel.findById(userId);
+
+      if(!user || (user.role != "admin" && user.role != "supervisor")){
+
+        return next(new ErrorHandler("Access denied. only admins and supervisors.", 403));
+
+      }
+
+
+      const { id } = req.params;
+
+      if (!id || !mongoose.Types.ObjectId.isValid(id.toString())) {
+        return next(new ErrorHandler("Invalid vehicle ID.", 400));
+      }
+
+      const vehicle = await VehicleModel.findById(id)
+        .populate("companyId", "name")
+        .populate("currentBranchId", "name code address")
+        .populate("assignedUserId", "name email phone")
+        .lean({ virtuals: true });
+
+      if (!vehicle) {
+        return next(new ErrorHandler("Vehicle not found.", 404));
+      }
+
+      res.status(200).json({
+        success: true,
+        vehicle
+      });
+
+    } catch (error: any) {
+      return next(
+        new ErrorHandler(error.message || "Error fetching vehicle.", 500),
+      );
+    }
+  },
 );
