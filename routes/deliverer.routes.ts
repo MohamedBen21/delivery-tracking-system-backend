@@ -4,8 +4,11 @@ import {
   arrivedAtBranchOutForDelivery,
   deliverPackageFail,
   deliveryReturnPackage,
+  getDeliveryHistory,
+  getManifestsPaginated,
   getMyDeliveries,
   getMyDeliveryById,
+  getTodayDeliveries,
   toggleOnlineStatus,
 } from "../controllers/supervisor.controller";
 
@@ -34,5 +37,24 @@ delivererRouter.patch("/online/toggle", ...chain, toggleOnlineStatus);
 delivererRouter.get("/deliverer/deliveries", ...chain , getMyDeliveries);
 
 delivererRouter.get("/deliverer/deliveries", ...chain , getMyDeliveryById);
+
+
+delivererRouter.get(
+  "/deliveries/today",
+  ...chain,
+  getTodayDeliveries,
+);
+
+delivererRouter.get(
+  "/deliveries/history",
+  ...chain,
+  getDeliveryHistory,
+);
+
+delivererRouter.get(
+  "/manifests",
+  ...chain,
+  getManifestsPaginated,
+);
 
 export default delivererRouter;

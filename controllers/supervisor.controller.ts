@@ -11399,3 +11399,246 @@ export const getTodayDeliveries = catchAsyncError(
 );
 
 
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET DELIVERY HISTORY
+//  Returns ALL packages assigned to the authenticated deliverer.
+//  Supports period filters: today, yesterday, last7days, last30days,
+//  last6months, or no filter (all time).
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+export const getDeliveryHistory = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const delivererUserId = req.user?._id;
+      if (!delivererUserId) {
+        return next(new ErrorHandler("Unauthorized — user not found.", 401));
+      }
+
+      const deliverer = await DelivererModel.findOne({ userId: delivererUserId }).lean();
+      if (!deliverer) {
+        return next(new ErrorHandler("Deliverer profile not found.", 404));
+      }
+
+
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const skip = (page - 1) * limit;
+
+
+      const filter: Record<string, any> = {
+        assignedDelivererId: deliverer._id,
+      };
+
+
+      type PeriodFilter = "today" | "yesterday" | "last7days" | "last30days" | "last6months" | "custom";
+
+      const period =  req.query.period ? (req.query.period as PeriodFilter) : "all";
+
+      if (period !== "all") {
+        const now = new Date();
+        let startDate: Date;
+
+        switch (period) {
+          case "today":
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            break;
+          case "yesterday":
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+            filter.deliveredAt = {
+              $gte: startDate,
+              $lt: new Date(startDate.getTime() + 24 * 60 * 60 * 1000),
+            };
+            break;
+          case "last7days":
+            startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            startDate.setHours(0, 0, 0, 0);
+            break;
+          case "last30days":
+            startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            startDate.setHours(0, 0, 0, 0);
+            break;
+          case "last6months":
+            startDate = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+            break;
+          case "custom":
+            if (req.query.startDate && req.query.endDate) {
+              filter.deliveredAt = {
+                $gte: new Date(req.query.startDate as string),
+                $lte: new Date(req.query.endDate as string),
+              };
+              startDate = new Date(req.query.startDate as string);
+            }
+            break;
+          default:
+            break;
+        }
+
+        if (startDate! && period !== "custom" && period !== "yesterday") {
+          filter.$or = [
+            { deliveredAt: { $gte: startDate } },
+            { createdAt: { $gte: startDate } },
+            { updatedAt: { $gte: startDate } },
+          ];
+        }
+      }
+
+      // ── Status filter ──────────────────────────────────────────────────
+      if (req.query.status) {
+        filter.status = req.query.status as string;
+      }
+
+      if (req.query.statuses) {
+        filter.status = { $in: (req.query.statuses as string).split(",").map(s => s.trim()) };
+      }
+
+      // ── Delivery type ──────────────────────────────────────────────────
+      if (req.query.deliveryType) {
+        filter.deliveryType = req.query.deliveryType as string;
+      }
+
+      // ── Priority ───────────────────────────────────────────────────────
+      if (req.query.deliveryPriority) {
+        filter.deliveryPriority = req.query.deliveryPriority as string;
+      }
+
+      // ── City ───────────────────────────────────────────────────────────
+      if (req.query.city) {
+        filter["destination.city"] = new RegExp(req.query.city as string, "i");
+      }
+
+      // ── Search by tracking number ──────────────────────────────────────
+      if (req.query.search) {
+        filter.trackingNumber = new RegExp(req.query.search as string, "i");
+      }
+
+      // ── Sort ───────────────────────────────────────────────────────────
+      const sortBy = (req.query.sortBy as string) || "deliveredAt";
+      const order = req.query.order === "desc" ? -1 : 1;
+      const sortMap: Record<string, any> = {
+        deliveredAt: { deliveredAt: order },
+        createdAt: { createdAt: order },
+        weight: { weight: order },
+        totalPrice: { totalPrice: order },
+        attemptCount: { attemptCount: order },
+      };
+      const sort = sortMap[sortBy] || { deliveredAt: -1 };
+
+      // ── Execute query ──────────────────────────────────────────────────
+      const [total, packages] = await Promise.all([
+        PackageModel.countDocuments(filter),
+        PackageModel.find(filter)
+          .populate("currentRouteId", "routeNumber status")
+          .populate("currentBranchId", "name code")
+          .sort(sort)
+          .skip(skip)
+          .limit(limit)
+          .lean({ virtuals: true }),
+      ]);
+
+      // ── Aggregate stats ────────────────────────────────────────────────
+      const allPackagesForStats = await PackageModel.find({
+        assignedDelivererId: deliverer._id,
+      }).lean();
+
+      const stats = {
+        totalLifetime: allPackagesForStats.length,
+        totalDelivered: allPackagesForStats.filter(p => p.status === "delivered").length,
+        totalFailed: allPackagesForStats.filter(p =>
+          ["failed_delivery", "failed_delivery_attempt"].includes(p.status)
+        ).length,
+        totalReturned: allPackagesForStats.filter(p => p.status === "returned").length,
+        totalCancelled: allPackagesForStats.filter(p => p.status === "cancelled").length,
+        successRate: allPackagesForStats.length > 0
+          ? Math.round((allPackagesForStats.filter(p => p.status === "delivered").length / allPackagesForStats.length) * 100)
+          : 0,
+        totalWeightDelivered: allPackagesForStats
+          .filter(p => p.status === "delivered")
+          .reduce((sum, p) => sum + (p.weight || 0), 0),
+        totalRevenue: allPackagesForStats
+          .filter(p => p.status === "delivered")
+          .reduce((sum, p) => sum + (p.totalPrice || 0), 0),
+      };
+
+      // ── Format response ────────────────────────────────────────────────
+      const formattedPackages = packages.map((pkg: any) => ({
+        id: pkg._id,
+        trackingNumber: pkg.trackingNumber,
+        status: pkg.status,
+        type: pkg.type,
+        isFragile: pkg.isFragile,
+        deliveryType: pkg.deliveryType,
+        deliveryPriority: pkg.deliveryPriority,
+
+        destination: {
+          recipientName: pkg.destination?.recipientName,
+          recipientPhone: pkg.destination?.recipientPhone,
+          address: pkg.destination?.address,
+          city: pkg.destination?.city,
+          state: pkg.destination?.state,
+        },
+
+        weight: pkg.weight,
+        totalPrice: pkg.totalPrice,
+        paymentStatus: pkg.paymentStatus,
+        paymentMethod: pkg.paymentMethod ?? null,
+
+        estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
+        deliveredAt: pkg.deliveredAt ?? null,
+        isOverdue: (pkg as any).isOverdue ?? false,
+
+        attemptCount: pkg.attemptCount,
+        maxAttempts: pkg.maxAttempts,
+        nextAttemptDate: pkg.nextAttemptDate ?? null,
+
+        currentRoute: pkg.currentRouteId
+          ? { id: pkg.currentRouteId._id, routeNumber: pkg.currentRouteId.routeNumber, status: pkg.currentRouteId.status }
+          : null,
+        currentBranch: pkg.currentBranchId
+          ? { id: pkg.currentBranchId._id, name: pkg.currentBranchId.name, code: pkg.currentBranchId.code }
+          : null,
+
+        returnInfo: pkg.returnInfo?.isReturn
+          ? { reason: pkg.returnInfo.reason, returnDate: pkg.returnInfo.returnDate }
+          : null,
+
+        deliveryProgress: (pkg as any).deliveryProgress,
+        needsAttention: (pkg as any).needsAttention,
+
+        createdAt: pkg.createdAt,
+        updatedAt: pkg.updatedAt,
+      }));
+
+      res.status(200).json({
+        success: true,
+        data: {
+          period: period === "all" ? "all_time" : period,
+          stats,
+          packages: formattedPackages,
+          pagination: {
+            total,
+            page,
+            limit,
+            pages: Math.ceil(total / limit),
+            hasMore: page * limit < total,
+          },
+          filters: {
+            period,
+            status: req.query.status ?? null,
+            statuses: req.query.statuses ?? null,
+            deliveryPriority: req.query.deliveryPriority ?? null,
+            deliveryType: req.query.deliveryType ?? null,
+            city: req.query.city ?? null,
+            search: req.query.search ?? null,
+            sortBy,
+            order: req.query.order ?? "desc",
+          },
+        },
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error fetching delivery history.", 500));
+    }
+  },
+);
