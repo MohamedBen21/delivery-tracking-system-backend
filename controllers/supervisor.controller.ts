@@ -11159,3 +11159,243 @@ export const getManifestsPaginated = catchAsyncError(
     }
   },
 );
+
+
+
+
+
+
+
+
+
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET TODAY'S DELIVERIES
+//  Returns packages assigned to the authenticated deliverer for TODAY only.
+//  Includes filtering by status, priority, etc.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getTodayDeliveries = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const delivererUserId = req.user?._id;
+      if (!delivererUserId) {
+        return next(new ErrorHandler("Unauthorized — user not found.", 401));
+      }
+
+      // Find deliverer profile
+      const deliverer = await DelivererModel.findOne({ userId: delivererUserId }).lean();
+      if (!deliverer) {
+        return next(new ErrorHandler("Deliverer profile not found.", 404));
+      }
+
+
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+
+
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const skip = (page - 1) * limit;
+
+
+      const filter: Record<string, any> = {
+        assignedDelivererId: deliverer._id,
+        // Packages that are either scheduled for today OR were created/updated today
+        $or: [
+          { estimatedDeliveryTime: { $gte: todayStart, $lte: todayEnd } },
+          { updatedAt: { $gte: todayStart, $lte: todayEnd } },
+          { deliveredAt: { $gte: todayStart, $lte: todayEnd } },
+          { nextAttemptDate: { $gte: todayStart, $lte: todayEnd } },
+        ],
+      };
+
+
+      const VALID_STATUSES: PackageStatus[] = [
+        "out_for_delivery", "delivered", "failed_delivery",
+        "failed_delivery_attempt", "at_destination_branch", "returned", "cancelled",
+      ];
+
+      if (req.query.status) {
+        const s = req.query.status as string;
+        if (!VALID_STATUSES.includes(s as PackageStatus))
+          return next(new ErrorHandler(`Invalid status: ${s}.`, 400));
+        filter.status = s;
+      }
+
+
+      if (req.query.statuses) {
+        const statuses = (req.query.statuses as string).split(",").map(s => s.trim());
+        const invalid = statuses.filter(s => !VALID_STATUSES.includes(s as PackageStatus));
+        if (invalid.length > 0)
+          return next(new ErrorHandler(`Invalid statuses: ${invalid.join(", ")}.`, 400));
+        filter.status = { $in: statuses };
+      }
+
+
+      const VALID_PRIORITIES = ["standard", "express", "same_day"];
+      if (req.query.deliveryPriority) {
+        const dp = req.query.deliveryPriority as string;
+        if (!VALID_PRIORITIES.includes(dp))
+          return next(new ErrorHandler(`Invalid deliveryPriority: ${dp}.`, 400));
+        filter.deliveryPriority = dp;
+      }
+
+
+      const VALID_TYPES: PackageType[] = [
+        "document", "parcel", "fragile", "heavy", "perishable", "electronic", "clothing",
+      ];
+      if (req.query.type) {
+        const t = req.query.type as string;
+        if (!VALID_TYPES.includes(t as PackageType))
+          return next(new ErrorHandler(`Invalid type: ${t}.`, 400));
+        filter.type = t;
+      }
+
+
+      if (req.query.paymentStatus) {
+        const VALID_PAYMENT = ["pending", "paid", "partially_paid", "refunded", "failed"];
+        const ps = req.query.paymentStatus as string;
+        if (!VALID_PAYMENT.includes(ps))
+          return next(new ErrorHandler(`Invalid paymentStatus: ${ps}.`, 400));
+        filter.paymentStatus = ps;
+      }
+
+
+      if (req.query.isFragile !== undefined) {
+        filter.isFragile = req.query.isFragile === "true";
+      }
+
+
+      if (req.query.city) {
+        filter["destination.city"] = new RegExp(req.query.city as string, "i");
+      }
+
+
+      const sortBy = (req.query.sortBy as string) || "estimatedDeliveryTime";
+      const order = req.query.order === "desc" ? -1 : 1;
+      const sortMap: Record<string, any> = {
+        estimatedDeliveryTime: { estimatedDeliveryTime: order },
+        createdAt: { createdAt: order },
+        weight: { weight: order },
+        totalPrice: { totalPrice: order },
+        attemptCount: { attemptCount: order },
+      };
+      const sort = sortMap[sortBy] || { estimatedDeliveryTime: 1 };
+
+
+      const [total, packages] = await Promise.all([
+        PackageModel.countDocuments(filter),
+        PackageModel.find(filter)
+          .populate("currentRouteId", "routeNumber status estimatedTime")
+          .populate("currentBranchId", "name code address")
+          .sort(sort)
+          .skip(skip)
+          .limit(limit)
+          .lean({ virtuals: true }),
+      ]);
+
+
+      const stats = {
+        total: packages.length,
+        delivered: packages.filter(p => p.status === "delivered").length,
+        failed: packages.filter(p => ["failed_delivery", "failed_delivery_attempt"].includes(p.status)).length,
+        pending: packages.filter(p => ["out_for_delivery", "at_destination_branch"].includes(p.status)).length,
+        returned: packages.filter(p => p.status === "returned").length,
+        cancelled: packages.filter(p => p.status === "cancelled").length,
+        totalWeight: packages.reduce((sum, p) => sum + (p.weight || 0), 0),
+        totalPrice: packages.reduce((sum, p) => sum + (p.totalPrice || 0), 0),
+      };
+
+
+      const formattedPackages = packages.map((pkg: any) => ({
+        id: pkg._id,
+        trackingNumber: pkg.trackingNumber,
+        status: pkg.status,
+        type: pkg.type,
+        isFragile: pkg.isFragile,
+        deliveryType: pkg.deliveryType,
+        deliveryPriority: pkg.deliveryPriority,
+
+        destination: {
+          recipientName: pkg.destination?.recipientName,
+          recipientPhone: pkg.destination?.recipientPhone,
+          address: pkg.destination?.address,
+          city: pkg.destination?.city,
+          state: pkg.destination?.state,
+        },
+
+        weight: pkg.weight,
+        totalPrice: pkg.totalPrice,
+        paymentStatus: pkg.paymentStatus,
+        paymentMethod: pkg.paymentMethod ?? null,
+
+        estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
+        deliveredAt: pkg.deliveredAt ?? null,
+        isOverdue: (pkg as any).isOverdue ?? false,
+
+        attemptCount: pkg.attemptCount,
+        maxAttempts: pkg.maxAttempts,
+        nextAttemptDate: pkg.nextAttemptDate ?? null,
+
+        currentRoute: pkg.currentRouteId
+          ? {
+              id: pkg.currentRouteId._id,
+              routeNumber: pkg.currentRouteId.routeNumber,
+              status: pkg.currentRouteId.status,
+            }
+          : null,
+        currentBranch: pkg.currentBranchId
+          ? {
+              id: pkg.currentBranchId._id,
+              name: pkg.currentBranchId.name,
+              code: pkg.currentBranchId.code,
+            }
+          : null,
+
+        deliveryProgress: (pkg as any).deliveryProgress,
+        needsAttention: (pkg as any).needsAttention,
+        canBeDelivered: (pkg as any).canBeDelivered,
+
+        createdAt: pkg.createdAt,
+        updatedAt: pkg.updatedAt,
+      }));
+
+      res.status(200).json({
+        success: true,
+        data: {
+          date: todayStart.toISOString().split("T")[0],
+          stats,
+          packages: formattedPackages,
+          pagination: {
+            total,
+            page,
+            limit,
+            pages: Math.ceil(total / limit),
+            hasMore: page * limit < total,
+          },
+          filters: {
+            status: req.query.status ?? null,
+            statuses: req.query.statuses ?? null,
+            deliveryPriority: req.query.deliveryPriority ?? null,
+            type: req.query.type ?? null,
+            paymentStatus: req.query.paymentStatus ?? null,
+            isFragile: req.query.isFragile ?? null,
+            city: req.query.city ?? null,
+            sortBy,
+            order: req.query.order ?? "asc",
+          },
+        },
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error fetching today's deliveries.", 500));
+    }
+  },
+);
+
+
