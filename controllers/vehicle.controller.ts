@@ -1497,9 +1497,9 @@ export const getVehicleById = catchAsyncError(
 
       const user = await userModel.findById(userId);
 
-      if(!user || (user.role != "admin" && user.role != "supervisor")){
+      if(!user || (user.role != "admin" && user.role != "supervisor" && user.role != "manager")){
 
-        return next(new ErrorHandler("Access denied. only admins and supervisors.", 403));
+        return next(new ErrorHandler("Access denied. only admins and supervisors or a manager.", 403));
 
       }
 

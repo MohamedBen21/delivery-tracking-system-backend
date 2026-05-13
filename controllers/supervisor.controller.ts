@@ -19,7 +19,7 @@ import { deleteImage } from "../utils/Multer.util";
 import { buildUserFieldUpdates } from "./manager.controller";
 import PaymentModel from "../models/payment.model";
 import { notifyAdminsNewEntityPending, sendDelivererAccountCreatedNotification, sendDelivererBlockStatusNotification, sendDeliveryFailedNotification, sendFreelancerAccountCreatedNotification, sendFreelancerBlockStatusNotification, sendPackageCancelledNotification, sendPackageCreatedNotification, sendPackageIssueReportedNotification, sendPackageIssueResolvedNotification, sendPackageReturnedToBranchNotification, sendPackageStatusUpdatedNotification, sendTransporterAccountCreatedNotification, sendTransporterBlockStatusNotification } from "../services/notification.service";
-import ManifestModel from "../models/manifest.model";
+import ManifestModel, { ManifestPriority, ManifestStatus } from "../models/manifest.model";
 
 
 interface ILocationBody {
@@ -10767,5 +10767,395 @@ export const getMyDeliveryById = catchAsyncError(
       success: true,
       data: { delivery: detail },
     });
+  },
+);
+
+
+
+
+export const getManifestsPaginated = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const limit = Math.min(
+        100,
+        Math.max(1, parseInt(req.query.limit as string) || 20),
+      );
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const skip = (page - 1) * limit;
+
+      const filter: Record<string, any> = {};
+
+      const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
+      const isValidId  = (val: string) => mongoose.Types.ObjectId.isValid(val);
+
+
+      if (req.query.companyId) {
+        if (!isValidId(req.query.companyId as string))
+          return next(new ErrorHandler("Invalid companyId.", 400));
+        filter.companyId = toObjectId(req.query.companyId as string);
+      }
+
+      if (req.query.originBranchId) {
+        if (!isValidId(req.query.originBranchId as string))
+          return next(new ErrorHandler("Invalid originBranchId.", 400));
+        filter.originBranchId = toObjectId(req.query.originBranchId as string);
+      }
+
+      if (req.query.destinationBranchId) {
+        if (!isValidId(req.query.destinationBranchId as string))
+          return next(new ErrorHandler("Invalid destinationBranchId.", 400));
+        filter.destinationBranchId = toObjectId(req.query.destinationBranchId as string);
+      }
+
+      if (req.query.branchId) {
+
+        if (!isValidId(req.query.branchId as string))
+          return next(new ErrorHandler("Invalid branchId.", 400));
+        const branchOid = toObjectId(req.query.branchId as string);
+        filter.$or = [
+          { originBranchId: branchOid },
+          { destinationBranchId: branchOid },
+        ];
+      }
+
+      if (req.query.createdBy) {
+        if (!isValidId(req.query.createdBy as string))
+          return next(new ErrorHandler("Invalid createdBy.", 400));
+        filter.createdBy = toObjectId(req.query.createdBy as string);
+      }
+
+      if (req.query.transporterId) {
+        if (!isValidId(req.query.transporterId as string))
+          return next(new ErrorHandler("Invalid transporterId.", 400));
+        filter["transportLeg.transporterId"] = toObjectId(req.query.transporterId as string);
+      }
+
+      if (req.query.vehicleId) {
+        if (!isValidId(req.query.vehicleId as string))
+          return next(new ErrorHandler("Invalid vehicleId.", 400));
+        filter["transportLeg.vehicleId"] = toObjectId(req.query.vehicleId as string);
+      }
+
+
+      const VALID_STATUSES: ManifestStatus[] = [
+        "open", "sealed", "loaded", "in_transit",
+        "arrived", "unloading", "closed", "discrepancy", "cancelled",
+      ];
+
+      if (req.query.status) {
+        const s = req.query.status as string;
+        if (!VALID_STATUSES.includes(s as ManifestStatus))
+          return next(new ErrorHandler(`Invalid status: ${s}.`, 400));
+        filter.status = s;
+      }
+
+
+      if (req.query.statuses) {
+        const statuses = (req.query.statuses as string).split(",").map(s => s.trim());
+        const invalid = statuses.filter(s => !VALID_STATUSES.includes(s as ManifestStatus));
+        if (invalid.length > 0)
+          return next(new ErrorHandler(`Invalid statuses: ${invalid.join(", ")}.`, 400));
+        filter.status = { $in: statuses };
+      }
+
+
+      const VALID_PRIORITIES: ManifestPriority[] = ["standard", "express", "urgent"];
+      if (req.query.priority) {
+        const p = req.query.priority as string;
+        if (!VALID_PRIORITIES.includes(p as ManifestPriority))
+          return next(new ErrorHandler(`Invalid priority: ${p}.`, 400));
+        filter.priority = p;
+      }
+
+
+      if (req.query.manifestCode) {
+        filter.manifestCode = new RegExp(req.query.manifestCode as string, "i");
+      }
+
+      if (req.query.search) {
+        const searchRe = new RegExp(req.query.search as string, "i");
+        filter.$or = [
+          ...(filter.$or || []),
+          { manifestCode: searchRe },
+          { internalReference: searchRe },
+          { notes: searchRe },
+          { "packages.trackingNumber": searchRe },
+        ];
+      }
+
+
+      if (req.query.containsPackageId) {
+        if (!isValidId(req.query.containsPackageId as string))
+          return next(new ErrorHandler("Invalid containsPackageId.", 400));
+        filter["packages.packageId"] = toObjectId(req.query.containsPackageId as string);
+      }
+
+
+      if (req.query.hasDiscrepancy !== undefined) {
+        if (req.query.hasDiscrepancy === "true") {
+          filter.$or = [
+            ...(filter.$or || []),
+            { status: "discrepancy" },
+            { discrepancy: { $ne: null } },
+          ];
+        } else {
+          filter.status = { $nin: ["discrepancy"] };
+          filter.discrepancy = null;
+        }
+      }
+
+
+      if (req.query.isSealed !== undefined) {
+        if (req.query.isSealed === "true") {
+          filter.status = { $in: ["sealed", "loaded", "in_transit", "arrived", "unloading", "closed"] };
+        } else {
+          filter.status = { $in: ["open", "cancelled"] };
+        }
+      }
+
+
+      if (req.query.isInTransit !== undefined) {
+        filter.status = req.query.isInTransit === "true" ? "in_transit" : { $ne: "in_transit" };
+      }
+
+
+      
+      if (req.query.minWeight || req.query.maxWeight) {
+        const min = req.query.minWeight ? parseFloat(req.query.minWeight as string) : null;
+        const max = req.query.maxWeight ? parseFloat(req.query.maxWeight as string) : null;
+        filter.totalDeclaredWeight = {
+          ...(min !== null && !isNaN(min) && { $gte: min }),
+          ...(max !== null && !isNaN(max) && { $lte: max }),
+        };
+      }
+
+
+      if (req.query.minPackageCount || req.query.maxPackageCount) {
+        const min = req.query.minPackageCount ? parseInt(req.query.minPackageCount as string) : null;
+        const max = req.query.maxPackageCount ? parseInt(req.query.maxPackageCount as string) : null;
+        filter.packageCount = {
+          ...(min !== null && !isNaN(min) && { $gte: min }),
+          ...(max !== null && !isNaN(max) && { $lte: max }),
+        };
+      }
+
+
+      if (req.query.createdFrom || req.query.createdTo) {
+        filter.createdAt = {
+          ...(req.query.createdFrom && { $gte: new Date(req.query.createdFrom as string) }),
+          ...(req.query.createdTo && { $lte: new Date(req.query.createdTo as string) }),
+        };
+      }
+
+      if (req.query.departedFrom || req.query.departedTo) {
+        filter.departedAt = {
+          ...(req.query.departedFrom && { $gte: new Date(req.query.departedFrom as string) }),
+          ...(req.query.departedTo && { $lte: new Date(req.query.departedTo as string) }),
+        };
+      }
+
+      if (req.query.arrivedFrom || req.query.arrivedTo) {
+        filter.arrivedAt = {
+          ...(req.query.arrivedFrom && { $gte: new Date(req.query.arrivedFrom as string) }),
+          ...(req.query.arrivedTo && { $lte: new Date(req.query.arrivedTo as string) }),
+        };
+      }
+
+
+      const sortBy = (req.query.sortBy as string) || "createdAt";
+      const order  = req.query.order === "asc" ? 1 : -1;
+
+      const sortMap: Record<string, any> = {
+        createdAt:           { createdAt: order },
+        updatedAt:           { updatedAt: order },
+        totalDeclaredWeight: { totalDeclaredWeight: order },
+        packageCount:        { packageCount: order },
+        manifestCode:        { manifestCode: order },
+        departedAt:          { departedAt: order },
+        arrivedAt:           { arrivedAt: order },
+        status:              { status: order },
+        priority:            { priority: order },
+      };
+
+      const sort = sortMap[sortBy] || { createdAt: -1 };
+
+
+      const [total, manifests] = await Promise.all([
+        ManifestModel.countDocuments(filter),
+        ManifestModel.find(filter)
+          .populate("originBranchId", "name code address.city")
+          .populate("destinationBranchId", "name code address.city")
+          .populate("createdBy", "name email")
+          .populate("transportLeg.transporterId", "name email phone")
+          .populate("transportLeg.vehicleId", "registrationNumber type")
+          .sort(sort)
+          .skip(skip)
+          .limit(limit)
+          .lean({ virtuals: true }),
+      ]);
+
+
+      
+      const formattedManifests = manifests.map((m: any) => ({
+        id: m._id,
+        manifestCode: m.manifestCode,
+        companyId: m.companyId,
+        originBranch: m.originBranchId
+          ? {
+              id: m.originBranchId._id,
+              name: m.originBranchId.name,
+              code: m.originBranchId.code,
+              city: m.originBranchId.address?.city,
+            }
+          : null,
+        destinationBranch: m.destinationBranchId
+          ? {
+              id: m.destinationBranchId._id,
+              name: m.destinationBranchId.name,
+              code: m.destinationBranchId.code,
+              city: m.destinationBranchId.address?.city,
+            }
+          : null,
+        status: m.status,
+        priority: m.priority,
+        createdBy: m.createdBy
+          ? { id: m.createdBy._id, name: m.createdBy.name, email: m.createdBy.email }
+          : null,
+        sealInfo: m.sealInfo
+          ? {
+              sealedBy: m.sealInfo.sealedBy,
+              sealedAt: m.sealInfo.sealedAt,
+              sealNumber: m.sealInfo.sealNumber,
+              totalWeight: m.sealInfo.totalWeight,
+              packageCount: m.sealInfo.packageCount,
+              notes: m.sealInfo.notes ?? null,
+            }
+          : null,
+        transportLeg: m.transportLeg
+          ? {
+              vehicle: m.transportLeg.vehicleId
+                ? {
+                    id: m.transportLeg.vehicleId._id,
+                    registrationNumber: m.transportLeg.vehicleId.registrationNumber,
+                    type: m.transportLeg.vehicleId.type,
+                  }
+                : null,
+              transporter: m.transportLeg.transporterId
+                ? {
+                    id: m.transportLeg.transporterId._id,
+                    name: m.transportLeg.transporterId.name,
+                    email: m.transportLeg.transporterId.email,
+                    phone: m.transportLeg.transporterId.phone,
+                  }
+                : null,
+              assignedAt: m.transportLeg.assignedAt,
+              departedAt: m.transportLeg.departedAt ?? null,
+              arrivedAt: m.transportLeg.arrivedAt ?? null,
+              estimatedArrival: m.transportLeg.estimatedArrival ?? null,
+            }
+          : null,
+        totalDeclaredWeight: m.totalDeclaredWeight,
+        packageCount: m.packageCount,
+        packages: (m.packages || []).map((p: any) => ({
+          packageId: p.packageId,
+          trackingNumber: p.trackingNumber,
+          weight: p.weight,
+          sequence: p.sequence,
+          entryStatus: p.entryStatus,
+          scannedInAt: p.scannedInAt,
+          scannedOutAt: p.scannedOutAt ?? null,
+          remanifestId: p.remanifestId ?? null,
+          notes: p.notes ?? null,
+        })),
+        hasDiscrepancy: m.hasDiscrepancy,
+        discrepancy: m.discrepancy
+          ? {
+              reportedBy: m.discrepancy.reportedBy,
+              reportedAt: m.discrepancy.reportedAt,
+              expectedCount: m.discrepancy.expectedCount,
+              actualCount: m.discrepancy.actualCount,
+              missingPackageIds: m.discrepancy.missingPackageIds,
+              extraPackageIds: m.discrepancy.extraPackageIds,
+              notes: m.discrepancy.notes,
+              resolvedBy: m.discrepancy.resolvedBy ?? null,
+              resolvedAt: m.discrepancy.resolvedAt ?? null,
+              resolution: m.discrepancy.resolution ?? null,
+            }
+          : null,
+        isSealed: m.isSealed,
+        isInTransit: m.isInTransit,
+        isClosed: m.isClosed,
+        unloadedCount: m.unloadedCount,
+        remainingCount: m.remainingCount,
+        durationMinutes: m.durationMinutes ?? null,
+        internalReference: m.internalReference ?? null,
+        notes: m.notes ?? null,
+        createdAt: m.createdAt,
+        updatedAt: m.updatedAt,
+        sealedAt: m.sealedAt ?? null,
+        closedAt: m.closedAt ?? null,
+        departedAt: m.departedAt ?? null,
+        arrivedAt: m.arrivedAt ?? null,
+        estimatedArrival: m.estimatedArrival ?? null,
+      }));
+
+      res.status(200).json({
+        success: true,
+        data: {
+          manifests: formattedManifests,
+          pagination: {
+            total,
+            page,
+            limit,
+            pages: Math.ceil(total / limit),
+            hasMore: page * limit < total,
+          },
+          filters: {
+            status:             req.query.status             ?? null,
+            statuses:           req.query.statuses           ?? null,
+            priority:           req.query.priority           ?? null,
+            isSealed:           req.query.isSealed           ?? null,
+            isInTransit:        req.query.isInTransit        ?? null,
+            hasDiscrepancy:     req.query.hasDiscrepancy     ?? null,
+            minWeight:          req.query.minWeight          ?? null,
+            maxWeight:          req.query.maxWeight          ?? null,
+            minPackageCount:    req.query.minPackageCount    ?? null,
+            maxPackageCount:    req.query.maxPackageCount    ?? null,
+            manifestCode:       req.query.manifestCode       ?? null,
+            search:             req.query.search             ?? null,
+            containsPackageId:  req.query.containsPackageId  ?? null,
+            companyId:          req.query.companyId          ?? null,
+            originBranchId:     req.query.originBranchId     ?? null,
+            destinationBranchId: req.query.destinationBranchId ?? null,
+            branchId:           req.query.branchId           ?? null,
+            createdBy:          req.query.createdBy          ?? null,
+            transporterId:      req.query.transporterId      ?? null,
+            vehicleId:          req.query.vehicleId          ?? null,
+            createdFrom:        req.query.createdFrom        ?? null,
+            createdTo:          req.query.createdTo          ?? null,
+            departedFrom:       req.query.departedFrom       ?? null,
+            departedTo:         req.query.departedTo         ?? null,
+            arrivedFrom:        req.query.arrivedFrom        ?? null,
+            arrivedTo:          req.query.arrivedTo          ?? null,
+            sortBy,
+            order:              req.query.order              ?? "desc",
+          },
+        },
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+      return next(
+        new ErrorHandler(error.message || "Error fetching manifests.", 500),
+      );
+    }
   },
 );
