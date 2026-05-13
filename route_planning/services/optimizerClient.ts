@@ -49,6 +49,10 @@ export interface OptimizerManifest {
   totalWeight:            number;    // kg — sum of all packages inside
   totalVolume:            number;    // m³ — 0 when not tracked at manifest level
   packageCount:           number;    // informational
+  /** Branch where this manifest currently sits (its physical origin for this leg). */
+  originBranchId:         string;
+  /** Coordinates of the origin branch, resolved by Node.js. */
+  originCoordinates:      [number, number];
   destinationBranchId:    string;
   /** Coordinates of the destination branch, resolved by Node.js. */
   destinationCoordinates: [number, number];
@@ -129,6 +133,12 @@ export interface OptimizerRoute {
    */
   routeType:            "hub_to_hub" | "hub_to_branch" | "inter_branch" | "local_delivery";
   stops:                OptimizerStop[];
+  /**
+   * For hub_to_hub routes: the hub this leg departs from.
+   * May differ from the planning hub for return legs (hub B → hub A).
+   * Node.js must use this as originBranchId on the persisted RouteModel document.
+   */
+  originBranchId?:      string;
   /** Package IDs on this route (empty for hub routes). */
   packageIds:           string[];
   /** Manifest IDs on this route (empty for deliverer / legacy routes). */

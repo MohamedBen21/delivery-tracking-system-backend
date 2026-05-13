@@ -148,12 +148,22 @@ async function planBranch(
 
   // Manifests are only relevant at hubs.  Skip this entire block for regular
   // local_branch nodes — they only deal with raw packages.
-  const reachableHubDestinations = new Set<string>();
+
+  const reachableHubDestinations = new Set<string>();  // for hub_to_branch
+  const hub_to_hub_partnerIds    = new Set<string>();  // for hub_to_hub return fetch
 
   if (isHub) {
     for (const t of transporters) {
       if (t.transporterType === "hub_to_hub" && t.assignedLine) {
-        t.assignedLine.forEach((id) => reachableHubDestinations.add(id.toString()));
+
+        t.assignedLine.forEach((id) => {
+          reachableHubDestinations.add(id.toString());
+          // The "partner" hub is the OTHER hub in the line (not this one)
+          if (id.toString() !== branch._id.toString()) {
+            hub_to_hub_partnerIds.add(id.toString());
+
+          }
+        });
       }
       if (t.transporterType === "hub_to_branch" && t.assignedBranches) {
         t.assignedBranches.forEach((id) => reachableHubDestinations.add(id.toString()));
@@ -167,56 +177,100 @@ async function planBranch(
     }
   }
 
-  // Fetch sealed/loaded manifests originating from this branch (hubs only)
-  const rawManifests = isHub && reachableHubDestinations.size > 0
-    ? await ManifestModel
-        .find({
-          originBranchId:      branch._id,
-          status:              { $in: ["sealed", "loaded"] },
-          destinationBranchId: { $in: Array.from(reachableHubDestinations) },
-        })
-        .select("_id manifestCode totalDeclaredWeight packageCount destinationBranchId status priority")
-        .lean()
-    : [];
 
-  // Resolve destination branch coordinates for every manifest
+  // ── Fetch manifests (hubs only) ───────────────────────────────────────────
+  //
+  // OUTBOUND: manifests sitting at THIS hub, going to any reachable hub/branch.
+  // RETURN  : manifests sitting at PARTNER hubs, going back to THIS hub.
+  //           These are fetched so the optimizer can plan T1's return leg in
+  //           the same planning run — T1 drops outbound at hub B and picks up
+  //           the pre-built return route immediately, same night.
+  //
+  // Both sets are merged into a single `manifests` array for the optimizer.
+  // Python distinguishes them by originBranchId on each manifest.
+
+
+  const [outboundRaw, returnRaw] = isHub && reachableHubDestinations.size > 0
+    ? await Promise.all([
+        // Outbound: this hub → destinations
+        ManifestModel
+          .find({
+            originBranchId:      branch._id,
+            status:              { $in: ["sealed", "loaded"] },
+            destinationBranchId: { $in: Array.from(reachableHubDestinations) },
+          })
+          .select("_id manifestCode totalDeclaredWeight packageCount originBranchId destinationBranchId status priority")
+          .lean(),
+
+        // Return: partner hubs → this hub (for hub_to_hub lines only)
+        hub_to_hub_partnerIds.size > 0
+          ? ManifestModel
+              .find({
+                originBranchId:      { $in: Array.from(hub_to_hub_partnerIds) },
+                destinationBranchId: branch._id,
+                status:              { $in: ["sealed", "loaded"] },
+              })
+              .select("_id manifestCode totalDeclaredWeight packageCount originBranchId destinationBranchId status priority")
+              .lean()
+          : Promise.resolve([]),
+      ])
+    : [[], []];
+
+  const rawManifests = [...outboundRaw, ...returnRaw];
+
+  // Resolve branch coordinates for both origins and destinations
   // (Python needs them — it has no DB access)
-  const destBranchIds = [...new Set(
-    rawManifests.map((m) => m.destinationBranchId.toString()),
-  )];
+  const allBranchIdsNeeded = [...new Set([
+    ...rawManifests.map((m: any) => m.destinationBranchId.toString()),
+    ...rawManifests.map((m: any) => m.originBranchId.toString()),
+  ])];
 
-  const destBranches = destBranchIds.length > 0
+  const coordBranches = allBranchIdsNeeded.length > 0
     ? await BranchModel
-        .find({ _id: { $in: destBranchIds } })
+        .find({ _id: { $in: allBranchIdsNeeded } })
         .select("_id location")
         .lean()
     : [];
 
   const branchCoordMap = new Map<string, [number, number]>(
-    destBranches
-      .filter((b) => b.location?.coordinates?.length === 2)
-      .map((b) => [b._id.toString(), b.location.coordinates as [number, number]]),
+    coordBranches
+      .filter((b: any) => b.location?.coordinates?.length === 2)
+      .map((b: any) => [b._id.toString(), b.location.coordinates as [number, number]]),
   );
 
-  // Build OptimizerManifest list — drop manifests whose branch coords are missing
+  // Build OptimizerManifest list — drop manifests with missing coordinates
   const optimizerManifests: OptimizerManifest[] = [];
-  for (const m of rawManifests) {
-    const coords = branchCoordMap.get(m.destinationBranchId.toString());
-    if (!coords) {
-      errors.push(
-        `Manifest ${m._id}: destination branch ${m.destinationBranchId} has no coordinates — skipped`,
-      );
+
+  for (const m of rawManifests as any[]) {
+
+    const destCoords   = branchCoordMap.get(m.destinationBranchId.toString());
+    const originCoords = branchCoordMap.get(m.originBranchId.toString());
+
+    if (!destCoords) {
+
+      errors.push(`Manifest ${m._id}: destination branch ${m.destinationBranchId} has no coordinates — skipped`);
       continue;
+
+    }
+    if (!originCoords) {
+
+      errors.push(`Manifest ${m._id}: origin branch ${m.originBranchId} has no coordinates — skipped`);
+      continue;
+
     }
     optimizerManifests.push({
+
       _id:                    m._id.toString(),
       manifestCode:           m.manifestCode,
       totalWeight:            m.totalDeclaredWeight ?? 0,
-      totalVolume:            0,   // manifests don't currently track volume
+      totalVolume:            0,
       packageCount:           m.packageCount ?? 0,
+      originBranchId:         m.originBranchId.toString(),
+      originCoordinates:      originCoords,
       destinationBranchId:    m.destinationBranchId.toString(),
-      destinationCoordinates: coords,
+      destinationCoordinates: destCoords,
       priority:               (m.priority as "standard" | "express" | "urgent") ?? "standard",
+      
     });
   }
 
@@ -496,7 +550,13 @@ async function persistOptimizedRoute(
         companyId:             branch.companyId,
         name:                  routeName,
         type:                  route.routeType,
-        originBranchId:        branch._id,
+        // hub_to_hub return routes originate at the partner hub, not branch._id.
+        // Python sets route.originBranchId for all hub_to_hub routes so we
+        // always persist the correct origin regardless of which leg this is.
+        originBranchId:
+          route.routeType === "hub_to_hub" && route.originBranchId
+            ? new mongoose.Types.ObjectId(route.originBranchId)
+            : branch._id,
         destinationBranchId:   routeDestinationBranchId,
         assignedVehicleId:     vehicleId,
         ...(route.routeType !== "local_delivery"
