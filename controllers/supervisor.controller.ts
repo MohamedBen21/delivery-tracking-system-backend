@@ -22,6 +22,7 @@ import { notifyAdminsNewEntityPending, sendDelivererAccountCreatedNotification, 
 import ManifestModel, { ManifestPriority, ManifestStatus } from "../models/manifest.model";
 
 
+
 interface ILocationBody {
   type: "Point";
   coordinates: [number, number];
@@ -11250,6 +11251,7 @@ export const getTodayDeliveries = catchAsyncError(
       const VALID_TYPES: PackageType[] = [
         "document", "parcel", "fragile", "heavy", "perishable", "electronic", "clothing",
       ];
+
       if (req.query.type) {
         const t = req.query.type as string;
         if (!VALID_TYPES.includes(t as PackageType))
@@ -11485,7 +11487,7 @@ export const getDeliveryHistory = catchAsyncError(
         }
       }
 
-      // ── Status filter ──────────────────────────────────────────────────
+
       if (req.query.status) {
         filter.status = req.query.status as string;
       }
@@ -11494,27 +11496,27 @@ export const getDeliveryHistory = catchAsyncError(
         filter.status = { $in: (req.query.statuses as string).split(",").map(s => s.trim()) };
       }
 
-      // ── Delivery type ──────────────────────────────────────────────────
+
       if (req.query.deliveryType) {
         filter.deliveryType = req.query.deliveryType as string;
       }
 
-      // ── Priority ───────────────────────────────────────────────────────
+
       if (req.query.deliveryPriority) {
         filter.deliveryPriority = req.query.deliveryPriority as string;
       }
 
-      // ── City ───────────────────────────────────────────────────────────
+
       if (req.query.city) {
         filter["destination.city"] = new RegExp(req.query.city as string, "i");
       }
 
-      // ── Search by tracking number ──────────────────────────────────────
+
       if (req.query.search) {
         filter.trackingNumber = new RegExp(req.query.search as string, "i");
       }
 
-      // ── Sort ───────────────────────────────────────────────────────────
+
       const sortBy = (req.query.sortBy as string) || "deliveredAt";
       const order = req.query.order === "desc" ? -1 : 1;
       const sortMap: Record<string, any> = {
@@ -11526,7 +11528,7 @@ export const getDeliveryHistory = catchAsyncError(
       };
       const sort = sortMap[sortBy] || { deliveredAt: -1 };
 
-      // ── Execute query ──────────────────────────────────────────────────
+
       const [total, packages] = await Promise.all([
         PackageModel.countDocuments(filter),
         PackageModel.find(filter)
@@ -11538,7 +11540,7 @@ export const getDeliveryHistory = catchAsyncError(
           .lean({ virtuals: true }),
       ]);
 
-      // ── Aggregate stats ────────────────────────────────────────────────
+
       const allPackagesForStats = await PackageModel.find({
         assignedDelivererId: deliverer._id,
       }).lean();
@@ -11562,7 +11564,7 @@ export const getDeliveryHistory = catchAsyncError(
           .reduce((sum, p) => sum + (p.totalPrice || 0), 0),
       };
 
-      // ── Format response ────────────────────────────────────────────────
+
       const formattedPackages = packages.map((pkg: any) => ({
         id: pkg._id,
         trackingNumber: pkg.trackingNumber,
@@ -11642,3 +11644,74 @@ export const getDeliveryHistory = catchAsyncError(
     }
   },
 );
+
+
+
+
+export const getTransporterToday = catchAsyncError(async (req:Request , res: Response , next:NextFunction) => {
+
+  try {
+    const transporterUserId = req.user?._id;
+
+    if(!transporterUserId){
+      return next(new ErrorHandler("Unauthorized — user not found.", 401));
+    }
+
+    const [user , transporter] = await Promise.all([
+      userModel.findById(transporterUserId).lean(),
+      TransporterModel.findOne({ userId: transporterUserId }).lean(),
+    ]);
+
+    if(!user || !transporter){
+      return next(new ErrorHandler("Transporter profile not found.", 404));
+    }
+
+    if(!transporter.isActive || transporter.isSuspended){
+      return next(new ErrorHandler("Transporter account is not active.", 403));
+    }
+
+    const todayStart = new Date();
+
+
+    
+  } catch (error:any) {
+
+    
+  }
+});
+
+
+
+
+
+export const getTransporterHistory = catchAsyncError(
+
+  async (req:Request , res:Response , next : NextFunction) =>{
+
+    const transporterUserId = req.user?._id;
+
+    if(!transporterUserId){
+
+      return next(new ErrorHandler("Unauthorized — user not found.", 401));
+    }
+
+    const [user, transporter ] = await Promise.all([
+
+      await userModel.findById(transporterUserId),
+      await TransporterModel.findOne({ userId: transporterUserId }),
+    ]);
+
+    if(!user || user.role !== "transporter"){
+      return next(new ErrorHandler("Transporter profile not found.", 404));
+    }
+
+
+    try {
+      
+    } catch (error: any) {
+      return next (new ErrorHandler(error.message || "error fetching transporter histroy" , 500));
+      
+    }
+
+  }
+)

@@ -8,6 +8,7 @@ import ClientModel from "../models/client.model";
 import SupervisorModel from "../models/supervisor.model";
 import FreelancerModel from "../models/freelancer.model";
 import PackageModel from "../models/package.model";
+import ManifestModel from "../models/manifest.model";
 import RouteModel from "../models/route.model";
 import { IUser } from "../models/user.model";
 import sendSMS from "../utils/sendSMS";
@@ -39,6 +40,36 @@ interface ActiveTransit {
   destinationBranchId: string;
 }
 
+/**
+ * Hub-to-hub manifest transit session.
+ * One session per manifest (not per package) — the transporter carries
+ * sealed bags, not individual packages.
+ */
+interface ActiveManifestTransit {
+  manifestId: string;
+  manifestCode: string;
+  transporterUserId: string;
+  originBranchId: string;
+  destinationBranchId: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Returns true when a route type is a hub route (manifests, not raw packages). */
+function isHubRoute(routeType: string): boolean {
+  return routeType === "hub_to_hub" || routeType === "hub_to_branch";
+}
+
+/** Returns the manifest count for a stop (hub routes) or package count (others). */
+function stopLoadCount(stop: any, routeType: string): number {
+  if (isHubRoute(routeType)) {
+    return (stop.manifestIds?.length ?? 0);
+  }
+  return stop.packageIds?.length ?? 0;
+}
+
 
 
 export class SocketService {
@@ -54,9 +85,11 @@ export class SocketService {
   private adminSockets: Map<string, string>       = new Map();
 
   // packageId → active delivery session
-  private activeDeliveries: Map<string, ActiveDelivery>  = new Map();
-  // packageId → active transit session (branch-to-branch)
-  private activeTransits: Map<string, ActiveTransit>     = new Map();
+  private activeDeliveries: Map<string, ActiveDelivery>         = new Map();
+  // packageId → active transit session (legacy branch-to-branch)
+  private activeTransits: Map<string, ActiveTransit>            = new Map();
+  // manifestId → active hub manifest transit session
+  private activeManifestTransits: Map<string, ActiveManifestTransit> = new Map();
   // packageId -> { code, expiresAt } -- in-memory, short-lived (10 min)
   private deliveryOTPs: Map<string, { code: string; expiresAt: number }> = new Map();
 
@@ -75,12 +108,17 @@ export class SocketService {
   private getCompanyRoom(companyId: string): string {
     return `company_${companyId}`;
   }
+
   private getRouteRoom(routeId: string): string {
     return `route_${routeId}`;
   }
 
+  private getManifestRoom(manifestId: string): string {
+    return `manifest_${manifestId}`;
+  }
 
-    /**
+
+  /**
    * Calculate distance between two coordinates in kilometers using Haversine formula
    */
   private calculateDistance(
@@ -164,8 +202,9 @@ export class SocketService {
       await this.broadcastOnlineStatus(userId, role, true);
 
 
+      // ══════════════════════════════════════════════════════════════════════
       //  LOCATION UPDATE
-
+      // ══════════════════════════════════════════════════════════════════════
 
       socket.on(
         "update_location",
@@ -181,13 +220,6 @@ export class SocketService {
               socket.emit("location_update_error", { message: "Coordinates out of valid range." });
               return;
             }
-
-            const locationUpdate: LocationUpdateData = {
-              userId,
-              role,
-              coordinates: data.coordinates,
-              timestamp: new Date(),
-            };
 
             if (role === "deliverer") {
               await DelivererModel.findOneAndUpdate(
@@ -226,7 +258,7 @@ export class SocketService {
 
             socket.emit("location_update_success", {
               coordinates: data.coordinates,
-              timestamp: locationUpdate.timestamp,
+              timestamp: new Date(),
             });
 
           } catch (error: any) {
@@ -240,77 +272,52 @@ export class SocketService {
       );
 
 
+      // ══════════════════════════════════════════════════════════════════════
       //  AVAILABILITY STATUS  (deliverer / transporter only)
+      // ══════════════════════════════════════════════════════════════════════
 
-
-      if (role === "deliverer") {
-        socket.on(
-          "change_availability",
-          async (data: { status: "available" | "on_route" | "off_duty" | "on_break" | "maintenance" }) => {
-            try {
-              const allowedStatuses = ["available", "on_route", "off_duty", "on_break", "maintenance"];
-              if (!data?.status || !allowedStatuses.includes(data.status)) {
-                socket.emit("availability_change_error", { message: `Invalid status. Must be one of: ${allowedStatuses.join(", ")}` });
-                return;
-              }
-
-              await DelivererModel.findOneAndUpdate(
-                { userId },
-                { availabilityStatus: data.status, lastActiveAt: new Date() }
-              );
-
-              // Notify packages that have this deliverer assigned (clients tracking their parcel)
-              await this.notifyDelivererStatusToTrackers(userId, data.status);
-
-              socket.emit("availability_change_success", {
-                status: data.status,
-                timestamp: new Date(),
-              });
-
-              console.log(`[Socket] Deliverer ${userId} changed availability → ${data.status}`);
-            } catch (error: any) {
-              console.error("[Socket] Error changing deliverer availability:", error);
-              socket.emit("availability_change_error", {
-                message: "Failed to update availability status.",
-                error: error.message,
-              });
-            }
+      const availabilityHandler = async (data: {
+        status: "available" | "on_route" | "off_duty" | "on_break" | "maintenance";
+      }) => {
+        try {
+          const allowedStatuses = ["available", "on_route", "off_duty", "on_break", "maintenance"];
+          if (!data?.status || !allowedStatuses.includes(data.status)) {
+            socket.emit("availability_change_error", { message: `Invalid status. Must be one of: ${allowedStatuses.join(", ")}` });
+            return;
           }
-        );
+
+          if (role === "deliverer") {
+            await DelivererModel.findOneAndUpdate(
+              { userId },
+              { availabilityStatus: data.status, lastActiveAt: new Date() }
+            );
+            await this.notifyDelivererStatusToTrackers(userId, data.status);
+          } else if (role === "transporter") {
+            await TransporterModel.findOneAndUpdate(
+              { userId },
+              { availabilityStatus: data.status, lastActiveAt: new Date() }
+            );
+          }
+
+          socket.emit("availability_change_success", {
+            status: data.status,
+            timestamp: new Date(),
+          });
+
+          console.log(`[Socket] ${role} ${userId} changed availability → ${data.status}`);
+        } catch (error: any) {
+          console.error(`[Socket] Error changing ${role} availability:`, error);
+          socket.emit("availability_change_error", {
+            message: "Failed to update availability status.",
+            error: error.message,
+          });
+        }
+      };
+
+      if (role === "deliverer" || role === "transporter") {
+        socket.on("change_availability", availabilityHandler);
       }
 
-      if (role === "transporter") {
-        socket.on(
-          "change_availability",
-          async (data: { status: "available" | "on_route" | "off_duty" | "on_break" | "maintenance" }) => {
-            try {
-              const allowedStatuses = ["available", "on_route", "off_duty", "on_break", "maintenance"];
-              if (!data?.status || !allowedStatuses.includes(data.status)) {
-                socket.emit("availability_change_error", { message: `Invalid status. Must be one of: ${allowedStatuses.join(", ")}` });
-                return;
-              }
-
-              await TransporterModel.findOneAndUpdate(
-                { userId },
-                { availabilityStatus: data.status, lastActiveAt: new Date() }
-              );
-
-              socket.emit("availability_change_success", {
-                status: data.status,
-                timestamp: new Date(),
-              });
-
-              console.log(`[Socket] Transporter ${userId} changed availability → ${data.status}`);
-            } catch (error: any) {
-              console.error("[Socket] Error changing transporter availability:", error);
-              socket.emit("availability_change_error", {
-                message: "Failed to update availability status.",
-                error: error.message,
-              });
-            }
-          }
-        );
-      }
 
       // ══════════════════════════════════════════════════════════════════════
       //  TRANSPORTER ROUTE EVENTS
@@ -354,19 +361,45 @@ export class SocketService {
               lastActiveAt: new Date(),
             });
 
+            // For hub_to_hub: mark all manifests on this route as in_transit
+            if (isHubRoute(route.type)) {
+              const allManifestIds = route.stops.flatMap(
+                (s: any) => s.manifestIds ?? []
+              );
+              if (allManifestIds.length > 0) {
+                await ManifestModel.updateMany(
+                  { _id: { $in: allManifestIds }, status: { $in: ["sealed", "loaded"] } },
+                  {
+                    $set: {
+                      status: "in_transit",
+                      departedAt: new Date(),
+                      "transportLeg.departedAt": new Date(),
+                    },
+                  }
+                );
+              }
+            }
+
+            const firstStop  = route.stops[0];
+            const routeType  = route.type;
+            const hubRoute   = isHubRoute(routeType);
+
             // Notify supervisor branch room
             if (transporter.currentBranchId) {
               this.io.to(this.getBranchRoom(transporter.currentBranchId.toString())).emit("transporter_route_started", {
                 routeId:       data.routeId,
                 routeNumber:   route.routeNumber,
+                routeType,
                 transporterId: transporter._id,
                 userId,
                 totalStops:    route.stops.length,
-                firstStop: route.stops[0] ? {
-                  stopId:   route.stops[0]._id,
-                  branchId: route.stops[0].branchId,
-                  address:  route.stops[0].address,
-                  location: route.stops[0].location.coordinates,
+                firstStop: firstStop ? {
+                  stopId:        firstStop._id,
+                  branchId:      firstStop.branchId,
+                  address:       firstStop.address,
+                  location:      firstStop.location.coordinates,
+                  loadCount:     stopLoadCount(firstStop, routeType),
+                  loadUnit:      hubRoute ? "manifests" : "packages",
                 } : null,
                 actualStart:  route.actualStart,
                 scheduledEnd: route.scheduledEnd,
@@ -378,22 +411,26 @@ export class SocketService {
             socket.emit("route_started", {
               routeId:          data.routeId,
               routeNumber:      route.routeNumber,
+              routeType,
               status:           "active",
               currentStopIndex: 0,
               totalStops:       route.stops.length,
-              currentStop: route.stops[0] ? {
-                stopId:      route.stops[0]._id,
-                branchId:    route.stops[0].branchId,
-                address:     route.stops[0].address,
-                location:    route.stops[0].location.coordinates,
-                packageCount: route.stops[0].packageIds.length,
-                order:       route.stops[0].order,
+              currentStop: firstStop ? {
+                stopId:      firstStop._id,
+                branchId:    firstStop.branchId,
+                address:     firstStop.address,
+                location:    firstStop.location.coordinates,
+                loadCount:   stopLoadCount(firstStop, routeType),
+                loadUnit:    hubRoute ? "manifests" : "packages",
+                manifestIds: hubRoute ? (firstStop.manifestIds ?? []) : undefined,
+                packageIds:  !hubRoute ? firstStop.packageIds : undefined,
+                order:       firstStop.order,
               } : null,
               scheduledEnd: route.scheduledEnd,
               timestamp: new Date(),
             });
 
-            console.log(`[Socket] Transporter ${userId} started route ${data.routeId}`);
+            console.log(`[Socket] Transporter ${userId} started route ${data.routeId} (${routeType})`);
           } catch (err: any) {
             console.error("[Socket] start_route failed:", err);
             socket.emit("route_error", { code: "START_FAILED", message: err.message || "Failed to start route." });
@@ -405,7 +442,7 @@ export class SocketService {
         // Conditions:
         //   1. Route status = active.
         //   2. stopIndex must equal route.currentStopIndex (must go in order).
-        //   3. Transporter must be within 50m of the stop location.
+        //   3. Transporter must be within the allowed distance (500m for hub, 50m for others).
         socket.on("arrived_at_stop", async (data: {
           routeId:     string;
           stopIndex:   number;
@@ -457,16 +494,18 @@ export class SocketService {
               return;
             }
 
-            // Proximity check: must be within 50m of the stop
-            const stopCoords = stop.location.coordinates;
+            const hubRoute      = isHubRoute(route.type);
+            // Hub depots are large — allow 500m; regular branch stops stay at 50m
+            const maxDistanceM  = hubRoute ? 500 : 50;
+            const stopCoords    = stop.location.coordinates;
             const distanceMeters = this.calculateDistance(data.coordinates, stopCoords) * 1000;
 
-            if (distanceMeters > 50) {
+            if (distanceMeters > maxDistanceM) {
               socket.emit("route_error", {
                 code: "TOO_FAR",
-                message: `You must be within 50m of the stop to mark arrival. Current distance: ${Math.round(distanceMeters)}m.`,
+                message: `You must be within ${maxDistanceM}m of the stop to mark arrival. Current distance: ${Math.round(distanceMeters)}m.`,
                 distanceMeters: Math.round(distanceMeters),
-                requiredMeters: 50,
+                requiredMeters: maxDistanceM,
                 stopLocation: stopCoords,
               });
               return;
@@ -479,19 +518,27 @@ export class SocketService {
 
             await TransporterModel.findByIdAndUpdate(transporter._id, { lastActiveAt: new Date() });
 
+            const loadCount = stopLoadCount(stop, route.type);
+
             // Notify the branch room (supervisor sees transporter arrived)
             if (stop.branchId) {
-              this.io.to(this.getBranchRoom(stop.branchId.toString())).emit("transporter_arrived_at_branch", {
-                routeId:        data.routeId,
-                routeNumber:    route.routeNumber,
-                transporterId:  transporter._id,
-                stopIndex:      data.stopIndex,
-                stopId:         stop._id,
-                branchId:       stop.branchId,
-                distanceMeters: Math.round(distanceMeters),
-                packageCount:   stop.packageIds.length,
-                timestamp: new Date(),
-              });
+              this.io.to(this.getBranchRoom(stop.branchId.toString())).emit(
+                hubRoute ? "hub_transporter_arrived" : "transporter_arrived_at_branch",
+                {
+                  routeId:        data.routeId,
+                  routeNumber:    route.routeNumber,
+                  routeType:      route.type,
+                  transporterId:  transporter._id,
+                  stopIndex:      data.stopIndex,
+                  stopId:         stop._id,
+                  branchId:       stop.branchId,
+                  distanceMeters: Math.round(distanceMeters),
+                  loadCount,
+                  loadUnit:       hubRoute ? "manifests" : "packages",
+                  manifestIds:    hubRoute ? (stop.manifestIds ?? []) : undefined,
+                  timestamp: new Date(),
+                }
+              );
             }
 
             // Broadcast to route room
@@ -510,12 +557,15 @@ export class SocketService {
               stopId:         stop._id,
               branchId:       stop.branchId,
               address:        stop.address,
-              packages:       stop.packageIds,
+              loadCount,
+              loadUnit:       hubRoute ? "manifests" : "packages",
+              manifestIds:    hubRoute ? (stop.manifestIds ?? []) : undefined,
+              packageIds:     !hubRoute ? stop.packageIds : undefined,
               distanceMeters: Math.round(distanceMeters),
               timestamp: new Date(),
             });
 
-            console.log(`[Socket] Transporter ${userId} arrived at stop ${data.stopIndex} (${Math.round(distanceMeters)}m away)`);
+            console.log(`[Socket] Transporter ${userId} arrived at stop ${data.stopIndex} (${Math.round(distanceMeters)}m, ${route.type})`);
           } catch (err: any) {
             console.error("[Socket] arrived_at_stop failed:", err);
             socket.emit("route_error", { code: "ARRIVE_FAILED", message: err.message || "Failed to mark arrival." });
@@ -523,22 +573,22 @@ export class SocketService {
         });
 
         // ── complete_stop ────────────────────────────────────────────────────
-        // Transporter confirms packages are unloaded at this stop.
-        // Conditions:
-        //   1. Route status = active.
-        //   2. stopIndex === route.currentStopIndex (enforces order).
-        //   3. Stop status must be arrived / in_progress / pending.
-        //   4. Transporter within 50m of the stop.
-        //   5. All provided packageIds must belong to this stop.
+        // Transporter confirms packages/manifests are unloaded at this stop.
+        // Hub_to_hub: validate manifestIds against stop.manifestIds.
+        // Other routes: validate packageIds against stop.packageIds (unchanged).
         // If this is the last stop → route.completeRoute() fires automatically
         //   and the transporter receives a "route_completed" push notification.
         socket.on("complete_stop", async (data: {
-          routeId:              string;
-          stopIndex:            number;
-          coordinates:          [number, number];
-          completedPackageIds?: string[];
-          failedPackageIds?:    string[];
-          notes?:               string;
+          routeId:                 string;
+          stopIndex:               number;
+          coordinates:             [number, number];
+          // Non-hub routes
+          completedPackageIds?:    string[];
+          failedPackageIds?:       string[];
+          // Hub routes
+          completedManifestIds?:   string[];
+          discrepancyManifestIds?: string[];
+          notes?:                  string;
         }) => {
           try {
             if (!data?.routeId || !mongoose.Types.ObjectId.isValid(data.routeId)) {
@@ -594,178 +644,367 @@ export class SocketService {
               return;
             }
 
-            // Proximity check: within 50m
-            const stopCoords = stop.location.coordinates;
+            const hubRoute      = isHubRoute(route.type);
+            const maxDistanceM  = hubRoute ? 500 : 50;
+            const stopCoords    = stop.location.coordinates;
             const distanceMeters = this.calculateDistance(data.coordinates, stopCoords) * 1000;
-            if (distanceMeters > 50) {
+
+            if (distanceMeters > maxDistanceM) {
               socket.emit("route_error", {
                 code: "TOO_FAR",
-                message: `You must be within 50m of the stop to complete it. Current distance: ${Math.round(distanceMeters)}m.`,
+                message: `You must be within ${maxDistanceM}m of the stop to complete it. Current distance: ${Math.round(distanceMeters)}m.`,
                 distanceMeters: Math.round(distanceMeters),
-                requiredMeters: 50,
+                requiredMeters: maxDistanceM,
                 stopLocation: stopCoords,
               });
               return;
             }
 
-            // Validate all package IDs belong to this stop
-            const stopPackageSet = new Set(
-              (stop.packageIds as mongoose.Types.ObjectId[]).map((id) => id.toString())
-            );
-
-            const completedOids: mongoose.Types.ObjectId[] = [];
-            for (const idStr of (data.completedPackageIds ?? [])) {
-              if (!mongoose.Types.ObjectId.isValid(idStr)) {
-                socket.emit("route_error", { code: "INVALID_PACKAGE_ID", message: `Invalid package ID: ${idStr}` });
-                return;
-              }
-              if (!stopPackageSet.has(idStr)) {
-                socket.emit("route_error", { code: "PACKAGE_NOT_IN_STOP", message: `Package ${idStr} does not belong to stop ${data.stopIndex}.` });
-                return;
-              }
-              completedOids.push(new mongoose.Types.ObjectId(idStr));
-            }
-
-            const failedOids: mongoose.Types.ObjectId[] = [];
-            for (const idStr of (data.failedPackageIds ?? [])) {
-              if (!mongoose.Types.ObjectId.isValid(idStr)) {
-                socket.emit("route_error", { code: "INVALID_PACKAGE_ID", message: `Invalid package ID: ${idStr}` });
-                return;
-              }
-              if (!stopPackageSet.has(idStr)) {
-                socket.emit("route_error", { code: "PACKAGE_NOT_IN_STOP", message: `Package ${idStr} does not belong to stop ${data.stopIndex}.` });
-                return;
-              }
-              failedOids.push(new mongoose.Types.ObjectId(idStr));
-            }
-
-            // If transporter sent no breakdown, treat all packages as completed
-            const finalCompleted = completedOids.length > 0
-              ? completedOids
-              : (stop.packageIds as mongoose.Types.ObjectId[]);
-
-            await route.completeStop(data.stopIndex, finalCompleted, failedOids, data.notes);
-
             const isLastStop   = data.stopIndex === route.stops.length - 1;
             const routeRoom    = this.getRouteRoom(data.routeId);
-            const nextStop     = !isLastStop ? route.stops[data.stopIndex + 1] : null;
 
-            if (isLastStop) {
-              // ── All stops done: complete the entire route ────────────────
-              await route.completeRoute(data.notes);
+            if (hubRoute) {
+              // ── HUB ROUTE: work with manifests ───────────────────────────
 
-              // Free transporter
-              await TransporterModel.findByIdAndUpdate(transporter._id, {
-                availabilityStatus: "available",
-                currentRouteId:     null,
-                lastActiveAt: new Date(),
-              });
+              const stopManifestSet = new Set(
+                (stop.manifestIds ?? []).map((id: mongoose.Types.ObjectId) => id.toString())
+              );
 
-              // Push completion notification directly to transporter's socket
-              socket.emit("route_completed", {
-                routeId:           data.routeId,
-                routeNumber:       route.routeNumber,
-                totalStops:        route.stops.length,
-                completedStops:    route.completedStops,
-                failedStops:       route.failedStops,
-                skippedStops:      route.skippedStops,
-                actualStart:       route.actualStart,
-                actualEnd:         route.actualEnd,
-                actualTime:        route.actualTime,
-                onTimePerformance: route.onTimePerformance,
-                message: "Route completed successfully! Great work today.",
-                timestamp: new Date(),
-              });
+              // Validate completed manifests
+              const completedManifestOids: mongoose.Types.ObjectId[] = [];
+              for (const idStr of (data.completedManifestIds ?? [])) {
+                if (!mongoose.Types.ObjectId.isValid(idStr)) {
+                  socket.emit("route_error", { code: "INVALID_MANIFEST_ID", message: `Invalid manifest ID: ${idStr}` });
+                  return;
+                }
+                if (!stopManifestSet.has(idStr)) {
+                  socket.emit("route_error", { code: "MANIFEST_NOT_IN_STOP", message: `Manifest ${idStr} does not belong to stop ${data.stopIndex}.` });
+                  return;
+                }
+                completedManifestOids.push(new mongoose.Types.ObjectId(idStr));
+              }
 
-              // Notify every branch the route touched
-              const branchIds = new Set<string>();
-              route.stops.forEach((s: any) => { if (s.branchId) branchIds.add(s.branchId.toString()); });
-              branchIds.forEach((bId) => {
-                this.io.to(this.getBranchRoom(bId)).emit("transporter_route_completed", {
+              const discrepancyManifestOids: mongoose.Types.ObjectId[] = [];
+              for (const idStr of (data.discrepancyManifestIds ?? [])) {
+                if (!mongoose.Types.ObjectId.isValid(idStr)) {
+                  socket.emit("route_error", { code: "INVALID_MANIFEST_ID", message: `Invalid manifest ID: ${idStr}` });
+                  return;
+                }
+                if (!stopManifestSet.has(idStr)) {
+                  socket.emit("route_error", { code: "MANIFEST_NOT_IN_STOP", message: `Manifest ${idStr} does not belong to stop ${data.stopIndex}.` });
+                  return;
+                }
+                discrepancyManifestOids.push(new mongoose.Types.ObjectId(idStr));
+              }
+
+              // Default: treat all manifests as completed if no breakdown given
+              const finalCompletedManifests =
+                completedManifestOids.length > 0
+                  ? completedManifestOids
+                  : (stop.manifestIds as mongoose.Types.ObjectId[]) ?? [];
+
+              // Persist stop-level manifest tracking on route document
+              stop.completedManifests   = finalCompletedManifests;
+              stop.discrepancyManifests = discrepancyManifestOids;
+              await route.completeStop(data.stopIndex, [], [], data.notes);
+
+              // Mark manifests as arrived and cascade to packages
+              if (finalCompletedManifests.length > 0) {
+                await ManifestModel.updateMany(
+                  { _id: { $in: finalCompletedManifests }, status: "in_transit" },
+                  {
+                    $set: {
+                      status:                   "arrived",
+                      arrivedAt:                new Date(),
+                      "transportLeg.arrivedAt": new Date(),
+                    },
+                  }
+                );
+
+                // Cascade package statuses via the manifest model's method
+                for (const manifestId of finalCompletedManifests) {
+                  const manifest = await ManifestModel.findById(manifestId);
+                  if (manifest) {
+                    await manifest.markArrived(
+                      new mongoose.Types.ObjectId(userId)
+                    );
+                  }
+                }
+              }
+
+              if (discrepancyManifestOids.length > 0) {
+                await ManifestModel.updateMany(
+                  { _id: { $in: discrepancyManifestOids } },
+                  { $set: { status: "discrepancy" } }
+                );
+              }
+
+              // Update transporter's currentBranchId on last stop (hub_to_hub return trip)
+              if (isLastStop && route.type === "hub_to_hub" && stop.branchId) {
+                await TransporterModel.findByIdAndUpdate(transporter._id, {
+                  availabilityStatus: "available",
+                  currentRouteId:     null,
+                  currentBranchId:    stop.branchId,
+                  lastActiveAt: new Date(),
+                  $inc: { totalTrips: 1, completedTrips: 1 },
+                });
+              } else if (isLastStop) {
+                await TransporterModel.findByIdAndUpdate(transporter._id, {
+                  availabilityStatus: "available",
+                  currentRouteId:     null,
+                  lastActiveAt: new Date(),
+                  $inc: { totalTrips: 1, completedTrips: 1 },
+                });
+              }
+
+              // Notify destination hub room
+              if (stop.branchId) {
+                this.io.to(this.getBranchRoom(stop.branchId.toString())).emit("hub_manifests_delivered", {
+                  routeId:              data.routeId,
+                  routeNumber:          route.routeNumber,
+                  transporterId:        transporter._id,
+                  stopIndex:            data.stopIndex,
+                  completedManifests:   finalCompletedManifests.length,
+                  discrepancyManifests: discrepancyManifestOids.length,
+                  routeCompleted:       isLastStop,
+                  timestamp: new Date(),
+                });
+              }
+
+              if (isLastStop) {
+                await route.completeRoute(data.notes);
+
+                socket.emit("route_completed", {
+                  routeId:           data.routeId,
+                  routeNumber:       route.routeNumber,
+                  routeType:         route.type,
+                  totalStops:        route.stops.length,
+                  completedStops:    route.completedStops,
+                  actualStart:       route.actualStart,
+                  actualEnd:         route.actualEnd,
+                  onTimePerformance: route.onTimePerformance,
+                  message:           "Hub route completed. You are now available at the destination hub.",
+                  timestamp: new Date(),
+                });
+
+                // Notify company room
+                this.io.to(this.getCompanyRoom(transporter.companyId.toString())).emit("transporter_route_completed", {
                   routeId:       data.routeId,
                   routeNumber:   route.routeNumber,
+                  routeType:     route.type,
                   transporterId: transporter._id,
                   userId,
                   onTimePerformance: route.onTimePerformance,
                   timestamp: new Date(),
                 });
-              });
 
-              // Notify company room (managers)
-              this.io.to(this.getCompanyRoom(transporter.companyId.toString())).emit("transporter_route_completed", {
-                routeId:           data.routeId,
-                routeNumber:       route.routeNumber,
-                transporterId:     transporter._id,
-                userId,
-                onTimePerformance: route.onTimePerformance,
-                timestamp: new Date(),
-              });
+                this.io.to(routeRoom).emit("route_completed", {
+                  routeId:    data.routeId,
+                  routeNumber: route.routeNumber,
+                  timestamp:  new Date(),
+                });
 
-              // Broadcast to route room
-              this.io.to(routeRoom).emit("route_completed", {
-                routeId:    data.routeId,
-                routeNumber: route.routeNumber,
-                timestamp:  new Date(),
-              });
+                console.log(`[Socket] Transporter ${userId} COMPLETED hub route ${data.routeId}`);
+              } else {
+                const nextStop = route.stops[data.stopIndex + 1];
+                socket.emit("stop_completed", {
+                  routeId:              data.routeId,
+                  completedStopIndex:   data.stopIndex,
+                  completedStopId:      stop._id,
+                  branchId:             stop.branchId,
+                  completedManifests:   finalCompletedManifests.length,
+                  discrepancyManifests: discrepancyManifestOids.length,
+                  distanceMeters:       Math.round(distanceMeters),
+                  nextStop: nextStop ? {
+                    stopIndex:      data.stopIndex + 1,
+                    stopId:         nextStop._id,
+                    branchId:       nextStop.branchId,
+                    address:        nextStop.address,
+                    location:       nextStop.location.coordinates,
+                    manifestCount:  nextStop.manifestIds?.length ?? 0,
+                    order:          nextStop.order,
+                  } : null,
+                  remainingStops: route.stops.length - (data.stopIndex + 1),
+                  timestamp: new Date(),
+                });
 
-              console.log(`[Socket] Transporter ${userId} COMPLETED route ${data.routeId}`);
+                if (stop.branchId) {
+                  this.io.to(this.getBranchRoom(stop.branchId.toString())).emit("transporter_left_hub", {
+                    routeId:          data.routeId,
+                    transporterId:    transporter._id,
+                    completedManifests: finalCompletedManifests.length,
+                    timestamp: new Date(),
+                  });
+                }
+                if (nextStop?.branchId) {
+                  this.io.to(this.getBranchRoom(nextStop.branchId.toString())).emit("hub_transporter_en_route", {
+                    routeId:          data.routeId,
+                    routeNumber:      route.routeNumber,
+                    transporterId:    transporter._id,
+                    manifestCount:    nextStop.manifestIds?.length ?? 0,
+                    estimatedArrival: nextStop.expectedArrival,
+                    timestamp: new Date(),
+                  });
+                }
+
+                this.io.to(routeRoom).emit("stop_completed", {
+                  routeId:       data.routeId,
+                  stopIndex:     data.stopIndex,
+                  stopId:        stop._id,
+                  nextStopIndex: data.stopIndex + 1,
+                  timestamp: new Date(),
+                });
+
+                console.log(`[Socket] Transporter ${userId} completed hub stop ${data.stopIndex}/${route.stops.length - 1}`);
+              }
+
             } else {
-              // ── More stops remain ────────────────────────────────────────
-              socket.emit("stop_completed", {
-                routeId:            data.routeId,
-                completedStopIndex: data.stopIndex,
-                completedStopId:    stop._id,
-                branchId:           stop.branchId,
-                completedPackages:  finalCompleted.length,
-                failedPackages:     failedOids.length,
-                distanceMeters:     Math.round(distanceMeters),
-                nextStop: nextStop ? {
-                  stopIndex:   data.stopIndex + 1,
-                  stopId:      nextStop._id,
-                  branchId:    nextStop.branchId,
-                  address:     nextStop.address,
-                  location:    nextStop.location.coordinates,
-                  packageCount: nextStop.packageIds.length,
-                  order:       nextStop.order,
-                } : null,
-                remainingStops: route.stops.length - (data.stopIndex + 1),
-                timestamp: new Date(),
-              });
+              // ── NON-HUB ROUTE: original package-based logic ──────────────
 
-              // Notify the branch just left
-              if (stop.branchId) {
-                this.io.to(this.getBranchRoom(stop.branchId.toString())).emit("transporter_left_branch", {
-                  routeId:          data.routeId,
-                  routeNumber:      route.routeNumber,
-                  transporterId:    transporter._id,
-                  completedPackages: finalCompleted.length,
-                  failedPackages:    failedOids.length,
-                  timestamp: new Date(),
-                });
+              const stopPackageSet = new Set(
+                (stop.packageIds as mongoose.Types.ObjectId[]).map((id) => id.toString())
+              );
+
+              const completedOids: mongoose.Types.ObjectId[] = [];
+              for (const idStr of (data.completedPackageIds ?? [])) {
+                if (!mongoose.Types.ObjectId.isValid(idStr)) {
+                  socket.emit("route_error", { code: "INVALID_PACKAGE_ID", message: `Invalid package ID: ${idStr}` });
+                  return;
+                }
+                if (!stopPackageSet.has(idStr)) {
+                  socket.emit("route_error", { code: "PACKAGE_NOT_IN_STOP", message: `Package ${idStr} does not belong to stop ${data.stopIndex}.` });
+                  return;
+                }
+                completedOids.push(new mongoose.Types.ObjectId(idStr));
               }
 
-              // Notify the next branch that transporter is inbound
-              if (nextStop?.branchId) {
-                this.io.to(this.getBranchRoom(nextStop.branchId.toString())).emit("transporter_en_route_to_branch", {
-                  routeId:          data.routeId,
-                  routeNumber:      route.routeNumber,
-                  transporterId:    transporter._id,
-                  packageCount:     nextStop.packageIds.length,
-                  estimatedArrival: nextStop.expectedArrival,
-                  timestamp: new Date(),
-                });
+              const failedOids: mongoose.Types.ObjectId[] = [];
+              for (const idStr of (data.failedPackageIds ?? [])) {
+                if (!mongoose.Types.ObjectId.isValid(idStr)) {
+                  socket.emit("route_error", { code: "INVALID_PACKAGE_ID", message: `Invalid package ID: ${idStr}` });
+                  return;
+                }
+                if (!stopPackageSet.has(idStr)) {
+                  socket.emit("route_error", { code: "PACKAGE_NOT_IN_STOP", message: `Package ${idStr} does not belong to stop ${data.stopIndex}.` });
+                  return;
+                }
+                failedOids.push(new mongoose.Types.ObjectId(idStr));
               }
 
-              // Broadcast to route room
-              this.io.to(routeRoom).emit("stop_completed", {
-                routeId:       data.routeId,
-                stopIndex:     data.stopIndex,
-                stopId:        stop._id,
-                nextStopIndex: data.stopIndex + 1,
-                timestamp: new Date(),
-              });
+              const finalCompleted = completedOids.length > 0
+                ? completedOids
+                : (stop.packageIds as mongoose.Types.ObjectId[]);
 
-              console.log(`[Socket] Transporter ${userId} completed stop ${data.stopIndex}/${route.stops.length - 1}`);
+              await route.completeStop(data.stopIndex, finalCompleted, failedOids, data.notes);
+
+              if (isLastStop) {
+                await route.completeRoute(data.notes);
+
+                await TransporterModel.findByIdAndUpdate(transporter._id, {
+                  availabilityStatus: "available",
+                  currentRouteId:     null,
+                  lastActiveAt: new Date(),
+                });
+
+                socket.emit("route_completed", {
+                  routeId:           data.routeId,
+                  routeNumber:       route.routeNumber,
+                  totalStops:        route.stops.length,
+                  completedStops:    route.completedStops,
+                  failedStops:       route.failedStops,
+                  skippedStops:      route.skippedStops,
+                  actualStart:       route.actualStart,
+                  actualEnd:         route.actualEnd,
+                  actualTime:        route.actualTime,
+                  onTimePerformance: route.onTimePerformance,
+                  message: "Route completed successfully! Great work today.",
+                  timestamp: new Date(),
+                });
+
+                const branchIds = new Set<string>();
+                route.stops.forEach((s: any) => { if (s.branchId) branchIds.add(s.branchId.toString()); });
+                branchIds.forEach((bId) => {
+                  this.io.to(this.getBranchRoom(bId)).emit("transporter_route_completed", {
+                    routeId:       data.routeId,
+                    routeNumber:   route.routeNumber,
+                    transporterId: transporter._id,
+                    userId,
+                    onTimePerformance: route.onTimePerformance,
+                    timestamp: new Date(),
+                  });
+                });
+
+                this.io.to(this.getCompanyRoom(transporter.companyId.toString())).emit("transporter_route_completed", {
+                  routeId:           data.routeId,
+                  routeNumber:       route.routeNumber,
+                  transporterId:     transporter._id,
+                  userId,
+                  onTimePerformance: route.onTimePerformance,
+                  timestamp: new Date(),
+                });
+
+                this.io.to(routeRoom).emit("route_completed", {
+                  routeId:    data.routeId,
+                  routeNumber: route.routeNumber,
+                  timestamp:  new Date(),
+                });
+
+                console.log(`[Socket] Transporter ${userId} COMPLETED route ${data.routeId}`);
+              } else {
+                const nextStop = route.stops[data.stopIndex + 1];
+                socket.emit("stop_completed", {
+                  routeId:            data.routeId,
+                  completedStopIndex: data.stopIndex,
+                  completedStopId:    stop._id,
+                  branchId:           stop.branchId,
+                  completedPackages:  finalCompleted.length,
+                  failedPackages:     failedOids.length,
+                  distanceMeters:     Math.round(distanceMeters),
+                  nextStop: nextStop ? {
+                    stopIndex:   data.stopIndex + 1,
+                    stopId:      nextStop._id,
+                    branchId:    nextStop.branchId,
+                    address:     nextStop.address,
+                    location:    nextStop.location.coordinates,
+                    packageCount: nextStop.packageIds.length,
+                    order:       nextStop.order,
+                  } : null,
+                  remainingStops: route.stops.length - (data.stopIndex + 1),
+                  timestamp: new Date(),
+                });
+
+                if (stop.branchId) {
+                  this.io.to(this.getBranchRoom(stop.branchId.toString())).emit("transporter_left_branch", {
+                    routeId:          data.routeId,
+                    routeNumber:      route.routeNumber,
+                    transporterId:    transporter._id,
+                    completedPackages: finalCompleted.length,
+                    failedPackages:    failedOids.length,
+                    timestamp: new Date(),
+                  });
+                }
+
+                if (nextStop?.branchId) {
+                  this.io.to(this.getBranchRoom(nextStop.branchId.toString())).emit("transporter_en_route_to_branch", {
+                    routeId:          data.routeId,
+                    routeNumber:      route.routeNumber,
+                    transporterId:    transporter._id,
+                    packageCount:     nextStop.packageIds.length,
+                    estimatedArrival: nextStop.expectedArrival,
+                    timestamp: new Date(),
+                  });
+                }
+
+                this.io.to(routeRoom).emit("stop_completed", {
+                  routeId:       data.routeId,
+                  stopIndex:     data.stopIndex,
+                  stopId:        stop._id,
+                  nextStopIndex: data.stopIndex + 1,
+                  timestamp: new Date(),
+                });
+
+                console.log(`[Socket] Transporter ${userId} completed stop ${data.stopIndex}/${route.stops.length - 1}`);
+              }
             }
           } catch (err: any) {
             console.error("[Socket] complete_stop failed:", err);
@@ -774,14 +1013,15 @@ export class SocketService {
         });
 
         // ── fail_stop ────────────────────────────────────────────────────────
-        // Transporter could not deliver packages at a stop (e.g. branch closed).
+        // Transporter could not deliver packages/manifests at a stop.
         // Advances currentStopIndex so the route continues.
         // If it's the last stop, the route is still completed.
         socket.on("fail_stop", async (data: {
-          routeId:            string;
-          stopIndex:          number;
-          reason:             string;
-          skippedPackageIds?: string[];
+          routeId:             string;
+          stopIndex:           number;
+          reason:              string;
+          skippedPackageIds?:  string[];
+          skippedManifestIds?: string[];
         }) => {
           try {
             if (!data?.routeId || !data?.reason) {
@@ -808,8 +1048,9 @@ export class SocketService {
 
             await route.failStop(data.stopIndex, data.reason, skippedOids);
 
-            const stop      = route.stops[data.stopIndex];
+            const stop       = route.stops[data.stopIndex];
             const isLastStop = data.stopIndex === route.stops.length - 1;
+            const hubRoute   = isHubRoute(route.type);
 
             socket.emit("stop_failed", {
               routeId:        data.routeId,
@@ -823,14 +1064,17 @@ export class SocketService {
 
             // Notify the branch that the delivery failed
             if (stop?.branchId) {
-              this.io.to(this.getBranchRoom(stop.branchId.toString())).emit("transporter_stop_failed", {
-                routeId:       data.routeId,
-                transporterId: transporter._id,
-                stopId:        stop._id,
-                branchId:      stop.branchId,
-                reason:        data.reason,
-                timestamp: new Date(),
-              });
+              this.io.to(this.getBranchRoom(stop.branchId.toString())).emit(
+                hubRoute ? "hub_stop_failed" : "transporter_stop_failed",
+                {
+                  routeId:       data.routeId,
+                  transporterId: transporter._id,
+                  stopId:        stop._id,
+                  branchId:      stop.branchId,
+                  reason:        data.reason,
+                  timestamp: new Date(),
+                }
+              );
             }
 
             if (isLastStop) {
@@ -907,6 +1151,7 @@ export class SocketService {
 
             await route.resumeRoute();
             const currentStop = route.stops[route.currentStopIndex];
+            const hubRoute    = isHubRoute(route.type);
 
             socket.emit("route_resumed", {
               routeId:          data.routeId,
@@ -916,7 +1161,8 @@ export class SocketService {
                 branchId:    currentStop.branchId,
                 address:     currentStop.address,
                 location:    currentStop.location.coordinates,
-                packageCount: currentStop.packageIds.length,
+                loadCount:   stopLoadCount(currentStop, route.type),
+                loadUnit:    hubRoute ? "manifests" : "packages",
               } : null,
               resumedAt: new Date(),
             });
@@ -952,21 +1198,26 @@ export class SocketService {
 
           socket.join(this.getRouteRoom(data.routeId));
           const currentStop = route.stops[route.currentStopIndex];
+          const hubRoute    = isHubRoute(route.type);
 
           socket.emit("route_rejoined", {
             routeId:          data.routeId,
             routeNumber:      route.routeNumber,
+            routeType:        route.type,
             status:           route.status,
             currentStopIndex: route.currentStopIndex,
             totalStops:       route.stops.length,
             completedStops:   route.completedStops,
             currentStop: currentStop ? {
-              stopId:      currentStop._id,
-              branchId:    currentStop.branchId,
-              address:     currentStop.address,
-              location:    currentStop.location.coordinates,
-              status:      currentStop.status,
-              packageCount: currentStop.packageIds.length,
+              stopId:       currentStop._id,
+              branchId:     currentStop.branchId,
+              address:      currentStop.address,
+              location:     currentStop.location.coordinates,
+              status:       currentStop.status,
+              loadCount:    stopLoadCount(currentStop, route.type),
+              loadUnit:     hubRoute ? "manifests" : "packages",
+              manifestIds:  hubRoute ? (currentStop.manifestIds ?? []) : undefined,
+              packageIds:   !hubRoute ? currentStop.packageIds : undefined,
             } : null,
             timestamp: new Date(),
           });
@@ -1060,11 +1311,11 @@ export class SocketService {
               currentStopIndex: 0,
               totalStops:       route.stops.length,
               currentStop: firstStop ? {
-                stopId:       firstStop._id,
-                clientId:     firstStop.clientId,
-                packageId:    firstStop.packageIds[0],
-                address:      firstStop.address,
-                location:     firstStop.location.coordinates,
+                stopId:         firstStop._id,
+                clientId:       firstStop.clientId,
+                packageId:      firstStop.packageIds[0],
+                address:        firstStop.address,
+                location:       firstStop.location.coordinates,
                 recipientName:  (firstStop as any).recipientName,
                 recipientPhone: (firstStop as any).recipientPhone,
                 otpSent: true,
@@ -1153,11 +1404,11 @@ export class SocketService {
 
             // Notify branch room
             this.io.to(this.getBranchRoom(deliverer.branchId.toString())).emit("deliverer_arrived_at_client", {
-              routeId:       data.routeId,
-              delivererId:   deliverer._id,
-              stopIndex:     data.stopIndex,
-              stopId:        stop._id,
-              clientId:      stop.clientId,
+              routeId:        data.routeId,
+              delivererId:    deliverer._id,
+              stopIndex:      data.stopIndex,
+              stopId:         stop._id,
+              clientId:       stop.clientId,
               distanceMeters: Math.round(distanceMeters),
               timestamp: new Date(),
             });
@@ -1298,18 +1549,16 @@ export class SocketService {
             await pkg.markAsDelivered(deliverer.userId, data.notes);
 
             // Update payment status to collected
-
             await PaymentModel.findOneAndUpdate(
-
               { packageId: packageId },
-              
-              { 
-                $set: { 
+              {
+                $set: {
                   status: 'collected',
-                  delivererId: deliverer.userId 
-                } 
+                  delivererId: deliverer.userId
+                }
               }
             );
+
             // Complete the stop
             await route.completeStop(
               data.stopIndex,
@@ -1500,8 +1749,7 @@ export class SocketService {
             }
 
             // Add issue to package and update status to failed_delivery
-            // The model's updateStatus increments attemptCount and sets nextAttemptDate
-           await pkg.updateStatus(
+            await pkg.updateStatus(
               "failed_delivery_attempt",
               deliverer.userId,
               pkg.currentBranchId,
@@ -1513,14 +1761,12 @@ export class SocketService {
             const attemptsExhausted = (updatedPkgAfterFail?.attemptCount ?? 0) >= (updatedPkgAfterFail?.maxAttempts ?? 3);
 
             await PaymentModel.findOneAndUpdate(
-
               { packageId: packageId },
-
-              { 
-                $set: { 
+              {
+                $set: {
                   status: attemptsExhausted ? 'failed' : 'pending',
                   delivererId: deliverer.userId
-                } 
+                }
               }
             );
 
@@ -1557,44 +1803,22 @@ export class SocketService {
             const routeRoom = this.getRouteRoom(data.routeId);
 
             // ── REQUEUE: move failed stop to the end of the route ────────────────
-            //
-            // When attempts are NOT yet exhausted, we re-append the failed stop as a
-            // new stop at the end of the current route so the deliverer can retry it
-            // after completing all remaining stops, without wasting more km by
-            // backtracking immediately.
-            //
-            // What we do:
-            //   1. Clone the failed stop's data (same coords, package, client).
-            //   2. Reset its status to "pending" and clear arrival timestamps.
-            //   3. Push it to route.stops with a new order number (last position).
-            //   4. Save the route — currentStopIndex is already advanced by failStop().
-            //
-            // When attempts ARE exhausted: the package is already marked 'returned'
-            // by the package model's pre-save hook. We do NOT requeue it — the
-            // deliverer must bring it back to the branch at the end of the route.
-
             let requeuedStopIndex: number | null = null;
 
             if (!maxReached) {
-              // Snapshot the stop BEFORE failStop mutated it (we read stop object before
-              // failStop was called, stored above as `stop`). We need the original fields.
               const requeuedStop = {
-
                 clientId:       stop.clientId,
                 location:       stop.location,
                 address:        stop.address,
                 packageIds:     stop.packageIds,
                 action:         stop.action,
-
-
                 status:         "pending" as const,
-                order:          route.stops.length + 1, 
+                order:          route.stops.length + 1,
                 expectedArrival: undefined,
                 actualArrival:   undefined,
                 completedPackages: [],
                 failedPackages:    [],
                 skippedPackages:   [],
-
                 ...(stop.branchId ? { branchId: stop.branchId } : {}),
               };
 
@@ -1627,50 +1851,25 @@ export class SocketService {
 
             // ── Notify branch / supervisor ────────────────────────────────────────
             this.io.to(this.getBranchRoom(deliverer.branchId.toString())).emit("deliverer_delivery_failed", {
-              routeId:       data.routeId,
-              delivererId:   deliverer._id,
-              stopIndex:     data.stopIndex,
+              routeId:        data.routeId,
+              delivererId:    deliverer._id,
+              stopIndex:      data.stopIndex,
               packageId,
-              attemptCount:  updatedPkg?.attemptCount,
-              maxAttempts:   updatedPkg?.maxAttempts,
+              attemptCount:   updatedPkg?.attemptCount,
+              maxAttempts:    updatedPkg?.maxAttempts,
               maxReached,
               requeuedAtStop: requeuedStopIndex,
-              reason:        data.reason,
+              reason:         data.reason,
               timestamp: new Date(),
             });
 
             // ── Determine what comes next for the deliverer ───────────────────────
-            //
-            // After failStop(), route.currentStopIndex already points to the next
-            // real stop (or past the end if this was the last original stop before
-            // we re-appended). We now have three distinct cases:
-            //
-            //   A. maxReached → stop is NOT requeued. The package goes back to branch.
-            //      - If there are still other stops: move to next stop normally.
-            //      - If this WAS the last stop (and not requeued): route is done.
-            //
-            //   B. !maxReached + more original stops remain: move to next stop.
-            //      The requeued stop is at the very end — deliverer will reach it
-            //      after all other stops.
-            //
-            //   C. !maxReached + this was the ONLY or last original stop: the
-            //      requeued stop is now the only remaining stop, so currentStopIndex
-            //      points at it. Move to it immediately.
-            //
-            // In cases B and C the deliverer always gets a "next stop" to go to.
-
-            // Total stops after any re-append
             const totalStopsNow = route.stops.length;
-
-            // Is there a next stop to go to right now?
-            // (currentStopIndex was already incremented by failStop)
-            const hasNextStop       = route.currentStopIndex < totalStopsNow;
-            const nextStop          = hasNextStop ? route.stops[route.currentStopIndex] : null;
-            const isNowTrulyLastStop = !hasNextStop; // only true when maxReached + was last stop
+            const hasNextStop   = route.currentStopIndex < totalStopsNow;
+            const nextStop      = hasNextStop ? route.stops[route.currentStopIndex] : null;
+            const isNowTrulyLastStop = !hasNextStop;
 
             if (maxReached) {
-              // ── Case A: attempts exhausted, package must be returned ───────────
-              // Package model pre-save already flipped status → 'returned'.
               this.deliveryOTPs.delete(`delivery_otp_${packageId}`);
 
               // Notify branch to expect the returned package
@@ -1684,10 +1883,8 @@ export class SocketService {
               });
 
               if (isNowTrulyLastStop) {
-                // No more stops at all — complete the route
                 await route.completeRoute(`Last stop failed (max attempts): ${data.reason}`);
                 await DelivererModel.findByIdAndUpdate(deliverer._id, {
-                  // Keep on_route so the deliverer knows to return the package first
                   availabilityStatus: "on_route",
                   currentRouteId:     route._id,
                   lastActiveAt: new Date(),
@@ -1701,15 +1898,14 @@ export class SocketService {
                   timestamp: new Date(),
                 });
               } else {
-                // Still has stops to complete — OTP for next stop
                 if (nextStop) {
                   await this.generateAndSendDeliveryOTP(route, route.currentStopIndex, data.routeId);
                 }
                 socket.emit("delivery_attempt_failed", {
                   ...this.buildFailedStopPayload(data.routeId, data.stopIndex, packageId, data.reason, updatedPkg, distanceMeters),
-                  maxReached:    true,
-                  requiresReturn: true,
-                  requeuedAtStop: null,
+                  maxReached:      true,
+                  requiresReturn:  true,
+                  requeuedAtStop:  null,
                   nextStop: nextStop ? {
                     stopIndex:   route.currentStopIndex,
                     stopId:      nextStop._id,
@@ -1728,19 +1924,15 @@ export class SocketService {
                 });
               }
             } else {
-              // ── Cases B & C: attempts remain, stop was requeued ───────────────
-              // Generate OTP for the next stop (could be the very next original stop
-              // OR the requeued stop itself if this was the last original one).
               if (nextStop) {
                 await this.generateAndSendDeliveryOTP(route, route.currentStopIndex, data.routeId);
               }
 
               socket.emit("delivery_attempt_failed", {
                 ...this.buildFailedStopPayload(data.routeId, data.stopIndex, packageId, data.reason, updatedPkg, distanceMeters),
-                maxReached:     false,
-                requiresReturn: false,
-                // Tell the deliverer exactly where the retry was placed
-                requeuedAtStop: requeuedStopIndex,
+                maxReached:      false,
+                requiresReturn:  false,
+                requeuedAtStop:  requeuedStopIndex,
                 nextStop: nextStop ? {
                   stopIndex:   route.currentStopIndex,
                   stopId:      nextStop._id,
@@ -1748,7 +1940,6 @@ export class SocketService {
                   packageId:   nextStop.packageIds[0],
                   address:     nextStop.address,
                   location:    nextStop.location.coordinates,
-                  // Is this next stop the requeued one itself? (Case C)
                   isRetry:     route.currentStopIndex === requeuedStopIndex,
                   otpSent:     true,
                 } : null,
@@ -1832,7 +2023,6 @@ export class SocketService {
 
         // ── return_package_to_branch ─────────────────────────────────────────
         // Deliverer confirms they have physically returned a failed package to branch.
-        // Updates package status to 'returned' with full returnInfo if not already set.
         socket.on("return_package_to_branch", async (data: {
           packageId:   string;
           branchId:    string;
@@ -1987,7 +2177,6 @@ export class SocketService {
       } // end if (role === "deliverer")
 
 
-
       // ══════════════════════════════════════════════════════════════════════
       //  PACKAGE TRACKING  –  client subscribes to a package's live updates
       // ══════════════════════════════════════════════════════════════════════
@@ -2008,7 +2197,6 @@ export class SocketService {
             }
 
             // Authorization: only the sender or the recipient's client can track
-            // senderId covers both client and freelancer senders.
             const isAuthorized =
               role === "admin" ||
               role === "manager" ||
@@ -2058,6 +2246,57 @@ export class SocketService {
         }
       );
 
+      // ── Manifest tracking (supervisors / managers can watch a manifest's live status)
+      socket.on("track_manifest", async (data: { manifestId: string }) => {
+        try {
+          if (!data?.manifestId || !mongoose.Types.ObjectId.isValid(data.manifestId)) {
+            socket.emit("track_manifest_error", { message: "Valid manifestId is required." });
+            return;
+          }
+
+          const allowed = ["admin", "manager", "supervisor", "transporter"];
+          if (!allowed.includes(role)) {
+            socket.emit("track_manifest_error", { message: "Not authorized to track manifests." });
+            return;
+          }
+
+          const manifest = await ManifestModel.findById(data.manifestId)
+            .select("manifestCode status originBranchId destinationBranchId totalDeclaredWeight packageCount transportLeg")
+            .lean();
+
+          if (!manifest) {
+            socket.emit("track_manifest_error", { message: "Manifest not found." });
+            return;
+          }
+
+          socket.join(this.getManifestRoom(data.manifestId));
+
+          socket.emit("manifest_status_update", {
+            manifestId:          data.manifestId,
+            manifestCode:        manifest.manifestCode,
+            status:              manifest.status,
+            originBranchId:      manifest.originBranchId,
+            destinationBranchId: manifest.destinationBranchId,
+            packageCount:        manifest.packageCount,
+            totalWeight:         manifest.totalDeclaredWeight,
+            departedAt:          manifest.transportLeg?.departedAt,
+            arrivedAt:           manifest.transportLeg?.arrivedAt,
+            timestamp: new Date(),
+          });
+
+          console.log(`[Socket] ${role} ${userId} tracking manifest ${data.manifestId}`);
+        } catch (err: any) {
+          console.error("[Socket] track_manifest failed:", err);
+          socket.emit("track_manifest_error", { message: err.message });
+        }
+      });
+
+      socket.on("untrack_manifest", (data: { manifestId: string }) => {
+        if (!data?.manifestId) return;
+        socket.leave(this.getManifestRoom(data.manifestId));
+      });
+
+
       // ══════════════════════════════════════════════════════════════════════
       //  JOIN BRANCH ROOM  –  supervisor / manager joins a branch room to
       //  receive real-time events for that branch
@@ -2084,23 +2323,21 @@ export class SocketService {
         );
       }
 
+
       // ══════════════════════════════════════════════════════════════════════
       //  DISCONNECT
       // ══════════════════════════════════════════════════════════════════════
 
       socket.on("disconnect", async (reason) => {
-
         console.log(`[Socket] Disconnected: userId=${userId} role=${role} reason=${reason}`);
 
         this.unregisterSocket(userId, role);
 
         if (role === "deliverer" || role === "transporter") {
           // ── Grace period: wait 30s before treating as truly offline ────────
-          // Covers mobile network switches, tunnels, brief signal loss.
           const timer = setTimeout(async () => {
             this.disconnectTimers.delete(userId);
 
-            // User didn't reconnect — mark as offline
             try {
               if (role === "deliverer") {
                 await DelivererModel.findOneAndUpdate(
@@ -2111,7 +2348,6 @@ export class SocketService {
                 await this.notifyDelivererOfflineToTrackers(userId);
 
               } else if (role === "transporter") {
-                
                 await TransporterModel.findOneAndUpdate(
                   { userId },
                   { isOnline: false, lastActiveAt: new Date() }
@@ -2120,7 +2356,6 @@ export class SocketService {
                 await this.notifyTransporterOfflineToBranch(userId);
               }
 
-              // Remove from Redis (HASH + SET)
               await PresenceService.setOffline(userId, role).catch((err) =>
                 console.error("[Socket] PresenceService.setOffline failed:", err.message)
               );
@@ -2129,7 +2364,7 @@ export class SocketService {
             } catch (err) {
               console.error("[Socket] Error on disconnect cleanup:", err);
             }
-          }, 30000); // 30-second grace period
+          }, 30000);
 
           this.disconnectTimers.set(userId, timer);
           console.log(`[Socket] Grace period started: userId=${userId} (30s to reconnect)`);
@@ -2137,7 +2372,7 @@ export class SocketService {
       });
     });
   }
-  
+
 
   // ─── Role-based Room Joining on Connect ───────────────────────────────────
 
@@ -2181,6 +2416,7 @@ export class SocketService {
     }
   }
 
+
   // ─── Socket Registry Helpers ──────────────────────────────────────────────
 
   private registerSocket(userId: string, role: DeliveryUserRole, socketId: string): void {
@@ -2207,6 +2443,7 @@ export class SocketService {
     }
   }
 
+
   // ─── Broadcast: online / offline status ───────────────────────────────────
 
   private async broadcastOnlineStatus(
@@ -2219,7 +2456,6 @@ export class SocketService {
         const deliverer = await DelivererModel.findOne({ userId }).lean();
         if (!deliverer) return;
 
-        // Notify the branch room (supervisors / managers)
         this.io.to(this.getBranchRoom(deliverer.branchId.toString())).emit(
           isOnline ? "deliverer_online" : "deliverer_offline",
           {
@@ -2250,7 +2486,7 @@ export class SocketService {
     }
   }
 
-  
+
   // ─── Broadcast: deliverer location to package tracking rooms ──────────────
 
   private async broadcastDelivererLocation(
@@ -2258,7 +2494,6 @@ export class SocketService {
     coordinates: [number, number]
   ): Promise<void> {
     try {
-      // Find all packages currently assigned to this deliverer and out for delivery
       const packages = await PackageModel.find({
         assignedDelivererId: delivererUserId,
         status: "out_for_delivery",
@@ -2280,15 +2515,22 @@ export class SocketService {
     }
   }
 
+
   // ─── Broadcast: transporter location to relevant branch rooms ─────────────
 
+  /**
+   * Broadcasts transporter location to:
+   *  - The branch room of their currentBranchId (unchanged)
+   *  - Package rooms for packages in transit (legacy transporter routes)
+   *  - Manifest rooms for manifests in transit (hub_to_hub routes)
+   */
   private async broadcastTransporterLocation(
     transporterUserId: string,
     coordinates: [number, number]
   ): Promise<void> {
     try {
       const transporter = await TransporterModel.findOne({ userId: transporterUserId })
-        .select("companyId currentBranchId currentRouteId")
+        .select("companyId currentBranchId currentRouteId _id")
         .lean();
 
       if (!transporter) return;
@@ -2304,7 +2546,7 @@ export class SocketService {
           });
       }
 
-      // Also push to packages in transit by this transporter
+      // Legacy transporter routes — broadcast to package rooms
       const packages = await PackageModel.find({
         assignedTransporterId: transporterUserId,
         status: "in_transit_to_branch",
@@ -2320,10 +2562,29 @@ export class SocketService {
           timestamp: new Date(),
         });
       }
+
+      // Hub_to_hub routes — broadcast to manifest rooms
+      const manifests = await ManifestModel.find({
+        "transportLeg.transporterId": transporter._id,
+        status: "in_transit",
+      })
+        .select("_id manifestCode")
+        .lean();
+
+      for (const m of manifests) {
+        this.io.to(this.getManifestRoom(m._id.toString())).emit("transporter_location_update", {
+          manifestId:   m._id,
+          manifestCode: m.manifestCode,
+          transporterId: transporter._id,
+          coordinates,
+          timestamp: new Date(),
+        });
+      }
     } catch (err) {
       console.error("[Socket] Error broadcasting transporter location:", err);
     }
   }
+
 
   // ─── Broadcast: deliverer availability change to active trackers ───────────
 
@@ -2352,6 +2613,7 @@ export class SocketService {
     }
   }
 
+
   // ─── Disconnect: notify trackers deliverer went offline ───────────────────
 
   private async notifyDelivererOfflineToTrackers(delivererUserId: string): Promise<void> {
@@ -2375,6 +2637,7 @@ export class SocketService {
       console.error("[Socket] Error notifying offline deliverer to trackers:", err);
     }
   }
+
 
   // ─── Disconnect: notify branch that transporter went offline ──────────────
 
@@ -2401,6 +2664,7 @@ export class SocketService {
     }
   }
 
+
   // ═══════════════════════════════════════════════════════════════════════════
   //  PUBLIC API  –  called from controllers / other services
   // ═══════════════════════════════════════════════════════════════════════════
@@ -2420,7 +2684,7 @@ export class SocketService {
       default:            return undefined;
     }
   }
-  
+
   /**
    * Emit an event directly to a specific user.
    */
@@ -2474,6 +2738,26 @@ export class SocketService {
   }
 
   /**
+   * Emit a manifest status update to everyone tracking that manifest.
+   * Call this from controllers when manifest status changes outside the socket flow.
+   */
+  public emitManifestStatusUpdate(
+    manifestId: string,
+    payload: {
+      status: string;
+      departedAt?: Date;
+      arrivedAt?: Date;
+      transporterId?: string;
+    }
+  ): void {
+    this.io.to(this.getManifestRoom(manifestId)).emit("manifest_status_update", {
+      manifestId,
+      ...payload,
+      timestamp: new Date(),
+    });
+  }
+
+  /**
    * Assign a deliverer to a package delivery session and notify both parties.
    * Call this when a package is dispatched (out_for_delivery).
    */
@@ -2483,27 +2767,23 @@ export class SocketService {
     clientUserId?: string
   ): Promise<void> {
     try {
-      // Store in memory
       this.activeDeliveries.set(packageId, {
         packageId,
         delivererId: delivererUserId,
         clientId: clientUserId,
       });
 
-      // Deliverer joins the package room for two-way pushes
       const delivererSocketId = this.delivererSockets.get(delivererUserId);
       if (delivererSocketId) {
         const delivererSocket = this.io.sockets.sockets.get(delivererSocketId);
         delivererSocket?.join(this.getPackageRoom(packageId));
       }
 
-      // Notify the deliverer
       this.emitToUser(delivererUserId, "deliverer", "delivery_assigned", {
         packageId,
         timestamp: new Date(),
       });
 
-      // Notify the client (if home delivery)
       if (clientUserId) {
         this.emitToUser(clientUserId, "client", "package_out_for_delivery", {
           packageId,
@@ -2530,14 +2810,12 @@ export class SocketService {
     try {
       const session = this.activeDeliveries.get(packageId);
 
-      // Notify room
       this.io.to(this.getPackageRoom(packageId)).emit("delivery_session_ended", {
         packageId,
         outcome,
         timestamp: new Date(),
       });
 
-      // Remove deliverer from the room
       if (session) {
         const delivererSocketId = this.delivererSockets.get(session.delivererId);
         if (delivererSocketId) {
@@ -2569,13 +2847,11 @@ export class SocketService {
         destinationBranchId,
       });
 
-      // Transporter joins the package room
       const transporterSocketId = this.transporterSockets.get(transporterUserId);
       if (transporterSocketId) {
         this.io.sockets.sockets.get(transporterSocketId)?.join(this.getPackageRoom(packageId));
       }
 
-      // Notify origin and destination branch rooms
       const payload = {
         packageId,
         transporterId: transporterUserId,
@@ -2628,15 +2904,87 @@ export class SocketService {
   }
 
   /**
+   * Starts a manifest transit session (hub_to_hub).
+   * Notifies both origin and destination hub rooms.
+   */
+  public async startManifestTransitSession(
+    manifestId: string,
+    manifestCode: string,
+    transporterUserId: string,
+    originBranchId: string,
+    destinationBranchId: string
+  ): Promise<void> {
+    try {
+      this.activeManifestTransits.set(manifestId, {
+        manifestId,
+        manifestCode,
+        transporterUserId,
+        originBranchId,
+        destinationBranchId,
+      });
+
+      const transporterSocketId = this.transporterSockets.get(transporterUserId);
+      if (transporterSocketId) {
+        this.io.sockets.sockets.get(transporterSocketId)?.join(this.getManifestRoom(manifestId));
+      }
+
+      const payload = {
+        manifestId,
+        manifestCode,
+        transporterUserId,
+        originBranchId,
+        destinationBranchId,
+        timestamp: new Date(),
+      };
+      this.emitToBranch(originBranchId, "manifest_in_transit", payload);
+      this.emitToBranch(destinationBranchId, "manifest_incoming", payload);
+
+      console.log(`[Socket] Manifest transit session started: manifest=${manifestCode} transporter=${transporterUserId} ${originBranchId} → ${destinationBranchId}`);
+    } catch (err) {
+      console.error("[Socket] Error starting manifest transit session:", err);
+    }
+  }
+
+  /**
+   * Ends a manifest transit session on arrival.
+   */
+  public async endManifestTransitSession(manifestId: string): Promise<void> {
+    try {
+      const session = this.activeManifestTransits.get(manifestId);
+
+      this.io.to(this.getManifestRoom(manifestId)).emit("manifest_transit_ended", {
+        manifestId,
+        timestamp: new Date(),
+      });
+
+      if (session) {
+        this.emitToBranch(session.destinationBranchId, "manifest_arrived", {
+          manifestId,
+          manifestCode: session.manifestCode,
+          transporterUserId: session.transporterUserId,
+          timestamp: new Date(),
+        });
+
+        const transporterSocketId = this.transporterSockets.get(session.transporterUserId);
+        if (transporterSocketId) {
+          this.io.sockets.sockets.get(transporterSocketId)?.leave(this.getManifestRoom(manifestId));
+        }
+      }
+
+      this.activeManifestTransits.delete(manifestId);
+      console.log(`[Socket] Manifest transit session ended: manifest=${manifestId}`);
+    } catch (err) {
+      console.error("[Socket] Error ending manifest transit session:", err);
+    }
+  }
+
+  /**
    * Check whether a user is currently connected.
    */
   public isUserOnline(userId: string, role: DeliveryUserRole): boolean {
     return !!this.getSocketId(userId, role);
   }
 
-  /**
-   * Return all connected users counts (useful for monitoring endpoints).
-   */
 
   // --- OTP helper: generate 6-digit code, store in memory, send via SMS ---
 
@@ -2691,7 +3039,6 @@ export class SocketService {
 
       if (!smsSent) {
         console.error(`[OTP] SMS failed for package ${packageId} to ${recipientPhone}`);
-        // OTP is still stored -- deliverer can ask client to check or request a resend
       } else {
         console.log(`[OTP] SMS sent to ${recipientPhone} for package ${packageId}`);
       }
@@ -2699,6 +3046,7 @@ export class SocketService {
       console.error("[Socket] generateAndSendDeliveryOTP failed:", err);
     }
   }
+
 
   // --- Helper: build fail_delivery_attempt payload -------------------------
 
@@ -2728,36 +3076,25 @@ export class SocketService {
     };
   }
 
+
+
+
   public getConnectionStats(): Record<string, number> {
     return {
       deliverers:   this.delivererSockets.size,
-
       transporters: this.transporterSockets.size,
-
-      
       clients:      this.clientSockets.size,
-      
       freelancers:  this.freelancerSockets.size,
-      
       supervisors:  this.supervisorSockets.size,
-      
       managers:     this.managerSockets.size,
-      
       admins:       this.adminSockets.size,
       total: (
-      
         this.delivererSockets.size +
-      
         this.transporterSockets.size +
-      
         this.clientSockets.size +
-      
         this.freelancerSockets.size +
-      
         this.supervisorSockets.size +
-      
         this.managerSockets.size +
-        
         this.adminSockets.size
       ),
     };
