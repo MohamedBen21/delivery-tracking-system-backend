@@ -51,6 +51,26 @@ export interface IDeliverer extends Document {
   successfulDeliveries: number;
   failedDeliveries: number;
   
+  
+  // Fixed commission per domicile delivery (DA) 
+  commission: number;
+  
+  // Total lifetime earnings from commissions (DA)
+  totalEarnings: number;
+  
+  // Cash collected from clients that must be returned to branch (DA) 
+  pendingBranchReturn: number;
+
+  /** Today's earnings — resets daily or on cash return */
+  todayEarnings: number;
+  
+  /** Packages delivered today */
+  todayDeliveriesCount: number;
+  
+  /** Total cash collected from clients today */
+  todayCollectedAmount: number;
+
+
   performance: IPerformance;
 
   isActive: boolean;
@@ -293,7 +313,47 @@ const delivererSchema = new Schema<IDeliverer>({
       message: 'Failed deliveries cannot exceed total deliveries.',
     },
   },
-  
+
+
+  commission: {
+    type: Number,
+    default: 300,
+    min: 0,
+  },
+
+  totalEarnings: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  pendingBranchReturn: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+
+  todayEarnings: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  todayDeliveriesCount: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  todayCollectedAmount: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+
+
   performance: {
     type: performanceSchema,
     default: () => ({
@@ -466,6 +526,63 @@ delivererSchema.methods.canAcceptDelivery = function() {
     this.currentVehicleId 
   );
 };
+
+
+
+/**
+ * Record payment collection on delivery completion.
+ * Updates both lifetime and today counters.
+ */
+delivererSchema.methods.recordDeliveryPayment = function(
+  amountCollected: number,
+  isCOD: boolean,
+) {
+  
+  const branchAmount = amountCollected - this.commission;
+
+  // Lifetime
+  this.totalEarnings += this.commission;
+
+  // Today
+  this.todayEarnings += this.commission;
+  this.todayDeliveriesCount += 1;
+  this.todayCollectedAmount += amountCollected;
+
+  if (isCOD) {
+    this.pendingBranchReturn += branchAmount;
+  }
+
+  this.lastActiveAt = new Date();
+  return this.save();
+};
+
+/**
+ * Called when deliverer returns cash to branch at end of day.
+ * Resets daily counters and pending branch return.
+ * Returns summary of what was returned.
+ */
+
+delivererSchema.methods.returnCashToBranch = function() {
+
+  const summary = {
+    amountReturned: this.pendingBranchReturn,
+    todayEarnings: this.todayEarnings,
+    todayDeliveries: this.todayDeliveriesCount,
+    todayCollected: this.todayCollectedAmount,
+  };
+
+  // Reset daily counters
+  this.pendingBranchReturn = 0;
+  this.todayEarnings = 0;
+  this.todayDeliveriesCount = 0;
+  this.todayCollectedAmount = 0;
+  this.lastActiveAt = new Date();
+
+  return this.save().then(() => summary);
+
+};
+
+
 
 delivererSchema.pre('save', function(next) {
 
