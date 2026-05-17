@@ -9403,7 +9403,7 @@ export const searchPackages = catchAsyncError(
 
       const VALID_STATUSES: PackageStatus[] = [
         "pending", "accepted", "at_origin_branch", "in_transit_to_branch",
-        "at_destination_branch", "out_for_delivery", "delivered",
+        "at_destination_branch", "out_for_delivery", "delivered",'failed_delivery_attempt',
         "failed_delivery", "rescheduled", "returned", "cancelled",
         "lost", "damaged", "on_hold",
       ];
@@ -11648,70 +11648,217 @@ export const getDeliveryHistory = catchAsyncError(
 
 
 
-export const getTransporterToday = catchAsyncError(async (req:Request , res: Response , next:NextFunction) => {
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET TODAY'S MANIFESTS
+//  Returns all manifests assigned to the authenticated transporter for today
+// ─────────────────────────────────────────────────────────────────────────────
 
-  try {
-    const transporterUserId = req.user?._id;
-
-    if(!transporterUserId){
-      return next(new ErrorHandler("Unauthorized — user not found.", 401));
-    }
-
-    const [user , transporter] = await Promise.all([
-      userModel.findById(transporterUserId).lean(),
-      TransporterModel.findOne({ userId: transporterUserId }).lean(),
-    ]);
-
-    if(!user || !transporter){
-      return next(new ErrorHandler("Transporter profile not found.", 404));
-    }
-
-    if(!transporter.isActive || transporter.isSuspended){
-      return next(new ErrorHandler("Transporter account is not active.", 403));
-    }
-
-    const todayStart = new Date();
-
-
-    
-  } catch (error:any) {
-
-    
-  }
-});
-
-
-
-
-
-export const getTransporterHistory = catchAsyncError(
-
-  async (req:Request , res:Response , next : NextFunction) =>{
-
-    const transporterUserId = req.user?._id;
-
-    if(!transporterUserId){
-
-      return next(new ErrorHandler("Unauthorized — user not found.", 401));
-    }
-
-    const [user, transporter ] = await Promise.all([
-
-      await userModel.findById(transporterUserId),
-      await TransporterModel.findOne({ userId: transporterUserId }),
-    ]);
-
-    if(!user || user.role !== "transporter"){
-      return next(new ErrorHandler("Transporter profile not found.", 404));
-    }
-
-
+export const getTodayManifests = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      
-    } catch (error: any) {
-      return next (new ErrorHandler(error.message || "error fetching transporter histroy" , 500));
-      
-    }
+      const transporterUserId = req.user?._id;
+      if (!transporterUserId) {
+        return next(new ErrorHandler("Unauthorized — user not found.", 401));
+      }
 
-  }
-)
+
+      const transporter = await TransporterModel.findOne({ userId: transporterUserId }).lean();
+      if (!transporter) {
+        return next(new ErrorHandler("Transporter profile not found.", 404));
+      }
+
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const skip = (page - 1) * limit;
+
+
+      const filter: Record<string, any> = {
+        'transportLeg.transporterId': transporter._id,
+
+        $or: [
+          { 'transportLeg.assignedAt': { $gte: todayStart, $lte: todayEnd } },
+          { createdAt: { $gte: todayStart, $lte: todayEnd } },
+          { updatedAt: { $gte: todayStart, $lte: todayEnd } },
+          { departedAt: { $gte: todayStart, $lte: todayEnd } },
+          { arrivedAt: { $gte: todayStart, $lte: todayEnd } },
+        ],
+      };
+
+      const VALID_STATUSES: ManifestStatus[] = [
+        'open', 'sealed', 'loaded', 'in_transit', 
+        'arrived', 'unloading', 'closed', 'discrepancy', 'cancelled'
+      ];
+
+
+      if (req.query.status) {
+        const s = req.query.status as string;
+        if (!VALID_STATUSES.includes(s as ManifestStatus)) {
+          return next(new ErrorHandler(`Invalid status: ${s}.`, 400));
+        }
+        filter.status = s;
+      }
+
+      if (req.query.statuses) {
+        const statuses = (req.query.statuses as string).split(",").map(s => s.trim());
+        const invalid = statuses.filter(s => !VALID_STATUSES.includes(s as ManifestStatus));
+        if (invalid.length > 0) {
+          return next(new ErrorHandler(`Invalid statuses: ${invalid.join(", ")}.`, 400));
+        }
+        filter.status = { $in: statuses };
+      }
+
+
+      const VALID_PRIORITIES = ["standard", "express", "urgent"];
+      if (req.query.priority) {
+        const p = req.query.priority as string;
+        if (!VALID_PRIORITIES.includes(p)) {
+          return next(new ErrorHandler(`Invalid priority: ${p}.`, 400));
+        }
+        filter.priority = p;
+      }
+
+
+      if (req.query.originBranchId) {
+        filter.originBranchId = req.query.originBranchId;
+      }
+
+      if (req.query.destinationBranchId) {
+        filter.destinationBranchId = req.query.destinationBranchId;
+      }
+
+
+      const sortBy = (req.query.sortBy as string) || 'transportLeg.assignedAt';
+      const order = req.query.order === "desc" ? -1 : 1;
+      const sortMap: Record<string, any> = {
+        'transportLeg.assignedAt': { 'transportLeg.assignedAt': order },
+        createdAt: { createdAt: order },
+        departedAt: { departedAt: order },
+        arrivedAt: { arrivedAt: order },
+        packageCount: { packageCount: order },
+        totalDeclaredWeight: { totalDeclaredWeight: order },
+      };
+      const sort = sortMap[sortBy] || { 'transportLeg.assignedAt': -1 };
+
+
+      const [total, manifests] = await Promise.all([
+        ManifestModel.countDocuments(filter),
+        ManifestModel.find(filter)
+          .populate("originBranchId", "name code address")
+          .populate("destinationBranchId", "name code address")
+          .populate("transportLeg.vehicleId", "licensePlate model registrationNumber")
+          .populate("createdBy", "firstName lastName email")
+          .sort(sort)
+          .skip(skip)
+          .limit(limit)
+          .lean({ virtuals: true }),
+      ]);
+
+
+      const stats = {
+        total: manifests.length,
+        inTransit: manifests.filter(m => m.status === "in_transit").length,
+        arrived: manifests.filter(m => m.status === "arrived").length,
+        loaded: manifests.filter(m => m.status === "loaded").length,
+        unloading: manifests.filter(m => m.status === "unloading").length,
+        closed: manifests.filter(m => m.status === "closed").length,
+        cancelled: manifests.filter(m => m.status === "cancelled").length,
+        discrepancy: manifests.filter(m => m.status === "discrepancy").length,
+        totalPackages: manifests.reduce((sum, m) => sum + (m.packageCount || 0), 0),
+        totalWeight: manifests.reduce((sum, m) => sum + (m.totalDeclaredWeight || 0), 0),
+      };
+
+
+      const formattedManifests = manifests.map((manifest: any) => ({
+        id: manifest._id,
+        manifestCode: manifest.manifestCode,
+        status: manifest.status,
+        priority: manifest.priority,
+
+        originBranch: manifest.originBranchId ? {
+          id: manifest.originBranchId._id,
+          name: manifest.originBranchId.name,
+          code: manifest.originBranchId.code,
+          address: manifest.originBranchId.address,
+        } : null,
+
+        destinationBranch: manifest.destinationBranchId ? {
+          id: manifest.destinationBranchId._id,
+          name: manifest.destinationBranchId.name,
+          code: manifest.destinationBranchId.code,
+          address: manifest.destinationBranchId.address,
+        } : null,
+
+        transportLeg: manifest.transportLeg ? {
+          vehicle: manifest.transportLeg.vehicleId ? {
+            id: manifest.transportLeg.vehicleId._id,
+            licensePlate: manifest.transportLeg.vehicleId.licensePlate,
+            model: manifest.transportLeg.vehicleId.model,
+          } : null,
+          assignedAt: manifest.transportLeg.assignedAt,
+          departedAt: manifest.transportLeg.departedAt,
+          arrivedAt: manifest.transportLeg.arrivedAt,
+          estimatedArrival: manifest.transportLeg.estimatedArrival,
+        } : null,
+
+        packageCount: manifest.packageCount,
+        totalDeclaredWeight: manifest.totalDeclaredWeight,
+        
+        unloadedCount: manifest.unloadedCount,
+        remainingCount: manifest.remainingCount,
+        
+        sealedAt: manifest.sealedAt ?? null,
+        departedAt: manifest.departedAt ?? null,
+        arrivedAt: manifest.arrivedAt ?? null,
+        closedAt: manifest.closedAt ?? null,
+        
+        durationMinutes: manifest.durationMinutes ?? null,
+        hasDiscrepancy: manifest.hasDiscrepancy,
+        isSealed: manifest.isSealed,
+        isInTransit: manifest.isInTransit,
+        isClosed: manifest.isClosed,
+
+        notes: manifest.notes ?? null,
+        internalReference: manifest.internalReference ?? null,
+
+        createdAt: manifest.createdAt,
+        updatedAt: manifest.updatedAt,
+      }));
+
+      res.status(200).json({
+        success: true,
+        data: {
+          date: todayStart.toISOString().split("T")[0],
+          stats,
+          manifests: formattedManifests,
+          pagination: {
+            total,
+            page,
+            limit,
+            pages: Math.ceil(total / limit),
+            hasMore: page * limit < total,
+          },
+          filters: {
+            status: req.query.status ?? null,
+            statuses: req.query.statuses ?? null,
+            priority: req.query.priority ?? null,
+            originBranchId: req.query.originBranchId ?? null,
+            destinationBranchId: req.query.destinationBranchId ?? null,
+            sortBy,
+            order: req.query.order ?? "asc",
+          },
+        },
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error fetching today's manifests.", 500));
+    }
+  },
+);
+
+
+
