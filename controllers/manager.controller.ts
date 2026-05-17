@@ -2544,3 +2544,326 @@ export const getTariffPrice = catchAsyncError(
 );
 
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  UPSERT TARIFF (set price for one wilaya pair)
+//  POST /manager/tariffs
+//  Body: { wilayaFrom: 16, wilayaTo: 31, stopdesk: 500, domicile: 700 }
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface IUpsertTariffBody {
+  wilayaFrom: number;
+  wilayaTo: number;
+  stopdesk: number;
+  domicile: number;
+}
+
+export const upsertTariff = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const managerId = req.user?._id;
+
+      if (!managerId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      const { wilayaFrom, wilayaTo, stopdesk, domicile } = req.body as IUpsertTariffBody;
+
+
+      if (wilayaFrom === undefined || wilayaTo === undefined) {
+        return next(new ErrorHandler("wilayaFrom and wilayaTo are required.", 400));
+      }
+
+      if (!isValidWilayaCode(wilayaFrom) || !isValidWilayaCode(wilayaTo)) {
+        return next(new ErrorHandler("Invalid wilaya code(s). Must be 1–58.", 400));
+      }
+
+      if (stopdesk === undefined || domicile === undefined) {
+        return next(new ErrorHandler("stopdesk and domicile prices are required.", 400));
+      }
+
+      if (typeof stopdesk !== "number" || stopdesk < 0) {
+        return next(new ErrorHandler("stopdesk price must be a non-negative number.", 400));
+      }
+
+      if (typeof domicile !== "number" || domicile < 0) {
+        return next(new ErrorHandler("domicile price must be a non-negative number.", 400));
+      }
+
+      if (domicile < stopdesk) {
+        return next(
+          new ErrorHandler("Domicile price must be greater than or equal to stopdesk price.", 400),
+        );
+      }
+
+
+      const manager = await ManagerModel.findOne({
+        userId: managerId,
+        isActive: true,
+      }).session(session);
+
+      if (!manager) {
+        throw new ErrorHandler("Manager profile not found or inactive.", 404);
+      }
+
+      if (!manager.hasPermission("can_manage_settings")) {
+        throw new ErrorHandler("You don't have permission to manage tariffs.", 403);
+      }
+
+
+      const tariff = await TariffModel.setPrice(
+        manager.companyId.toString(),
+        wilayaFrom,
+        wilayaTo,
+        { stopdesk, domicile },
+        managerId.toString(),
+      );
+
+
+      const [a, b] = wilayaFrom <= wilayaTo ? [wilayaFrom, wilayaTo] : [wilayaTo, wilayaFrom];
+      const entry = tariff.entries.find(e => e.wilayaA === a && e.wilayaB === b);
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `Tariff for ${wilayaName(a)} ↔ ${wilayaName(b)} saved successfully.`,
+        data: entry
+          ? {
+              ...(entry as any).toObject?.() ?? entry,
+              wilayaAName: wilayaName(entry.wilayaA),
+              wilayaBName: wilayaName(entry.wilayaB),
+            }
+          : null,
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400,
+          ),
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
+  },
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  BULK UPSERT TARIFFS (replace all entries at once)
+//  POST /manager/tariffs/bulk
+//  Body: { tariffs: [{ wilayaA, wilayaB, stopdesk, domicile }, ...] }
+//
+//  NOTE: This REPLACES the entire entries array. Use for seeding or full import.
+//  For incremental updates, call POST /manager/tariffs for each pair.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface IBulkTariffEntry {
+  wilayaA: number;
+  wilayaB: number;
+  stopdesk: number;
+  domicile: number;
+}
+
+interface IBulkUpsertTariffsBody {
+  tariffs: IBulkTariffEntry[];
+}
+
+export const bulkUpsertTariffs = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const managerId = req.user?._id;
+
+      if (!managerId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      const { tariffs } = req.body as IBulkUpsertTariffsBody;
+
+      if (!tariffs || !Array.isArray(tariffs) || tariffs.length === 0) {
+        return next(new ErrorHandler("tariffs must be a non-empty array.", 400));
+      }
+
+      if (tariffs.length > 1653) {
+        return next(
+          new ErrorHandler(`Maximum 1,653 entries allowed (all possible wilaya pairs).`, 400),
+        );
+      }
+
+
+      for (let i = 0; i < tariffs.length; i++) {
+        const t = tariffs[i];
+        if (!isValidWilayaCode(t.wilayaA) || !isValidWilayaCode(t.wilayaB)) {
+          return next(new ErrorHandler(`Entry ${i}: Invalid wilaya code(s).`, 400));
+        }
+        if (typeof t.stopdesk !== "number" || t.stopdesk < 0) {
+          return next(new ErrorHandler(`Entry ${i}: Invalid stopdesk price.`, 400));
+        }
+        if (typeof t.domicile !== "number" || t.domicile < 0) {
+          return next(new ErrorHandler(`Entry ${i}: Invalid domicile price.`, 400));
+        }
+        if (t.domicile < t.stopdesk) {
+          return next(
+            new ErrorHandler(`Entry ${i}: Domicile price must be ≥ stopdesk price.`, 400),
+          );
+        }
+      }
+
+
+      const manager = await ManagerModel.findOne({
+        userId: managerId,
+        isActive: true,
+      }).session(session);
+
+      if (!manager) {
+        throw new ErrorHandler("Manager profile not found or inactive.", 404);
+      }
+
+      if (!manager.hasPermission("can_manage_settings")) {
+        throw new ErrorHandler("You don't have permission to manage tariffs.", 403);
+      }
+
+
+      const tariff = await TariffModel.bulkSetPrices(
+        manager.companyId.toString(),
+        tariffs.map(t => ({
+          wilayaA: t.wilayaA,
+          wilayaB: t.wilayaB,
+          stopdesk: t.stopdesk,
+          domicile: t.domicile,
+        })),
+        managerId.toString(),
+      );
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `${tariff.entries.length} tariff(s) saved successfully.`,
+        data: {
+          companyId: tariff.companyId,
+          count: tariff.entries.length,
+          lastUpdated: tariff.updatedAt,
+        },
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400,
+          ),
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
+  },
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DELETE TARIFF ENTRY (remove one wilaya pair)
+//  DELETE /manager/tariffs?wilayaA=16&wilayaB=31
+//
+//  Removes a single entry from the company's entries array.
+//  The company's tariff document continues to exist with remaining entries.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const deleteTariff = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const managerId = req.user?._id;
+
+      if (!managerId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      const wilayaA = parseInt(req.query.wilayaA as string);
+      const wilayaB = parseInt(req.query.wilayaB as string);
+
+      if (isNaN(wilayaA) || isNaN(wilayaB)) {
+        return next(
+          new ErrorHandler("Query params 'wilayaA' and 'wilayaB' are required and must be numbers.", 400),
+        );
+      }
+
+      if (!isValidWilayaCode(wilayaA) || !isValidWilayaCode(wilayaB)) {
+        return next(new ErrorHandler("Invalid wilaya code(s). Must be 1–58.", 400));
+      }
+
+      const [a, b] = wilayaA <= wilayaB ? [wilayaA, wilayaB] : [wilayaB, wilayaA];
+
+
+      const manager = await ManagerModel.findOne({
+        userId: managerId,
+        isActive: true,
+      }).session(session);
+
+      if (!manager) {
+        throw new ErrorHandler("Manager profile not found or inactive.", 404);
+      }
+
+      if (!manager.hasPermission("can_manage_settings")) {
+        throw new ErrorHandler("You don't have permission to manage tariffs.", 403);
+      }
+
+
+      const tariff = await TariffModel.findOneAndUpdate(
+        { companyId: manager.companyId },
+        {
+          $pull: { entries: { wilayaA: a, wilayaB: b } },
+          $set: { lastUpdatedBy: new mongoose.Types.ObjectId(managerId.toString()) },
+        },
+        { new: true, session },
+      );
+
+      if (!tariff) {
+        throw new ErrorHandler("Tariff document not found for this company.", 404);
+      }
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      return res.status(200).json({
+        success: true,
+        message: `Tariff for ${wilayaName(a)} ↔ ${wilayaName(b)} removed successfully.`,
+        data: {
+          companyId: tariff.companyId,
+          remainingEntries: tariff.entries.length,
+        },
+      });
+    } catch (error: any) {
+      return next(error);
+    } finally {
+      if (!transactionCommitted) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
+  },
+);
