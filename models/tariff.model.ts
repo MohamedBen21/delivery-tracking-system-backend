@@ -1,74 +1,138 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 import { WILAYA_CODES, isValidWilayaCode, wilayaName } from "./wilayas.constant";
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  One document per company.
+//  Prices are stored as an embedded array of entries, each covering one
+//  wilaya pair in canonical order (wilayaA ≤ wilayaB).
+//
+//  Full matrix:  58 × 57 / 2 + 58 = 1,653 entries  ≈ 80 KB  (well under 16 MB)
+//
+//  Reads:   one findOne(companyId) to get everything — no joins, no bulk reads.
+//  Writes:  $set on the matching array element (positional $ operator).
+// ─────────────────────────────────────────────────────────────────────────────
+
 export type DeliveryMode = "stopdesk" | "domicile";
 
-export interface ITariffPrices {
-  stopdesk: number;
-  domicile: number;
+// ── Subdocument: one wilaya-pair entry ───────────────────────────────────────
+
+export interface ITariffEntry {
+  wilayaA: number;  // lower code  (1–58)
+  wilayaB: number;  // higher code (1–58), wilayaA <= wilayaB always
+  stopdesk: number; // price in DA
+  domicile: number; // price in DA, always >= stopdesk
 }
+
+// ── Root document ─────────────────────────────────────────────────────────────
 
 export interface ITariff extends Document {
   companyId: mongoose.Types.ObjectId;
-
-  // Always stored so that wilayaA <= wilayaB (canonical order).
-  // Enforces bidirectionality: Alger (16) → Oran (31) and
-  // Oran (31) → Alger (16) map to the SAME document.
-
-  wilayaA: number;
-  wilayaB: number;
-
-  prices: ITariffPrices;
-  isActive: boolean;
+  entries: ITariffEntry[];
   lastUpdatedBy: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
-
-
-  wilayaAName: string;
-  wilayaBName: string;
-  isSameWilaya: boolean;
 }
 
 export interface ITariffModel extends Model<ITariff> {
+  /**
+   * Returns the single tariff document for a company.
+   * Use this on the manager's config page to render the full price table.
+   */
+  findByCompany(companyId: string): Promise<ITariff | null>;
 
   /**
-   * Main lookup used when quoting a package.
-   * Pass the two wilaya codes in ANY order — normalised before querying.
+   * Look up the price for a specific wilaya pair.
+   * Codes can be passed in either order — normalised automatically.
+   *
+   * Returns the matching entry or null if no tariff is configured for that pair.
+   *
+   * @example
+   *   const entry = await TariffModel.findPrice(companyId, 31, 16);
+   *   entry?.stopdesk  // 500
+   *   entry?.domicile  // 700
    */
-
   findPrice(
     companyId: string,
     wilayaFrom: number,
     wilayaTo: number
-  ): Promise<ITariff | null>;
-
-  /** All tariffs for a company (for the manager's config page) */
-
-  findByCompany(companyId: string): Promise<ITariff[]>;
+  ): Promise<ITariffEntry | null>;
 
   /**
-   * Create or update a tariff row.
-   * Normalises the wilaya pair automatically.
+   * Update (or insert) a single entry inside the company's tariff document.
+   * Creates the root document if it doesn't exist yet.
+   * Codes can be passed in either order.
+   *
+   * @example
+   *   await TariffModel.setPrice(companyId, 16, 31,
+   *     { stopdesk: 500, domicile: 700 }, managerId);
    */
-  
-  upsertTariff(
+  setPrice(
     companyId: string,
     wilayaFrom: number,
     wilayaTo: number,
-    prices: ITariffPrices,
+    prices: Pick<ITariffEntry, "stopdesk" | "domicile">,
+    updatedBy: string
+  ): Promise<ITariff>;
+
+  /**
+   * Replace the entire entries array in one shot.
+   * Useful for bulk imports or seeding a new company's price table.
+   *
+   * @example
+   *   await TariffModel.bulkSetPrices(companyId, [
+   *     { wilayaA: 16, wilayaB: 31, stopdesk: 500, domicile: 700 },
+   *     { wilayaA:  9, wilayaB: 16, stopdesk: 400, domicile: 600 },
+   *     ...
+   *   ], managerId);
+   */
+  bulkSetPrices(
+    companyId: string,
+    entries: ITariffEntry[],
     updatedBy: string
   ): Promise<ITariff>;
 }
 
+// ─── Subdocument schema ───────────────────────────────────────────────────────
 
-const wilayaValidator = {
-  validator: (v: number) => isValidWilayaCode(v),
-  message: (props: { value: number }) =>
-    `${props.value} is not a valid wilaya code (must be 1–58)`,
-};
+const tariffEntrySchema = new Schema<ITariffEntry>(
+  {
+    wilayaA: {
+      type: Number,
+      required: true,
+      enum: {
+        values: WILAYA_CODES,
+        message: "{VALUE} is not a valid wilaya code",
+      },
+    },
+    wilayaB: {
+      type: Number,
+      required: true,
+      enum: {
+        values: WILAYA_CODES,
+        message: "{VALUE} is not a valid wilaya code",
+      },
+    },
+    stopdesk: {
+      type: Number,
+      required: [true, "Stopdesk price is required"],
+      min: [0, "Price cannot be negative"],
+    },
+    domicile: {
+      type: Number,
+      required: [true, "Domicile price is required"],
+      min: [0, "Price cannot be negative"],
+      validate: {
+        validator: function (this: ITariffEntry, v: number) {
+          return v >= this.stopdesk;
+        },
+        message: "Domicile price must be >= stopdesk price",
+      },
+    },
+  },
+  { _id: false } // no ObjectId per entry — wilayaA+wilayaB is the natural key
+);
 
-
+// ─── Root schema ──────────────────────────────────────────────────────────────
 
 const tariffSchema = new Schema<ITariff, ITariffModel>(
   {
@@ -76,53 +140,12 @@ const tariffSchema = new Schema<ITariff, ITariffModel>(
       type: Schema.Types.ObjectId,
       ref: "Company",
       required: [true, "Company reference is required"],
-      index: true,
+      unique: true, // one document per company, enforced at DB level
     },
-
-    wilayaA: {
-      type: Number,
-      required: [true, "wilayaA is required"],
-      enum: {
-        values: WILAYA_CODES,
-        message: "{VALUE} is not a valid wilaya code",
-      },
-      validate: wilayaValidator,
+    entries: {
+      type: [tariffEntrySchema],
+      default: [],
     },
-
-    wilayaB: {
-      type: Number,
-      required: [true, "wilayaB is required"],
-      enum: {
-        values: WILAYA_CODES,
-        message: "{VALUE} is not a valid wilaya code",
-      },
-      validate: wilayaValidator,
-    },
-
-    prices: {
-      stopdesk: {
-        type: Number,
-        required: [true, "Stopdesk price is required"],
-        min: [0, "Price cannot be negative"],
-      },
-      domicile: {
-        type: Number,
-        required: [true, "Domicile price is required"],
-        min: [0, "Price cannot be negative"],
-        validate: {
-          validator: function (this: ITariff, v: number) {
-            return v >= this.prices.stopdesk;
-          },
-          message: "Domicile price must be greater than or equal to stopdesk price",
-        },
-      },
-    },
-
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
-
     lastUpdatedBy: {
       type: Schema.Types.ObjectId,
       ref: "User",
@@ -131,124 +154,122 @@ const tariffSchema = new Schema<ITariff, ITariffModel>(
   },
   {
     timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true },
   }
 );
 
+// ─── Helper: normalise a pair so wilayaA <= wilayaB ──────────────────────────
 
-tariffSchema.virtual("wilayaAName").get(function () {
-  return wilayaName(this.wilayaA);  // e.g. "Alger"
-});
+function normalisePair(from: number, to: number): [number, number] {
+  return from <= to ? [from, to] : [to, from];
+}
 
-tariffSchema.virtual("wilayaBName").get(function () {
-  return wilayaName(this.wilayaB);  // e.g. "Oran"
-});
+// ─── Helper: validate and normalise a full entries array ─────────────────────
 
-tariffSchema.virtual("isSameWilaya").get(function () {
-  return this.wilayaA === this.wilayaB;
-});
+function normaliseEntries(entries: ITariffEntry[]): ITariffEntry[] {
+  return entries.map((e) => {
+    if (!isValidWilayaCode(e.wilayaA) || !isValidWilayaCode(e.wilayaB)) {
+      throw new Error(
+        `Invalid wilaya code in entry: ${e.wilayaA} / ${e.wilayaB}`
+      );
+    }
+    const [a, b] = normalisePair(e.wilayaA, e.wilayaB);
+    return { ...e, wilayaA: a, wilayaB: b };
+  });
+}
 
-
-// Core uniqueness: one price row per company per wilaya pair.
-// wilayaA <= wilayaB is enforced in the pre-save hook, so
-// this index naturally covers both directions.
-
-tariffSchema.index(
-  { companyId: 1, wilayaA: 1, wilayaB: 1 },
-  { unique: true, name: "unique_company_wilaya_pair" }
-);
-tariffSchema.index({ companyId: 1, isActive: 1 });
-
-
-tariffSchema.pre("save", function (next) {
-  if (this.wilayaA > this.wilayaB) {
-    [this.wilayaA, this.wilayaB] = [this.wilayaB, this.wilayaA];
-  }
-  next();
-});
-
-
-
-/**
- * findPrice — hot path, called every time a package is quoted.
- *
- * @example
- *   const tariff = await TariffModel.findPrice(companyId, 16, 31);
- *   // tariff.wilayaAName  → "Alger"
- *   // tariff.wilayaBName  → "Oran"
- *   // tariff.prices       → { stopdesk: 500, domicile: 700 }
- */
-
-tariffSchema.statics.findPrice = function (
-  companyId: string,
-  wilayaFrom: number,
-  wilayaTo: number
-): Promise<ITariff | null> {
-  const [a, b] = wilayaFrom <= wilayaTo
-    ? [wilayaFrom, wilayaTo]
-    : [wilayaTo, wilayaFrom];
-
-  return this.findOne({ companyId, wilayaA: a, wilayaB: b, isActive: true });
-};
-
-/**
- * findByCompany — returns all tariffs sorted by wilayaA then wilayaB.
- * The virtuals wilayaAName / wilayaBName are available on each document.
- *
- * @example
- *   const tariffs = await TariffModel.findByCompany(companyId);
- *   tariffs.forEach(t =>
- *     console.log(`${t.wilayaAName} → ${t.wilayaBName}: ${t.prices.stopdesk} DA`)
- *   );
- */
+// ─── Statics ──────────────────────────────────────────────────────────────────
 
 tariffSchema.statics.findByCompany = function (
   companyId: string
-): Promise<ITariff[]> {
-  return this.find({ companyId }).sort({ wilayaA: 1, wilayaB: 1 });
+): Promise<ITariff | null> {
+  return this.findOne({ companyId });
 };
 
-/**
- * upsertTariff — create or update a tariff. Safe to call repeatedly from
- * the manager's "save prices" action.
- *
- * @example
- *   await TariffModel.upsertTariff(companyId, 16, 31,
- *     { stopdesk: 500, domicile: 700 }, managerId);
- *   // Oran → Alger would hit the same document (canonical order: 16, 31)
- */
+tariffSchema.statics.findPrice = async function (
+  companyId: string,
+  wilayaFrom: number,
+  wilayaTo: number
+): Promise<ITariffEntry | null> {
+  const [a, b] = normalisePair(wilayaFrom, wilayaTo);
 
+  // Project only the matching entry to avoid sending the full array over the wire
+  const doc = await this.findOne(
+    { companyId, "entries.wilayaA": a, "entries.wilayaB": b },
+    { "entries.$": 1 } // positional projection: returns only the matched element
+  );
 
-tariffSchema.statics.upsertTariff = async function (
+  return doc?.entries?.[0] ?? null;
+};
+
+tariffSchema.statics.setPrice = async function (
   companyId: string,
   wilayaFrom: number,
   wilayaTo: number,
-  prices: ITariffPrices,
+  prices: Pick<ITariffEntry, "stopdesk" | "domicile">,
   updatedBy: string
 ): Promise<ITariff> {
-  const [a, b] = wilayaFrom <= wilayaTo
-    ? [wilayaFrom, wilayaTo]
-    : [wilayaTo, wilayaFrom];
+  const [a, b] = normalisePair(wilayaFrom, wilayaTo);
 
-  return this.findOneAndUpdate(
-    { companyId, wilayaA: a, wilayaB: b },
+  // Try to update an existing entry first (positional $ operator)
+  const updated = await this.findOneAndUpdate(
+    {
+      companyId,
+      "entries.wilayaA": a,
+      "entries.wilayaB": b,
+    },
     {
       $set: {
-        prices,
-        isActive: true,
+        "entries.$.stopdesk": prices.stopdesk,
+        "entries.$.domicile": prices.domicile,
+        lastUpdatedBy: new mongoose.Types.ObjectId(updatedBy),
+      },
+    },
+    { new: true }
+  );
+
+  if (updated) return updated;
+
+  // Entry doesn't exist yet — push it, or create the root document entirely
+  return this.findOneAndUpdate(
+    { companyId },
+    {
+      $push: {
+        entries: { wilayaA: a, wilayaB: b, ...prices },
+      },
+      $set: {
         lastUpdatedBy: new mongoose.Types.ObjectId(updatedBy),
       },
       $setOnInsert: {
         companyId: new mongoose.Types.ObjectId(companyId),
-        wilayaA: a,
-        wilayaB: b,
+      },
+    },
+    { upsert: true, new: true }
+  );
+};
+
+tariffSchema.statics.bulkSetPrices = function (
+  companyId: string,
+  entries: ITariffEntry[],
+  updatedBy: string
+): Promise<ITariff> {
+  const normalised = normaliseEntries(entries);
+
+  return this.findOneAndUpdate(
+    { companyId },
+    {
+      $set: {
+        entries: normalised,
+        lastUpdatedBy: new mongoose.Types.ObjectId(updatedBy),
+      },
+      $setOnInsert: {
+        companyId: new mongoose.Types.ObjectId(companyId),
       },
     },
     { upsert: true, new: true, runValidators: true }
   );
 };
 
+// ─── Model ────────────────────────────────────────────────────────────────────
 
 const TariffModel = (
   mongoose.models.Tariff ||
