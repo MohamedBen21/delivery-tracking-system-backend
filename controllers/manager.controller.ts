@@ -11,6 +11,8 @@ import SupervisorModel, {
 } from "../models/supervisor.model";
 import VehicleModel, { AssignedUserRole, IVehicleDocuments, VehicleStatus, VehicleType } from "../models/vehicle.model";
 import { notifyAdminsNewEntityPending, sendSupervisorAccountCreatedNotification, sendSupervisorBlockStatusNotification } from "../services/notification.service";
+import TariffModel, { ITariff, ITariffEntry } from "../models/tariff.model";
+import { WILAYAS, isValidWilayaCode, wilayaName } from "../models/wilayas.constant";
 
 
 type CompanyBusinessType = "solo" | "company";
@@ -2372,3 +2374,173 @@ export const updateMeManager = catchAsyncError(
     });
   },
 );
+
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET WILAYA LIST (reference data for frontend dropdowns)
+//  GET /manager/wilayas
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getWilayaList = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const wilayas = Object.entries(WILAYAS).map(([code, name]) => ({
+        code: parseInt(code),
+        name,
+      }));
+
+      return res.status(200).json({
+        success: true,
+        count: wilayas.length,
+        data: wilayas,
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error fetching wilaya list.", 500));
+    }
+  },
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET ALL TARIFFS FOR MY COMPANY
+//  GET /manager/tariffs
+//  Query params: ?search=Alger  (filter by wilaya name)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getMyTariffs = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const managerId = req.user?._id;
+
+      if (!managerId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      const manager = await ManagerModel.findOne({
+        userId: managerId,
+        isActive: true,
+      }).lean();
+
+      if (!manager) {
+        return next(new ErrorHandler("Manager profile not found or inactive.", 404));
+      }
+
+      const tariff = await TariffModel.findByCompany(manager.companyId.toString());
+
+      let entries: (ITariffEntry & { wilayaAName: string; wilayaBName: string })[] =
+        (tariff?.entries ?? []).map(e => ({
+          ...e,
+          wilayaAName: wilayaName(e.wilayaA),
+          wilayaBName: wilayaName(e.wilayaB),
+        }));
+
+      // Filter by search
+      if (req.query.search) {
+        const search = (req.query.search as string).toLowerCase();
+        entries = entries.filter(
+          e =>
+            e.wilayaAName.toLowerCase().includes(search) ||
+            e.wilayaBName.toLowerCase().includes(search),
+        );
+      }
+
+      // Sort by wilayaA then wilayaB
+      entries.sort((a, b) => a.wilayaA - b.wilayaA || a.wilayaB - b.wilayaB);
+
+      // Pagination (optional)
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string) || 100));
+      const total = entries.length;
+      const paginated = entries.slice((page - 1) * limit, page * limit);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          companyId: tariff?.companyId,
+          entries: paginated,
+          pagination: {
+            total,
+            page,
+            limit,
+            pages: Math.ceil(total / limit),
+            hasMore: page * limit < total,
+          },
+          lastUpdated: tariff?.updatedAt ?? null,
+        },
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error fetching tariffs.", 500));
+    }
+  },
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET SINGLE TARIFF PRICE
+//  GET /manager/tariffs/price?from=16&to=31
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getTariffPrice = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const managerId = req.user?._id;
+
+      if (!managerId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      const manager = await ManagerModel.findOne({
+        userId: managerId,
+        isActive: true,
+      }).lean();
+
+      if (!manager) {
+        return next(new ErrorHandler("Manager profile not found or inactive.", 404));
+      }
+
+      const from = parseInt(req.query.from as string);
+      const to = parseInt(req.query.to as string);
+
+      if (isNaN(from) || isNaN(to)) {
+        return next(
+          new ErrorHandler("Query params 'from' and 'to' are required and must be numbers.", 400),
+        );
+      }
+
+      if (!isValidWilayaCode(from) || !isValidWilayaCode(to)) {
+        return next(new ErrorHandler("Invalid wilaya code(s). Must be 1–58.", 400));
+      }
+
+      const entry = await TariffModel.findPrice(
+        manager.companyId.toString(),
+        from,
+        to,
+      );
+
+      if (!entry) {
+        return res.status(200).json({
+          success: true,
+          found: false,
+          message: `No tariff set for ${wilayaName(from)} ↔ ${wilayaName(to)}.`,
+          data: null,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        found: true,
+        data: {
+          ...entry,
+          wilayaAName: wilayaName(entry.wilayaA),
+          wilayaBName: wilayaName(entry.wilayaB),
+        },
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error fetching tariff price.", 500));
+    }
+  },
+);
+
+
