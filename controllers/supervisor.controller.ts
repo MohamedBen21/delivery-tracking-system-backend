@@ -20,7 +20,7 @@ import { buildUserFieldUpdates } from "./manager.controller";
 import PaymentModel from "../models/payment.model";
 import { notifyAdminsNewEntityPending, sendDelivererAccountCreatedNotification, sendDelivererBlockStatusNotification, sendDeliveryFailedNotification, sendFreelancerAccountCreatedNotification, sendFreelancerBlockStatusNotification, sendPackageCancelledNotification, sendPackageCreatedNotification, sendPackageIssueReportedNotification, sendPackageIssueResolvedNotification, sendPackageReturnedToBranchNotification, sendPackageStatusUpdatedNotification, sendTransporterAccountCreatedNotification, sendTransporterBlockStatusNotification } from "../services/notification.service";
 import ManifestModel, { ManifestPriority, ManifestStatus } from "../models/manifest.model";
-
+import crypto from "crypto";
 
 
 interface ILocationBody {
@@ -12154,3 +12154,8 @@ export const getManifestHistory = catchAsyncError(
     }
   },
 );
+
+
+
+
+
