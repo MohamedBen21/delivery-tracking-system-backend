@@ -90,6 +90,17 @@ export interface IDeliverer extends Document {
   hasValidLicense: boolean;
   documentStatus: 'complete' | 'incomplete' | 'expired';
   // efficiencyScore: number;
+
+  canAcceptDelivery: () => boolean;
+  
+  recordDeliveryPayment: (amountCollected: number, isCOD: boolean) => Promise<IDeliverer>;
+  
+  returnCashToBranch: () => Promise<{
+    amountReturned: number;
+    todayEarnings: number;
+    todayDeliveries: number;
+    todayCollected: number;
+  }>;
 }
 
 const locationSchema = new Schema<ILocation>({

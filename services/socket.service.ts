@@ -1570,11 +1570,18 @@ export class SocketService {
             // Clean up OTP
             this.deliveryOTPs.delete(otpKey);
 
-            // Update deliverer stats
-            await DelivererModel.findByIdAndUpdate(deliverer._id, {
-              $inc: { totalDeliveries: 1, successfulDeliveries: 1 },
-              lastActiveAt: new Date(),
-            });
+            // ── Update deliverer earnings & stats ──────────────────────────
+            const delivererDoc = await DelivererModel.findById(deliverer._id);
+            if (delivererDoc) {
+              const isCOD = pkg.paymentMethod === "cod";
+              await delivererDoc.recordDeliveryPayment(pkg.totalPrice, isCOD);
+
+              // Also update delivery counters
+              delivererDoc.totalDeliveries += 1;
+              delivererDoc.successfulDeliveries += 1;
+              delivererDoc.lastActiveAt = new Date();
+              await delivererDoc.save();
+            }
 
             const isLastStop   = data.stopIndex === route.stops.length - 1;
             const routeRoom    = this.getRouteRoom(data.routeId);
