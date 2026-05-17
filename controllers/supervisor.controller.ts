@@ -11862,3 +11862,295 @@ export const getTodayManifests = catchAsyncError(
 
 
 
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET MANIFEST HISTORY
+//  Returns ALL manifests assigned to the authenticated transporter.
+//  Supports period filters: today, yesterday, last7days, last30days,
+//  last6months, or no filter (all time).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getManifestHistory = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const transporterUserId = req.user?._id;
+      if (!transporterUserId) {
+        return next(new ErrorHandler("Unauthorized — user not found.", 401));
+      }
+
+      const transporter = await TransporterModel.findOne({ userId: transporterUserId }).lean();
+      if (!transporter) {
+        return next(new ErrorHandler("Transporter profile not found.", 404));
+      }
+
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const skip = (page - 1) * limit;
+
+      const filter: Record<string, any> = {
+        'transportLeg.transporterId': transporter._id,
+      };
+
+      type PeriodFilter = "today" | "yesterday" | "last7days" | "last30days" | "last6months" | "custom" | "all";
+      const period = req.query.period ? (req.query.period as PeriodFilter) : "all";
+
+      if (period !== "all") {
+        const now = new Date();
+        let startDate: Date;
+
+        switch (period) {
+          case "today":
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            filter.$or = [
+              { 'transportLeg.assignedAt': { $gte: startDate } },
+              { createdAt: { $gte: startDate } },
+              { updatedAt: { $gte: startDate } },
+            ];
+            break;
+          case "yesterday":
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+            filter.$or = [
+              { 'transportLeg.assignedAt': { $gte: startDate, $lt: new Date(startDate.getTime() + 24 * 60 * 60 * 1000) } },
+              { departedAt: { $gte: startDate, $lt: new Date(startDate.getTime() + 24 * 60 * 60 * 1000) } },
+              { arrivedAt: { $gte: startDate, $lt: new Date(startDate.getTime() + 24 * 60 * 60 * 1000) } },
+            ];
+            break;
+          case "last7days":
+            startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            startDate.setHours(0, 0, 0, 0);
+            filter.$or = [
+              { 'transportLeg.assignedAt': { $gte: startDate } },
+              { createdAt: { $gte: startDate } },
+              { departedAt: { $gte: startDate } },
+              { arrivedAt: { $gte: startDate } },
+            ];
+            break;
+          case "last30days":
+            startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            startDate.setHours(0, 0, 0, 0);
+            filter.$or = [
+              { 'transportLeg.assignedAt': { $gte: startDate } },
+              { createdAt: { $gte: startDate } },
+              { departedAt: { $gte: startDate } },
+              { arrivedAt: { $gte: startDate } },
+            ];
+            break;
+          case "last6months":
+            startDate = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+            filter.$or = [
+              { 'transportLeg.assignedAt': { $gte: startDate } },
+              { createdAt: { $gte: startDate } },
+              { departedAt: { $gte: startDate } },
+              { arrivedAt: { $gte: startDate } },
+            ];
+            break;
+          case "custom":
+            if (req.query.startDate && req.query.endDate) {
+              filter.$or = [
+                { 'transportLeg.assignedAt': { $gte: new Date(req.query.startDate as string), $lte: new Date(req.query.endDate as string) } },
+                { createdAt: { $gte: new Date(req.query.startDate as string), $lte: new Date(req.query.endDate as string) } },
+                { departedAt: { $gte: new Date(req.query.startDate as string), $lte: new Date(req.query.endDate as string) } },
+                { arrivedAt: { $gte: new Date(req.query.startDate as string), $lte: new Date(req.query.endDate as string) } },
+              ];
+            }
+            break;
+        }
+      }
+
+
+      if (req.query.status) {
+        filter.status = req.query.status as string;
+      }
+
+      if (req.query.statuses) {
+        filter.status = { $in: (req.query.statuses as string).split(",").map(s => s.trim()) };
+      }
+
+
+      if (req.query.priority) {
+        filter.priority = req.query.priority as string;
+      }
+
+
+      if (req.query.originBranchId) {
+        filter.originBranchId = req.query.originBranchId;
+      }
+
+      if (req.query.destinationBranchId) {
+        filter.destinationBranchId = req.query.destinationBranchId;
+      }
+
+
+      if (req.query.search) {
+        filter.manifestCode = new RegExp(req.query.search as string, "i");
+      }
+
+
+      const sortBy = (req.query.sortBy as string) || 'transportLeg.assignedAt';
+      const order = req.query.order === "desc" ? -1 : 1;
+      const sortMap: Record<string, any> = {
+        'transportLeg.assignedAt': { 'transportLeg.assignedAt': order },
+        createdAt: { createdAt: order },
+        departedAt: { departedAt: order },
+        arrivedAt: { arrivedAt: order },
+        closedAt: { closedAt: order },
+        packageCount: { packageCount: order },
+        totalDeclaredWeight: { totalDeclaredWeight: order },
+      };
+      const sort = sortMap[sortBy] || { 'transportLeg.assignedAt': -1 };
+
+
+      const [total, manifests] = await Promise.all([
+        ManifestModel.countDocuments(filter),
+        ManifestModel.find(filter)
+          .populate("originBranchId", "name code address city")
+          .populate("destinationBranchId", "name code address city")
+          .populate("transportLeg.vehicleId", "licensePlate model registrationNumber")
+          .populate("createdBy", "firstName lastName email")
+          .sort(sort)
+          .skip(skip)
+          .limit(limit)
+          .lean({ virtuals: true }),
+      ]);
+
+
+      const allManifests = await ManifestModel.find({
+        'transportLeg.transporterId': transporter._id,
+      }).lean();
+
+      const stats = {
+        totalLifetime: allManifests.length,
+        totalCompleted: allManifests.filter(m => m.status === "closed").length,
+        totalInTransit: allManifests.filter(m => m.status === "in_transit").length,
+        totalArrived: allManifests.filter(m => m.status === "arrived").length,
+        totalCancelled: allManifests.filter(m => m.status === "cancelled").length,
+        totalDiscrepancy: allManifests.filter(m => m.status === "discrepancy").length,
+        completionRate: allManifests.length > 0
+          ? Math.round((allManifests.filter(m => m.status === "closed").length / allManifests.length) * 100)
+          : 0,
+        totalPackagesTransported: allManifests
+          .filter(m => m.status === "closed")
+          .reduce((sum, m) => sum + (m.packageCount || 0), 0),
+        totalWeightTransported: allManifests
+          .filter(m => m.status === "closed")
+          .reduce((sum, m) => sum + (m.totalDeclaredWeight || 0), 0),
+        averageTripDuration: (() => {
+          const completedTrips = allManifests.filter(m => m.departedAt && m.arrivedAt);
+          if (completedTrips.length === 0) return 0;
+          const totalDuration = completedTrips.reduce((sum, m) => {
+            const duration = m.arrivedAt!.getTime() - m.departedAt!.getTime();
+            return sum + duration;
+          }, 0);
+          return Math.round(totalDuration / completedTrips.length / 60000); // minutes
+        })(),
+      };
+
+
+      const formattedManifests = manifests.map((manifest: any) => ({
+        id: manifest._id,
+        manifestCode: manifest.manifestCode,
+        status: manifest.status,
+        priority: manifest.priority,
+
+        originBranch: manifest.originBranchId ? {
+          id: manifest.originBranchId._id,
+          name: manifest.originBranchId.name,
+          code: manifest.originBranchId.code,
+          city: manifest.originBranchId.city,
+        } : null,
+
+        destinationBranch: manifest.destinationBranchId ? {
+          id: manifest.destinationBranchId._id,
+          name: manifest.destinationBranchId.name,
+          code: manifest.destinationBranchId.code,
+          city: manifest.destinationBranchId.city,
+        } : null,
+
+        transportLeg: manifest.transportLeg ? {
+          vehicle: manifest.transportLeg.vehicleId ? {
+            id: manifest.transportLeg.vehicleId._id,
+            licensePlate: manifest.transportLeg.vehicleId.licensePlate,
+            model: manifest.transportLeg.vehicleId.model,
+          } : null,
+          assignedAt: manifest.transportLeg.assignedAt,
+          departedAt: manifest.transportLeg.departedAt,
+          arrivedAt: manifest.transportLeg.arrivedAt,
+          estimatedArrival: manifest.transportLeg.estimatedArrival,
+        } : null,
+
+        packageCount: manifest.packageCount,
+        totalDeclaredWeight: manifest.totalDeclaredWeight,
+        
+        unloadedCount: manifest.unloadedCount,
+        remainingCount: manifest.remainingCount,
+        
+        sealInfo: manifest.sealInfo ? {
+          sealedBy: manifest.sealInfo.sealedBy,
+          sealedAt: manifest.sealInfo.sealedAt,
+          sealNumber: manifest.sealInfo.sealNumber,
+        } : null,
+
+        discrepancy: manifest.discrepancy ? {
+          reportedAt: manifest.discrepancy.reportedAt,
+          expectedCount: manifest.discrepancy.expectedCount,
+          actualCount: manifest.discrepancy.actualCount,
+          missingCount: manifest.discrepancy.missingPackageIds?.length || 0,
+          resolved: !!manifest.discrepancy.resolvedAt,
+        } : null,
+
+        sealedAt: manifest.sealedAt ?? null,
+        departedAt: manifest.departedAt ?? null,
+        arrivedAt: manifest.arrivedAt ?? null,
+        closedAt: manifest.closedAt ?? null,
+        
+        durationMinutes: manifest.durationMinutes ?? null,
+        hasDiscrepancy: manifest.hasDiscrepancy,
+        isSealed: manifest.isSealed,
+        isInTransit: manifest.isInTransit,
+        isClosed: manifest.isClosed,
+
+        notes: manifest.notes ?? null,
+        internalReference: manifest.internalReference ?? null,
+        createdBy: manifest.createdBy ? {
+          id: manifest.createdBy._id,
+          name: `${manifest.createdBy.firstName} ${manifest.createdBy.lastName}`,
+          email: manifest.createdBy.email,
+        } : null,
+
+        createdAt: manifest.createdAt,
+        updatedAt: manifest.updatedAt,
+      }));
+
+      res.status(200).json({
+        success: true,
+        data: {
+          period: period === "all" ? "all_time" : period,
+          stats,
+          manifests: formattedManifests,
+          pagination: {
+            total,
+            page,
+            limit,
+            pages: Math.ceil(total / limit),
+            hasMore: page * limit < total,
+          },
+          filters: {
+            period,
+            status: req.query.status ?? null,
+            statuses: req.query.statuses ?? null,
+            priority: req.query.priority ?? null,
+            originBranchId: req.query.originBranchId ?? null,
+            destinationBranchId: req.query.destinationBranchId ?? null,
+            search: req.query.search ?? null,
+            sortBy,
+            order: req.query.order ?? "desc",
+          },
+        },
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error fetching manifest history.", 500));
+    }
+  },
+);
