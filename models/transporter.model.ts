@@ -83,6 +83,25 @@ export interface ITransporter extends Document {
   totalTrips: number;
   completedTrips: number;
   cancelledTrips: number;
+
+  /** Manifests transported today (count) */
+  todayTransportedCount: number;
+  
+  /** Manifests currently in transit (on the road right now) */
+  currentActiveManifests: number;
+  
+  /** Manifests assigned for today (planned/assigned routes) */
+  todayAssignedManifests: number;
+  
+  /** Total manifests transported (lifetime) */
+  totalManifestsTransported: number;
+  
+  /** Today's completed trips count */
+  todayCompletedTrips: number;
+  
+  /** Total weight transported today (kg) */
+  todayTotalWeight: number;
+
   totalDistance: number;
   totalDeliveryTime: number;
   averageDeliveryTime: number;
@@ -96,7 +115,6 @@ export interface ITransporter extends Document {
   createdAt: Date;
   updatedAt: Date;
   lastActiveAt: Date;
-
 
   isVerified: boolean;
   isAvailable: boolean;
@@ -245,8 +263,19 @@ const transporterSchema = new Schema<ITransporter>({
     min: [0, 'Rating cannot be less than 0'],
     max: [5, 'Rating cannot exceed 5'],
   },
-  totalTrips: { type: Number, default: 0, min: 0 },
-  completedTrips: { type: Number, default: 0, min: 0 },
+
+  totalTrips: { 
+    type: Number, 
+    default: 0, 
+    min: 0 
+  },
+
+  completedTrips: { 
+    type: Number, 
+    default: 0, 
+    min: 0 
+  },
+  
   cancelledTrips: {
     type: Number,
     default: 0,
@@ -256,9 +285,63 @@ const transporterSchema = new Schema<ITransporter>({
       message: 'Cancelled trips cannot exceed total trips.',
     },
   },
-  totalDistance:       { type: Number, default: 0, min: 0 },
-  totalDeliveryTime:   { type: Number, default: 0, min: 0 },
-  averageDeliveryTime: { type: Number, default: 0, min: 0 },
+
+
+
+  todayTransportedCount: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  currentActiveManifests: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  todayAssignedManifests: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  totalManifestsTransported: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  todayCompletedTrips: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  todayTotalWeight: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+
+  totalDistance:       { 
+    type: Number, 
+    default: 0, 
+    min: 0 
+  },
+
+  totalDeliveryTime:   { 
+    type: Number, 
+    default: 0, 
+    min: 0 
+  },
+
+  averageDeliveryTime: { 
+    type: Number, 
+    default: 0, 
+    min: 0 
+  },
 
   // ── Status flags ────────────────────────────────────────────────────────────
 
@@ -457,6 +540,70 @@ transporterSchema.methods.assignBranches = function (
   this.transporterType  = 'hub_to_branch';
   this.assignedBranches = branchIds;
   this.assignedLine     = undefined;
+  return this.save();
+};
+
+
+
+/**
+ * Called when the transporter starts a route.
+ * Updates the active manifest count and assigned count.
+ */
+transporterSchema.methods.startTrip = function (
+  manifestCount: number,
+  totalWeight: number,
+) {
+
+  this.currentActiveManifests += manifestCount;
+  this.todayAssignedManifests = Math.max(0, this.todayAssignedManifests - manifestCount);
+  this.todayTotalWeight += totalWeight;
+  this.lastActiveAt = new Date();
+  return this.save();
+};
+
+/**
+ * Called when the transporter completes a stop or finishes a route.
+ * Updates today's transported count and completed trips.
+ */
+transporterSchema.methods.completeTrip = function (
+  manifestCount: number,
+  isLastStop: boolean,
+) {
+  this.todayTransportedCount += manifestCount;
+  this.totalManifestsTransported += manifestCount;
+  this.currentActiveManifests = Math.max(0, this.currentActiveManifests - manifestCount);
+
+  if (isLastStop) {
+    this.todayCompletedTrips += 1;
+    this.totalTrips += 1;
+    this.completedTrips += 1;
+  }
+
+  this.lastActiveAt = new Date();
+  return this.save();
+};
+
+/**
+ * Resets daily counters (called at start of new day by cron or route assignment).
+ */
+transporterSchema.methods.resetDailyCounters = function () {
+
+  this.todayTransportedCount = 0;
+  this.todayAssignedManifests = 0;
+  this.todayCompletedTrips = 0;
+  this.todayTotalWeight = 0;
+  this.currentActiveManifests = 0;
+  this.lastActiveAt = new Date();
+  return this.save();
+  
+};
+
+/**
+ * Sets the assigned manifests count for today when routes are planned.
+ */
+transporterSchema.methods.setAssignedManifests = function (count: number) {
+  this.todayAssignedManifests = count;
+  this.lastActiveAt = new Date();
   return this.save();
 };
 
