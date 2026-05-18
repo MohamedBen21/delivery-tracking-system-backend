@@ -57,7 +57,7 @@ const cashReturnSessionSchema = new Schema<ICashReturnSession>(
     expiresAt: {
      type: Date, 
      required: true, 
-     index: true 
+
     },
 
     verified: {
