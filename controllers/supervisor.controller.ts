@@ -21,6 +21,7 @@ import PaymentModel from "../models/payment.model";
 import { notifyAdminsNewEntityPending, sendDelivererAccountCreatedNotification, sendDelivererBlockStatusNotification, sendDeliveryFailedNotification, sendFreelancerAccountCreatedNotification, sendFreelancerBlockStatusNotification, sendPackageCancelledNotification, sendPackageCreatedNotification, sendPackageIssueReportedNotification, sendPackageIssueResolvedNotification, sendPackageReturnedToBranchNotification, sendPackageStatusUpdatedNotification, sendTransporterAccountCreatedNotification, sendTransporterBlockStatusNotification } from "../services/notification.service";
 import ManifestModel, { ManifestPriority, ManifestStatus } from "../models/manifest.model";
 import crypto from "crypto";
+import { generateCashReturnQr, getCashReturnInfo, verifyAndProcessCashReturn } from "../services/cashReturn.service";
 
 
 interface ILocationBody {
@@ -12159,3 +12160,156 @@ export const getManifestHistory = catchAsyncError(
 
 
 
+export const generateCashReturnQrCode = catchAsyncError(async (req: Request, res: Response, next: NextFunction) => {
+    const userId = (req as any).user._id;
+    const userRole = (req as any).user.role;
+    const { delivererId } = req.body;
+
+    if (!delivererId) {
+      return next(new ErrorHandler("delivererId is required.", 400));
+    }
+
+    // Get branch ID based on role
+    let branchId: string;
+
+    if (userRole === "supervisor") {
+      const supervisor = await SupervisorModel.findOne({ userId }).lean();
+      if (!supervisor) {
+        return next(new ErrorHandler("Supervisor profile not found.", 404));
+      }
+      branchId = supervisor.branchId.toString();
+    } else {
+      // manager or admin — must provide branchId
+      branchId = req.body.branchId;
+      if (!branchId) {
+        return next(new ErrorHandler("branchId is required for managers/admins.", 400));
+      }
+    }
+
+    const { code, qrUrl, session } = await generateCashReturnQr(
+      delivererId,
+      branchId,
+      userId,
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Cash return QR generated. Show this to the deliverer.",
+      data: {
+        qrCode: code,
+        qrUrl,
+        amount: session.amount,
+        todayEarnings: session.todayEarnings,
+        todayDeliveries: session.todayDeliveries,
+        expiresAt: session.expiresAt,
+      },
+    });
+  });
+
+
+
+export const scanCashReturnQrCode =   catchAsyncError(
+    async (req: Request, res: Response, next: NextFunction) => {
+
+    const delivererUserId = (req as any).user._id;
+    const { code } = req.body;
+
+    if (!code) {
+      return next(new ErrorHandler("QR code is required.", 400));
+    }
+
+    const summary = await verifyAndProcessCashReturn(code, delivererUserId.toString());
+
+    res.status(200).json({
+      success: true,
+      message: `Cash returned successfully. ${summary.amountReturned} DA returned to branch.`,
+      data: {
+        amountReturned: summary.amountReturned,
+        todayEarnings: summary.todayEarnings,
+        todayDeliveries: summary.todayDeliveries,
+        todayCollected: summary.todayCollected,
+        message: `You earned ${summary.todayEarnings} DA from ${summary.todayDeliveries} deliveries today.`,
+      },
+    });
+  });
+
+
+
+export const viewCashReturnQrPage = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const { code } = req.params;
+
+    const session = await getCashReturnInfo(code.toString());
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: "Cash return session not found or expired.",
+      });
+    }
+
+    if (session.verified) {
+      return res.json({
+        success: false,
+        message: "This cash return has already been processed.",
+      });
+    }
+
+    if (new Date() > session.expiresAt) {
+      return res.json({
+        success: false,
+        message: "This QR code has expired. Please request a new one.",
+      });
+    }
+
+    // Get deliverer name for display
+    const deliverer = await DelivererModel.findById(session.delivererId)
+      .populate("userId", "firstName lastName")
+      .lean();
+
+    const delivererName = deliverer
+      ? `${(deliverer.userId as any)?.firstName || ""} ${(deliverer.userId as any)?.lastName || ""}`
+      : "Unknown";
+
+    res.status(200).json({
+      success: true,
+      data: {
+        delivererName,
+        amount: session.amount,
+        todayDeliveries: session.todayDeliveries,
+        todayEarnings: session.todayEarnings,
+        todayCollected: session.todayCollected,
+        expiresAt: session.expiresAt,
+        code, // frontend uses this to render the QR
+      },
+    });
+  });
+
+
+  export const getPendingCashReturnSummary = catchAsyncError(
+    async (req: Request, res: Response, next: NextFunction) => {
+      
+    const userId = (req as any).user._id;
+
+    const deliverer = await DelivererModel.findOne({ userId }).lean();
+    if (!deliverer) {
+      return next(new ErrorHandler("Deliverer profile not found.", 404));
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        pendingBranchReturn: deliverer.pendingBranchReturn,
+        todayEarnings: deliverer.todayEarnings,
+        todayDeliveriesCount: deliverer.todayDeliveriesCount,
+        todayCollectedAmount: deliverer.todayCollectedAmount,
+        totalEarnings: deliverer.totalEarnings,
+        commission: deliverer.commission,
+        message:
+          deliverer.pendingBranchReturn > 0
+            ? `You have ${deliverer.pendingBranchReturn} DA to return to the branch.`
+            : "No pending cash to return. Great job!",
+      },
+    });
+  });
