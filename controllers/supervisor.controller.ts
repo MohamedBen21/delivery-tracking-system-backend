@@ -12313,3 +12313,78 @@ export const viewCashReturnQrPage = catchAsyncError(
       },
     });
   });
+
+
+
+
+export const getMyTransporterStats = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    try {
+
+      const userId = req.user?._id;
+
+      if (!userId) {
+        return next(new ErrorHandler("Unauthorized.", 401));
+      }
+
+      const transporter = await TransporterModel.findOne({ userId })
+        .populate("currentBranchId", "name code")
+        .populate("currentVehicleId", "registrationNumber type")
+        .populate("currentRouteId", "routeNumber status type")
+        .populate("assignedLine", "name code")
+        .populate("assignedBranches", "name code")
+        .lean({ virtuals: true });
+
+      if (!transporter) {
+        return next(new ErrorHandler("Transporter profile not found.", 404));
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+
+          today: {
+            transportedCount: transporter.todayTransportedCount,
+            assignedManifests: transporter.todayAssignedManifests,
+            completedTrips: transporter.todayCompletedTrips,
+            activeManifests: transporter.currentActiveManifests,
+            totalWeight: transporter.todayTotalWeight,
+          },
+
+
+          lifetime: {
+            totalTrips: transporter.totalTrips,
+            completedTrips: transporter.completedTrips,
+            cancelledTrips: transporter.cancelledTrips,
+            totalManifests: transporter.totalManifestsTransported,
+            totalDistance: transporter.totalDistance,
+            totalDeliveryTime: transporter.totalDeliveryTime,
+            averageDeliveryTime: transporter.averageDeliveryTime,
+            completionRate: (transporter as any).completionRate,
+            rating: transporter.rating,
+          },
+
+
+          current: {
+            branch: transporter.currentBranchId || null,
+            vehicle: transporter.currentVehicleId || null,
+            route: transporter.currentRouteId || null,
+            availabilityStatus: transporter.availabilityStatus,
+            isOnline: transporter.isOnline,
+            isOnDuty: (transporter as any).isOnDuty,
+          },
+
+
+          hub: {
+            type: transporter.transporterType || "legacy",
+            assignedLine: transporter.assignedLine || null,
+            assignedBranches: transporter.assignedBranches || null,
+          },
+        },
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error fetching stats.", 500));
+    }
+  }
+);
