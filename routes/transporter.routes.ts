@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { isAuthenticated, authorizeRoles } from "../middleware/auth";
 import {
+  generateStopQr,
+  getStopQrInfo,
+  scanStopQr,
   toggleOnlineStatus,
   transporterMarkPackagesArrivedAtBranch,
   transporterMarkPackagesInTransit,
@@ -17,6 +20,25 @@ transporterRouter.post(
   transporterMarkPackagesArrivedAtBranch,
 );
 transporterRouter.patch("/online/toggle", ...chain, toggleOnlineStatus);
+
+
+transporterRouter.post(
+  "/generate",
+  isAuthenticated,
+  authorizeRoles("supervisor", "manager", "admin"),
+  generateStopQr,
+);
+
+// Transporter: Scan QR to complete stop
+transporterRouter.post(
+  "/scan",
+  isAuthenticated,
+  authorizeRoles("transporter", "deliverer"),
+  scanStopQr,
+);
+
+// Public: View QR page (for rendering QR image)
+transporterRouter.get("/:code", getStopQrInfo);
 
 export default transporterRouter;
 

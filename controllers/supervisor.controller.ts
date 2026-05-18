@@ -12550,3 +12550,304 @@ export const generateStopQr = catchAsyncError(
 );
 
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DELIVERER/TRANSPORTER: Scan Stop QR
+//  POST /api/stop-qr/scan
+//  Body: { code: "abc123...", coordinates: [lng, lat] }
+//
+//  Called by the transporter when they scan the QR displayed by the branch.
+//  Validates the session and marks the stop as completed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface IScanStopQrBody {
+  code: string;
+  coordinates: [number, number];
+  completedManifestIds?: string[];
+  discrepancyManifestIds?: string[];
+  notes?: string;
+}
+
+export const scanStopQr = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const userId = req.user?._id;
+      const userRole = req.user?.role;
+
+      if (!userId) {
+        return next(new ErrorHandler("Unauthorized.", 401));
+      }
+
+ 
+      if (userRole !== "transporter" && userRole !== "deliverer") {
+        return next(new ErrorHandler("Only transporters can scan stop QR codes.", 403));
+      }
+
+      const { code, coordinates, completedManifestIds, discrepancyManifestIds, notes } =
+        req.body as IScanStopQrBody;
+
+      if (!code) {
+        return next(new ErrorHandler("QR code is required.", 400));
+      }
+
+      if (!coordinates || coordinates.length !== 2) {
+        return next(new ErrorHandler("Valid coordinates [lng, lat] are required.", 400));
+      }
+
+
+      const qrSession = await StopQrSessionModel.findOne({ code }).session(session);
+      if (!qrSession) {
+        throw new ErrorHandler("Invalid QR code. Session not found.", 404);
+      }
+
+      if (qrSession.verified) {
+        throw new ErrorHandler("This QR code has already been used.", 400);
+      }
+
+      if (new Date() > qrSession.expiresAt) {
+        throw new ErrorHandler("QR code has expired. Please request a new one.", 400);
+      }
+
+
+      let transporter: any;
+
+      if (userRole === "transporter") {
+        transporter = await TransporterModel.findOne({ userId }).session(session).lean();
+        if (!transporter) {
+          throw new ErrorHandler("Transporter profile not found.", 404);
+        }
+
+        if (qrSession.transporterId.toString() !== transporter._id.toString()) {
+          throw new ErrorHandler("This QR code is for a different transporter.", 403);
+        }
+      }
+
+
+      const route = await RouteModel.findById(qrSession.routeId).session(session);
+      if (!route) {
+        throw new ErrorHandler("Route not found.", 404);
+      }
+
+      if (route.status !== "active") {
+        throw new ErrorHandler(`Route is not active. Status: ${route.status}.`, 400);
+      }
+
+      const stop = route.stops[qrSession.stopIndex];
+      if (!stop) {
+        throw new ErrorHandler("Stop not found in route.", 404);
+      }
+
+
+      qrSession.verified = true;
+      qrSession.verifiedAt = new Date();
+      qrSession.verifiedBy = new mongoose.Types.ObjectId(userId.toString());
+      await qrSession.save({ session });
+
+
+      const now = new Date();
+      const isLastStop = qrSession.isLastStop;
+
+      stop.status = "completed";
+      stop.actualArrival = stop.actualArrival || now;
+      stop.actualDeparture = now;
+      route.currentStopIndex = qrSession.stopIndex + 1;
+      route.completedStops += 1;
+
+
+      const isHubRoute = route.type === "hub_to_hub" || route.type === "hub_to_branch";
+
+      if (isHubRoute && qrSession.manifestCount > 0) {
+        const stopManifestIds = (stop.manifestIds || []).map(
+          (id: any) => id.toString(),
+        );
+
+        if (stopManifestIds.length > 0) {
+          await ManifestModel.updateMany(
+            {
+              _id: { $in: stopManifestIds },
+              status: "in_transit",
+            },
+            {
+              $set: {
+                status: "arrived",
+                arrivedAt: now,
+                "transportLeg.arrivedAt": now,
+              },
+            },
+            { session },
+          );
+
+          for (const manifestId of stopManifestIds) {
+            const manifest = await ManifestModel.findById(manifestId).session(session);
+            if (manifest) {
+              await manifest.markArrived(new mongoose.Types.ObjectId(userId.toString()), session);
+            }
+          }
+        }
+      }
+
+
+      let routeCompleted = false;
+
+      if (isLastStop) {
+        route.status = "completed";
+        route.actualEnd = now;
+        if (route.actualStart) {
+          route.actualTime = Math.round(
+            (now.getTime() - new Date(route.actualStart).getTime()) / 60000,
+          );
+        }
+
+        // Release transporter
+        if (transporter) {
+          const transporterDoc = await TransporterModel.findById(transporter._id).session(session);
+          if (transporterDoc) {
+            // Hub-to-hub: place transporter at destination hub
+            if (route.type === "hub_to_hub" && stop.branchId) {
+              transporterDoc.currentBranchId = stop.branchId;
+            }
+
+            transporterDoc.availabilityStatus = "available";
+            transporterDoc.currentRouteId = undefined;
+            transporterDoc.lastActiveAt = now;
+            transporterDoc.totalTrips += 1;
+            transporterDoc.completedTrips += 1;
+
+            // Update daily stats
+            const loadCount = isHubRoute ? qrSession.manifestCount : qrSession.packageCount;
+            transporterDoc.todayTransportedCount += loadCount;
+            transporterDoc.totalManifestsTransported += isHubRoute ? loadCount : 0;
+            transporterDoc.todayCompletedTrips += 1;
+            transporterDoc.currentActiveManifests = Math.max(
+              0,
+              transporterDoc.currentActiveManifests - loadCount,
+            );
+
+            await transporterDoc.save({ session });
+          }
+        }
+
+        routeCompleted = true;
+      } else {
+        // Update transporter stats for intermediate stop
+        if (transporter) {
+          const transporterDoc = await TransporterModel.findById(transporter._id).session(session);
+          if (transporterDoc) {
+            const loadCount = isHubRoute ? qrSession.manifestCount : qrSession.packageCount;
+            transporterDoc.todayTransportedCount += loadCount;
+            transporterDoc.totalManifestsTransported += isHubRoute ? loadCount : 0;
+            transporterDoc.currentActiveManifests = Math.max(
+              0,
+              transporterDoc.currentActiveManifests - loadCount,
+            );
+            transporterDoc.lastActiveAt = now;
+            await transporterDoc.save({ session });
+          }
+        }
+      }
+
+      await route.save({ session });
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      res.status(200).json({
+        success: true,
+        message: routeCompleted
+          ? "Stop verified and route completed successfully."
+          : "Stop verified successfully. Transporter can proceed to next stop.",
+        data: {
+          routeId: qrSession.routeId,
+          stopIndex: qrSession.stopIndex,
+          stopId: qrSession.stopId,
+          branchId: qrSession.branchId,
+          isLastStop,
+          routeCompleted,
+          verifiedAt: now,
+          nextStopIndex: routeCompleted ? null : route.currentStopIndex,
+        },
+      });
+    } catch (error: any) {
+      return next(error);
+    } finally {
+      if (!transactionCommitted) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
+  },
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET STOP QR INFO (for the QR display page)
+//  GET /api/stop-qr/:code
+//
+//  Public — no auth required. Returns info about the QR session
+//  so the frontend can render the QR image and show details.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getStopQrInfo = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { code } = req.params;
+
+      const qrSession = await StopQrSessionModel.findOne({ code })
+        .populate("transporterId", "userId")
+        .populate("branchId", "name code")
+        .populate("routeId", "routeNumber type")
+        .lean();
+
+      if (!qrSession) {
+        return res.status(404).json({
+          success: false,
+          message: "QR session not found.",
+        });
+      }
+
+      if (qrSession.verified) {
+        return res.status(200).json({
+          success: false,
+          verified: true,
+          message: "This stop has already been verified.",
+          data: {
+            verifiedAt: qrSession.verifiedAt,
+          },
+        });
+      }
+
+      if (new Date() > qrSession.expiresAt) {
+        return res.status(200).json({
+          success: false,
+          expired: true,
+          message: "This QR code has expired.",
+          data: {
+            expiredAt: qrSession.expiresAt,
+          },
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          sessionId: qrSession._id,
+          code: qrSession.code,
+          routeNumber: (qrSession.routeId as any)?.routeNumber,
+          routeType: (qrSession.routeId as any)?.type,
+          branchName: (qrSession.branchId as any)?.name,
+          stopIndex: qrSession.stopIndex,
+          manifestCount: qrSession.manifestCount,
+          packageCount: qrSession.packageCount,
+          isLastStop: qrSession.isLastStop,
+          expiresAt: qrSession.expiresAt,
+        },
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error fetching QR info.", 500));
+    }
+  },
+);
