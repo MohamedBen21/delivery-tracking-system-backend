@@ -22,6 +22,7 @@ import { notifyAdminsNewEntityPending, sendDelivererAccountCreatedNotification, 
 import ManifestModel, { ManifestPriority, ManifestStatus } from "../models/manifest.model";
 import crypto from "crypto";
 import { generateCashReturnQr, getCashReturnInfo, verifyAndProcessCashReturn } from "../services/cashReturn.service";
+import StopQrSessionModel from "../models/stopQrSession.model";
 
 
 interface ILocationBody {
@@ -12388,3 +12389,164 @@ export const getMyTransporterStats = catchAsyncError(
     }
   }
 );
+
+
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SUPERVISOR/MANAGER: Generate Stop QR
+//  POST /api/stop-qr/generate
+//  Body: { routeId: "...", stopIndex: 0 }
+//
+//  Called when the branch supervisor wants to generate a QR for the transporter
+//  to scan. Validates that the route is active, the stop belongs to their branch,
+//  and the transporter has arrived.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface IGenerateStopQrBody {
+  routeId: string;
+  stopIndex: number;
+}
+
+export const generateStopQr = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const userId = req.user?._id;
+      const userRole = req.user?.role;
+
+      if (!userId) {
+        return next(new ErrorHandler("Unauthorized.", 401));
+      }
+
+      const { routeId, stopIndex } = req.body as IGenerateStopQrBody;
+
+      if (!routeId || !mongoose.Types.ObjectId.isValid(routeId)) {
+        return next(new ErrorHandler("Valid routeId is required.", 400));
+      }
+
+      if (stopIndex === undefined || stopIndex < 0) {
+        return next(new ErrorHandler("Valid stopIndex is required.", 400));
+      }
+
+      // ── Determine branch ID based on role ──────────────────────────────
+      let branchId: string;
+
+      if (userRole === "supervisor") {
+        const supervisor = await SupervisorModel.findOne({ userId }).session(session).lean();
+        if (!supervisor) {
+          throw new ErrorHandler("Supervisor profile not found.", 404);
+        }
+        branchId = supervisor.branchId.toString();
+      } else if (userRole === "manager" || userRole === "admin") {
+        branchId = req.body.branchId;
+        if (!branchId || !mongoose.Types.ObjectId.isValid(branchId)) {
+          throw new ErrorHandler("branchId is required for managers/admins.", 400);
+        }
+      } else {
+        throw new ErrorHandler("Only supervisors, managers, and admins can generate stop QR codes.", 403);
+      }
+
+
+      const route = await RouteModel.findById(routeId).session(session);
+      if (!route) {
+        throw new ErrorHandler("Route not found.", 404);
+      }
+
+      if (route.status !== "active") {
+        throw new ErrorHandler(`Route must be active. Current status: ${route.status}.`, 400);
+      }
+
+      const stop = route.stops[stopIndex];
+      if (!stop) {
+        throw new ErrorHandler(`Stop ${stopIndex} not found in this route.`, 404);
+      }
+
+      // Verify this stop belongs to the supervisor's branch
+      if (!stop.branchId || stop.branchId.toString() !== branchId) {
+        throw new ErrorHandler("This stop does not belong to your branch.", 403);
+      }
+
+      if (!["arrived", "in_progress"].includes(stop.status)) {
+        throw new ErrorHandler(
+          `Transporter has not arrived yet. Stop status: ${stop.status}.`,
+          400,
+        );
+      }
+
+      // ── Expire any existing unverified QR sessions for this stop ───────
+      await StopQrSessionModel.updateMany(
+        {
+          routeId,
+          stopIndex,
+          verified: false,
+          expiresAt: { $gt: new Date() },
+        },
+        { $set: { expiresAt: new Date() } },
+        { session },
+      );
+
+
+      const code = crypto.randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000); 
+      const isLastStop = stopIndex === route.stops.length - 1;
+
+      const isHubRoute = route.type === "hub_to_hub" || route.type === "hub_to_branch";
+      const manifestCount = isHubRoute ? (stop.manifestIds || []).length : 0;
+      const packageCount = !isHubRoute ? (stop.packageIds || []).length : 0;
+
+      const qrSession = await StopQrSessionModel.create(
+        [
+          {
+            routeId,
+            stopIndex,
+            stopId: stop._id,
+            transporterId: route.assignedTransporterId,
+            branchId,
+            manifestCount,
+            packageCount,
+            isLastStop,
+            code,
+            expiresAt,
+            verified: false,
+          },
+        ],
+        { session },
+      );
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      res.status(200).json({
+        success: true,
+        message: "Stop QR generated successfully.",
+        data: {
+          sessionId: qrSession[0]._id,
+          qrCode: code,
+          expiresAt,
+          routeId,
+          stopIndex,
+          stopId: stop._id,
+          branchId,
+          manifestCount,
+          packageCount,
+          isLastStop,
+          qrUrl: `${process.env.CLIENT_APP_URL}/stop-qr/${code}`,
+        },
+      });
+    } catch (error: any) {
+      return next(error);
+    } finally {
+      if (!transactionCommitted) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
+  },
+);
+
+
