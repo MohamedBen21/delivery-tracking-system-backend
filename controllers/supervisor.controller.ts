@@ -12582,8 +12582,7 @@ export const scanStopQr = catchAsyncError(
         return next(new ErrorHandler("Unauthorized.", 401));
       }
 
- 
-      if (userRole !== "transporter" && userRole !== "deliverer") {
+      if (userRole !== "transporter") {
         return next(new ErrorHandler("Only transporters can scan stop QR codes.", 403));
       }
 
@@ -12598,7 +12597,7 @@ export const scanStopQr = catchAsyncError(
         return next(new ErrorHandler("Valid coordinates [lng, lat] are required.", 400));
       }
 
-
+      // ── Find QR session ──────────────────────────────────────────────────
       const qrSession = await StopQrSessionModel.findOne({ code }).session(session);
       if (!qrSession) {
         throw new ErrorHandler("Invalid QR code. Session not found.", 404);
@@ -12612,21 +12611,17 @@ export const scanStopQr = catchAsyncError(
         throw new ErrorHandler("QR code has expired. Please request a new one.", 400);
       }
 
-
-      let transporter: any;
-
-      if (userRole === "transporter") {
-        transporter = await TransporterModel.findOne({ userId }).session(session).lean();
-        if (!transporter) {
-          throw new ErrorHandler("Transporter profile not found.", 404);
-        }
-
-        if (qrSession.transporterId.toString() !== transporter._id.toString()) {
-          throw new ErrorHandler("This QR code is for a different transporter.", 403);
-        }
+      // ── Verify transporter ───────────────────────────────────────────────
+      const transporter = await TransporterModel.findOne({ userId }).session(session).lean();
+      if (!transporter) {
+        throw new ErrorHandler("Transporter profile not found.", 404);
       }
 
+      if (qrSession.transporterId.toString() !== transporter._id.toString()) {
+        throw new ErrorHandler("This QR code is for a different transporter.", 403);
+      }
 
+      // ── Load route ───────────────────────────────────────────────────────
       const route = await RouteModel.findById(qrSession.routeId).session(session);
       if (!route) {
         throw new ErrorHandler("Route not found.", 404);
@@ -12636,33 +12631,52 @@ export const scanStopQr = catchAsyncError(
         throw new ErrorHandler(`Route is not active. Status: ${route.status}.`, 400);
       }
 
+      if (qrSession.stopIndex !== route.currentStopIndex) {
+        throw new ErrorHandler(
+          `Expected stop ${route.currentStopIndex}, got ${qrSession.stopIndex}.`,
+          400,
+        );
+      }
+
       const stop = route.stops[qrSession.stopIndex];
       if (!stop) {
         throw new ErrorHandler("Stop not found in route.", 404);
       }
 
-
+      // ── Mark QR session verified ─────────────────────────────────────────
       qrSession.verified = true;
       qrSession.verifiedAt = new Date();
       qrSession.verifiedBy = new mongoose.Types.ObjectId(userId.toString());
       await qrSession.save({ session });
 
-
+      // ── Complete the stop ────────────────────────────────────────────────
       const now = new Date();
       const isLastStop = qrSession.isLastStop;
 
-      stop.status = "completed";
+      // Set arrival timestamps, then let completeStop handle status + index advancement
       stop.actualArrival = stop.actualArrival || now;
       stop.actualDeparture = now;
-      route.currentStopIndex = qrSession.stopIndex + 1;
-      route.completedStops += 1;
 
+      // Manifest breakdown
+      if (completedManifestIds?.length) {
+        stop.completedManifests = completedManifestIds.map(
+          (id) => new mongoose.Types.ObjectId(id),
+        );
+      }
+      if (discrepancyManifestIds?.length) {
+        stop.discrepancyManifests = discrepancyManifestIds.map(
+          (id) => new mongoose.Types.ObjectId(id),
+        );
+      }
 
+      await route.completeStop(qrSession.stopIndex, [], [], notes);
+
+      // ── Manifest cascade ─────────────────────────────────────────────────
       const isHubRoute = route.type === "hub_to_hub" || route.type === "hub_to_branch";
 
       if (isHubRoute && qrSession.manifestCount > 0) {
         const stopManifestIds = (stop.manifestIds || []).map(
-          (id: any) => id.toString(),
+          (id: any) => new mongoose.Types.ObjectId(id.toString()),
         );
 
         if (stopManifestIds.length > 0) {
@@ -12684,73 +12698,63 @@ export const scanStopQr = catchAsyncError(
           for (const manifestId of stopManifestIds) {
             const manifest = await ManifestModel.findById(manifestId).session(session);
             if (manifest) {
-              await manifest.markArrived(new mongoose.Types.ObjectId(userId.toString()), session);
+              await manifest.markArrived(
+                new mongoose.Types.ObjectId(userId.toString()),
+                session,
+              );
             }
           }
         }
       }
 
-
+      // ── If last stop, complete route ─────────────────────────────────────
       let routeCompleted = false;
 
       if (isLastStop) {
-        route.status = "completed";
-        route.actualEnd = now;
-        if (route.actualStart) {
-          route.actualTime = Math.round(
-            (now.getTime() - new Date(route.actualStart).getTime()) / 60000,
-          );
-        }
+        await route.completeRoute(notes);
 
-        // Release transporter
-        if (transporter) {
-          const transporterDoc = await TransporterModel.findById(transporter._id).session(session);
-          if (transporterDoc) {
-            // Hub-to-hub: place transporter at destination hub
-            if (route.type === "hub_to_hub" && stop.branchId) {
-              transporterDoc.currentBranchId = stop.branchId;
-            }
-
-            transporterDoc.availabilityStatus = "available";
-            transporterDoc.currentRouteId = undefined;
-            transporterDoc.lastActiveAt = now;
-            transporterDoc.totalTrips += 1;
-            transporterDoc.completedTrips += 1;
-
-            // Update daily stats
-            const loadCount = isHubRoute ? qrSession.manifestCount : qrSession.packageCount;
-            transporterDoc.todayTransportedCount += loadCount;
-            transporterDoc.totalManifestsTransported += isHubRoute ? loadCount : 0;
-            transporterDoc.todayCompletedTrips += 1;
-            transporterDoc.currentActiveManifests = Math.max(
-              0,
-              transporterDoc.currentActiveManifests - loadCount,
-            );
-
-            await transporterDoc.save({ session });
+        const transporterDoc = await TransporterModel.findById(transporter._id).session(session);
+        if (transporterDoc) {
+          // Hub-to-hub: place transporter at destination hub
+          if (route.type === "hub_to_hub" && stop.branchId) {
+            transporterDoc.currentBranchId = stop.branchId;
           }
+
+          transporterDoc.availabilityStatus = "available";
+          transporterDoc.currentRouteId = undefined;
+          transporterDoc.lastActiveAt = now;
+          transporterDoc.totalTrips += 1;
+          transporterDoc.completedTrips += 1;
+
+          // Update daily stats
+          const loadCount = isHubRoute ? qrSession.manifestCount : qrSession.packageCount;
+          transporterDoc.todayTransportedCount += loadCount;
+          transporterDoc.totalManifestsTransported += isHubRoute ? loadCount : 0;
+          transporterDoc.todayCompletedTrips += 1;
+          transporterDoc.currentActiveManifests = Math.max(
+            0,
+            transporterDoc.currentActiveManifests - loadCount,
+          );
+
+          await transporterDoc.save({ session });
         }
 
         routeCompleted = true;
       } else {
-        // Update transporter stats for intermediate stop
-        if (transporter) {
-          const transporterDoc = await TransporterModel.findById(transporter._id).session(session);
-          if (transporterDoc) {
-            const loadCount = isHubRoute ? qrSession.manifestCount : qrSession.packageCount;
-            transporterDoc.todayTransportedCount += loadCount;
-            transporterDoc.totalManifestsTransported += isHubRoute ? loadCount : 0;
-            transporterDoc.currentActiveManifests = Math.max(
-              0,
-              transporterDoc.currentActiveManifests - loadCount,
-            );
-            transporterDoc.lastActiveAt = now;
-            await transporterDoc.save({ session });
-          }
+        // Intermediate stop — update transporter stats
+        const transporterDoc = await TransporterModel.findById(transporter._id).session(session);
+        if (transporterDoc) {
+          const loadCount = isHubRoute ? qrSession.manifestCount : qrSession.packageCount;
+          transporterDoc.todayTransportedCount += loadCount;
+          transporterDoc.totalManifestsTransported += isHubRoute ? loadCount : 0;
+          transporterDoc.currentActiveManifests = Math.max(
+            0,
+            transporterDoc.currentActiveManifests - loadCount,
+          );
+          transporterDoc.lastActiveAt = now;
+          await transporterDoc.save({ session });
         }
       }
-
-      await route.save({ session });
 
       await session.commitTransaction();
       transactionCommitted = true;
