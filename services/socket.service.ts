@@ -865,8 +865,8 @@ export class SocketService {
         socket.on(
           "scan_stop_qr",
           async (data: {
-            sessionId: string; // StopQrSession._id
-            qrCode: string; // the scanned code string
+            sessionId: string;
+            qrCode: string;
             routeId: string;
             stopIndex: number;
             coordinates: [number, number];
@@ -1010,7 +1010,7 @@ export class SocketService {
                 return;
               }
 
-              // Proximity guard (still enforced at scan time — transporter must stay on-site)
+              // Proximity guard (still enforced at scan time)
               const distanceMeters =
                 this.calculateDistance(
                   data.coordinates,
@@ -1029,6 +1029,7 @@ export class SocketService {
               // ── Mark QR session as verified ──────────────────────────────────
               session.verified = true;
               session.verifiedAt = new Date();
+              session.verifiedBy = new mongoose.Types.ObjectId(userId);
               await session.save();
 
               const isLastStop = data.stopIndex === route.stops.length - 1;
@@ -1082,6 +1083,10 @@ export class SocketService {
               // ── Persist manifest breakdown on route stop ─────────────────────
               stop.completedManifests = finalCompletedManifests;
               stop.discrepancyManifests = discrepancyManifestOids;
+
+              // Set arrival timestamps, then let completeStop handle the rest
+              stop.actualArrival = stop.actualArrival || new Date();
+              stop.actualDeparture = new Date();
 
               await route.completeStop(data.stopIndex, [], [], data.notes);
 
@@ -1149,7 +1154,7 @@ export class SocketService {
                   await TransporterModel.findByIdAndUpdate(transporter._id, {
                     availabilityStatus: "available",
                     currentRouteId: null,
-                    currentBranchId: stop.branchId, // now stationed at destination hub
+                    currentBranchId: stop.branchId,
                     lastActiveAt: new Date(),
                     $inc: { totalTrips: 1, completedTrips: 1 },
                   });
