@@ -712,6 +712,7 @@ async function uploadToCloudinary(
 
 export const updateProfilePicture = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+    
     const userId = req.user?._id;
 
     if (!userId) {
@@ -733,6 +734,7 @@ export const updateProfilePicture = catchAsyncError(
       }
 
       const ext = req.file.mimetype.split("/")[1]?.toLowerCase();
+      
       if (!ALLOWED_FORMATS.includes(ext ?? "")) {
         return next(
           new ErrorHandler(
@@ -894,7 +896,7 @@ const createResetToken = (userId: string): string =>
   );
 
 
-const ALLOWED_ROLES = ["deliverer", "transporter"];
+const ALLOWED_ROLES = ["deliverer", "transporter", "cashier", "loader"];
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -957,7 +959,7 @@ export const requestPasswordReset = catchAsyncError(
       if (!ALLOWED_ROLES.includes(user.role)) {
         return next(
           new ErrorHandler(
-            "Password reset via OTP is only available for deliverers and transporters.",
+            "Password reset via OTP is only available for deliverers ,transporters , chasier and loaders.",
             403,
           ),
         );

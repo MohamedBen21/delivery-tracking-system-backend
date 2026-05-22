@@ -2,6 +2,7 @@ import { Server } from "socket.io";
 import { AuthenticatedSocket } from "../middleware/socketAuth";
 import mongoose from "mongoose";
 import crypto from "crypto";
+
 import DelivererModel from "../models/deliverer.model";
 import TransporterModel from "../models/transporter.model";
 import ClientModel from "../models/client.model";
@@ -197,6 +198,11 @@ export class SocketService {
       });
 
       await this.broadcastOnlineStatus(userId, role, true);
+
+      // ── Reconnect resume: push any unfinished work back to the client ──────
+      if (role === "deliverer" || role === "transporter") {
+        await this.resumeActiveSession(socket, userId, role);
+      }
 
       // ══════════════════════════════════════════════════════════════════════
       //  LOCATION UPDATE
@@ -865,8 +871,8 @@ export class SocketService {
         socket.on(
           "scan_stop_qr",
           async (data: {
-            sessionId: string;
-            qrCode: string;
+            sessionId: string; // StopQrSession._id
+            qrCode: string; // the scanned code string
             routeId: string;
             stopIndex: number;
             coordinates: [number, number];
@@ -1010,7 +1016,7 @@ export class SocketService {
                 return;
               }
 
-              // Proximity guard (still enforced at scan time)
+              // Proximity guard (still enforced at scan time — transporter must stay on-site)
               const distanceMeters =
                 this.calculateDistance(
                   data.coordinates,
@@ -1029,7 +1035,6 @@ export class SocketService {
               // ── Mark QR session as verified ──────────────────────────────────
               session.verified = true;
               session.verifiedAt = new Date();
-              session.verifiedBy = new mongoose.Types.ObjectId(userId);
               await session.save();
 
               const isLastStop = data.stopIndex === route.stops.length - 1;
@@ -1083,10 +1088,6 @@ export class SocketService {
               // ── Persist manifest breakdown on route stop ─────────────────────
               stop.completedManifests = finalCompletedManifests;
               stop.discrepancyManifests = discrepancyManifestOids;
-
-              // Set arrival timestamps, then let completeStop handle the rest
-              stop.actualArrival = stop.actualArrival || new Date();
-              stop.actualDeparture = new Date();
 
               await route.completeStop(data.stopIndex, [], [], data.notes);
 
@@ -1154,7 +1155,7 @@ export class SocketService {
                   await TransporterModel.findByIdAndUpdate(transporter._id, {
                     availabilityStatus: "available",
                     currentRouteId: null,
-                    currentBranchId: stop.branchId,
+                    currentBranchId: stop.branchId, // now stationed at destination hub
                     lastActiveAt: new Date(),
                     $inc: { totalTrips: 1, completedTrips: 1 },
                   });
@@ -3374,6 +3375,355 @@ export class SocketService {
       distanceMeters: Math.round(distanceMeters),
       reason,
     };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  RECONNECT RESUME
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  //  Called on every (re)connection for deliverer and transporter roles.
+  //  Queries the DB for any unfinished work and emits a single
+  //  "session_resumed" event so the frontend can restore its UI state without
+  //  the user having to navigate back manually.
+  //
+  //  Deliverer  → finds the active/paused delivery route and its current stop.
+  //               Includes the first non-completed package at that stop plus
+  //               whether an OTP is still alive for it.
+  //
+  //  Transporter → finds the active/paused hub or non-hub route, the current
+  //                stop, and the manifests (hub routes) or packages (other
+  //                routes) that are still in transit at that stop.
+  //                Also re-attaches the socket to the route room so subsequent
+  //                stop events work without the user pressing "rejoin".
+  //
+  //  If nothing is unfinished the event is NOT emitted (no unnecessary noise).
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private async resumeActiveSession(
+    socket: AuthenticatedSocket,
+    userId: string,
+    role: "deliverer" | "transporter",
+  ): Promise<void> {
+    try {
+      if (role === "deliverer") {
+        await this.resumeDelivererSession(socket, userId);
+      } else {
+        await this.resumeTransporterSession(socket, userId);
+      }
+    } catch (err: any) {
+      // Non-fatal — just log. Never throw back to the connection handler.
+      console.error(
+        `[Socket] resumeActiveSession failed for ${role} ${userId}:`,
+        err.message,
+      );
+    }
+  }
+
+  // ── Deliverer ──────────────────────────────────────────────────────────────
+
+  private async resumeDelivererSession(
+    socket: AuthenticatedSocket,
+    userId: string,
+  ): Promise<void> {
+    const deliverer = await DelivererModel.findOne({ userId })
+      .select("_id branchId companyId")
+      .lean();
+    if (!deliverer) return;
+
+    const route = await RouteModel.findOne({
+      assignedDelivererId: deliverer._id,
+      status: { $in: ["active", "paused"] },
+    }).lean();
+    if (!route) return;
+
+    // currentStopIndex is the source of truth — completeStop() and failStop()
+    // both increment it, so this always points at the stop needing action.
+    const stop = route.stops[route.currentStopIndex];
+    if (!stop) return;
+
+    // First package at this stop not yet in completed / failed / skipped.
+    // Each stop normally has exactly one package; requeued stops also have one
+    // (the same package re-appended as a fresh stop at the end of the array).
+    const resolvedAtStop = new Set([
+      ...stop.completedPackages.map(String),
+      ...stop.failedPackages.map(String),
+      ...stop.skippedPackages.map(String),
+    ]);
+    const activePackageId =
+      stop.packageIds.find((id) => !resolvedAtStop.has(id.toString())) ?? null;
+    if (!activePackageId) return;
+
+    // ── Fetch package document ────────────────────────────────────────────────
+    const pkg = await PackageModel.findById(activePackageId)
+      .select(
+        "trackingNumber status destination attemptCount maxAttempts estimatedDeliveryTime deliveryOtp",
+      )
+      .lean();
+
+    // ── OTP restoration ───────────────────────────────────────────────────────
+    // In-memory map is wiped on server restart; fall back to the persisted
+    // package.deliveryOtp field and restore to memory so complete_delivery
+    // works without the deliverer having to request a fresh code.
+    const otpKey = `delivery_otp_${activePackageId.toString()}`;
+    const memEntry = this.deliveryOTPs.get(otpKey);
+    const dbOtp = pkg?.deliveryOtp;
+
+    const otpAlive =
+      (!!memEntry && Date.now() < memEntry.expiresAt) ||
+      (!memEntry &&
+        !!dbOtp?.code &&
+        !dbOtp.verified &&
+        dbOtp.expiresAt > new Date());
+
+    if (!memEntry && otpAlive && dbOtp?.code) {
+      this.deliveryOTPs.set(otpKey, {
+        code: dbOtp.code,
+        expiresAt: dbOtp.expiresAt.getTime(),
+      });
+    }
+
+    // ── Re-join route room ────────────────────────────────────────────────────
+    socket.join(this.getRouteRoom(route._id.toString()));
+
+    socket.emit("session_resumed", {
+      role: "deliverer",
+      routeId: route._id,
+      routeNumber: route.routeNumber,
+      routeType: route.type,
+      routeStatus: route.status,
+      currentStopIndex: route.currentStopIndex,
+      totalStops: route.stops.length,
+      completedStops: route.completedStops,
+      remainingStops: route.stops.length - route.currentStopIndex,
+      scheduledEnd: route.scheduledEnd,
+      actualStart: route.actualStart,
+      isDelayed: route.scheduledEnd ? new Date() > route.scheduledEnd : false,
+
+      currentStop: {
+        stopId: stop._id,
+        stopIndex: route.currentStopIndex,
+        status: stop.status,
+        address: stop.address,
+        location: stop.location.coordinates,
+        clientId: stop.clientId,
+        action: stop.action,
+        packageIds: stop.packageIds,
+        activePackageId,
+      },
+
+      activePackage: pkg
+        ? {
+            packageId: pkg._id,
+            trackingNumber: pkg.trackingNumber,
+            status: pkg.status,
+            recipientName: pkg.destination?.recipientName,
+            recipientPhone: pkg.destination?.recipientPhone,
+            address: pkg.destination?.address,
+            city: pkg.destination?.city,
+            attemptCount: pkg.attemptCount,
+            maxAttempts: pkg.maxAttempts,
+            estimatedDeliveryTime: pkg.estimatedDeliveryTime,
+            otp: {
+              alive: otpAlive,
+              expiresAt: memEntry
+                ? new Date(memEntry.expiresAt)
+                : (dbOtp?.expiresAt ?? null),
+              verified: dbOtp?.verified ?? false,
+            },
+          }
+        : null,
+
+      message:
+        route.status === "paused"
+          ? "Your route was paused. Tap Resume to continue."
+          : "You have an active delivery. Pick up where you left off.",
+      timestamp: new Date(),
+    });
+
+    console.log(
+      `[Socket] Deliverer ${userId} resumed — route ${route.routeNumber} ` +
+        `stop ${route.currentStopIndex}/${route.stops.length - 1} ` +
+        `pkg ${activePackageId} otpAlive=${otpAlive}`,
+    );
+  }
+
+  // ── Transporter ────────────────────────────────────────────────────────────
+
+  private async resumeTransporterSession(
+    socket: AuthenticatedSocket,
+    userId: string,
+  ): Promise<void> {
+    const transporter = await TransporterModel.findOne({ userId })
+      .select("_id companyId currentBranchId")
+      .lean();
+    if (!transporter) return;
+
+    const route = await RouteModel.findOne({
+      assignedTransporterId: transporter._id,
+      status: { $in: ["active", "paused"] },
+    }).lean();
+    if (!route) return;
+
+    // currentStopIndex is the source of truth — same as deliverer logic.
+    const hubRoute = isHubRoute(route.type);
+    const stop = route.stops[route.currentStopIndex];
+    if (!stop) return;
+
+    // ── Pending manifests at this stop (hub routes) ───────────────────────────
+    // Manifests not yet in completedManifests or discrepancyManifests
+    // are still physically on the truck and need to be handed over.
+    let pendingManifests: any[] = [];
+    if (hubRoute) {
+      const doneSet = new Set([
+        ...stop.completedManifests.map(String),
+        ...stop.discrepancyManifests.map(String),
+      ]);
+      const pendingIds = (stop.manifestIds ?? []).filter(
+        (id) => !doneSet.has(id.toString()),
+      );
+      if (pendingIds.length > 0) {
+        pendingManifests = await ManifestModel.find({
+          _id: { $in: pendingIds },
+        })
+          .select(
+            "_id manifestCode status packageCount totalDeclaredWeight originBranchId destinationBranchId",
+          )
+          .lean();
+      }
+    }
+
+    // ── Pending packages at this stop (non-hub routes) ────────────────────────
+    // Packages not yet in completedPackages / failedPackages / skippedPackages.
+    let pendingPackages: any[] = [];
+    if (!hubRoute) {
+      const doneSet = new Set([
+        ...stop.completedPackages.map(String),
+        ...stop.failedPackages.map(String),
+        ...stop.skippedPackages.map(String),
+      ]);
+      const pendingIds = stop.packageIds.filter(
+        (id) => !doneSet.has(id.toString()),
+      );
+      if (pendingIds.length > 0) {
+        pendingPackages = await PackageModel.find({ _id: { $in: pendingIds } })
+          .select("_id trackingNumber status destination currentBranchId")
+          .lean();
+      }
+    }
+
+    // ── Live QR session check (hub routes only) ───────────────────────────────
+    // If request_stop_qr was called before disconnect but scan_stop_qr was not,
+    // the session is still valid and the branch QR is still on screen.
+    // We return the code so the transporter app can go straight to "scan now".
+    let pendingQrSession: any = null;
+    if (hubRoute) {
+      const qr = await StopQrSessionModel.findOne({
+        routeId: route._id,
+        stopIndex: route.currentStopIndex,
+        verified: false,
+        expiresAt: { $gt: new Date() },
+      })
+        .select("_id code expiresAt manifestCount isLastStop")
+        .lean();
+
+      if (qr) {
+        pendingQrSession = {
+          sessionId: qr._id,
+          qrCode: qr.code,
+          expiresAt: qr.expiresAt,
+          manifestCount: qr.manifestCount,
+          isLastStop: qr.isLastStop,
+        };
+      }
+    }
+
+    // ── Re-join route room ────────────────────────────────────────────────────
+    socket.join(this.getRouteRoom(route._id.toString()));
+
+    const nextStop = route.stops[route.currentStopIndex + 1] ?? null;
+
+    socket.emit("session_resumed", {
+      role: "transporter",
+      routeId: route._id,
+      routeNumber: route.routeNumber,
+      routeType: route.type,
+      routeStatus: route.status,
+      isHubRoute: hubRoute,
+      currentStopIndex: route.currentStopIndex,
+      totalStops: route.stops.length,
+      completedStops: route.completedStops,
+      remainingStops: route.stops.length - route.currentStopIndex,
+      scheduledEnd: route.scheduledEnd,
+      actualStart: route.actualStart,
+      isDelayed: route.scheduledEnd ? new Date() > route.scheduledEnd : false,
+
+      currentStop: {
+        stopId: stop._id,
+        stopIndex: route.currentStopIndex,
+        status: stop.status,
+        address: stop.address,
+        location: stop.location.coordinates,
+        branchId: stop.branchId,
+        action: stop.action,
+        isLastStop: route.currentStopIndex === route.stops.length - 1,
+
+        // Hub routes: full manifest cards for everything still on the truck
+        pendingManifestCount: pendingManifests.length,
+        totalManifestCount: stop.manifestIds?.length ?? 0,
+        pendingManifests: pendingManifests.map((m) => ({
+          manifestId: m._id,
+          manifestCode: m.manifestCode,
+          status: m.status,
+          packageCount: m.packageCount,
+          totalWeight: m.totalDeclaredWeight,
+          originBranchId: m.originBranchId,
+          destinationBranchId: m.destinationBranchId,
+        })),
+
+        // Non-hub routes: package cards
+        pendingPackageCount: pendingPackages.length,
+        totalPackageCount: stop.packageIds.length,
+        pendingPackages: pendingPackages.map((p) => ({
+          packageId: p._id,
+          trackingNumber: p.trackingNumber,
+          status: p.status,
+          recipientName: p.destination?.recipientName,
+          city: p.destination?.city,
+          currentBranchId: p.currentBranchId,
+        })),
+      },
+
+      // Non-null only if request_stop_qr fired but scan_stop_qr did not yet —
+      // frontend should restore the "scan now" screen immediately
+      pendingQrSession,
+
+      nextStop: nextStop
+        ? {
+            stopIndex: route.currentStopIndex + 1,
+            stopId: nextStop._id,
+            branchId: nextStop.branchId,
+            address: nextStop.address,
+            location: nextStop.location.coordinates,
+            loadCount: stopLoadCount(nextStop, route.type),
+            loadUnit: hubRoute ? "manifests" : "packages",
+          }
+        : null,
+
+      message:
+        route.status === "paused"
+          ? "Your route was paused. Tap Resume to continue."
+          : pendingQrSession
+            ? "QR scan pending. Please scan the code at the branch to complete this stop."
+            : "You have an active route. Pick up where you left off.",
+      timestamp: new Date(),
+    });
+
+    console.log(
+      `[Socket] Transporter ${userId} resumed — route ${route.routeNumber} ` +
+        `(${route.type}) stop ${route.currentStopIndex}/${route.stops.length - 1} ` +
+        `pending=${hubRoute ? pendingManifests.length + " manifests" : pendingPackages.length + " packages"} ` +
+        `pendingQr=${!!pendingQrSession}`,
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

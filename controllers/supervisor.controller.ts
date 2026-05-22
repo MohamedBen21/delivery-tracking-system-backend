@@ -72,10 +72,10 @@ interface IUpdateDeliverer {
 export const createDeliverer = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
-    const session = await mongoose.startSession();
-    session.startTransaction();
+    // const session = await mongoose.startSession();
+    // session.startTransaction();
 
-    let transactionCommitted = false;
+    // let transactionCommitted = false;
 
     try {
       const supervisorUserId = req.user?._id;
@@ -135,46 +135,52 @@ export const createDeliverer = catchAsyncError(
       }
 
       const [supervisor, branch] = await Promise.all([
-        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).session(session),
-        BranchModel.findById(branchId).session(session),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId })
+        // .session(session),
+        ,
+        BranchModel.findById(branchId)
+        // .session(session),
       ]);
 
       console.log("Supervisor:", supervisor);
 
       if (!supervisor || !supervisor.isActive) {
 
-        throw new ErrorHandler("You are not an active supervisor of this branch", 403);
+        // throw new ErrorHandler("You are not an active supervisor of this branch", 403);
+        return next( new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_manage_deliverers")) {
-        throw new ErrorHandler("You don't have permission to manage deliverers", 403);
+        return next( new ErrorHandler("You don't have permission to manage deliverers", 403));
       }
 
       if (!branch) {
 
-        throw new ErrorHandler("Branch not found", 404);
+        return next( new ErrorHandler("Branch not found", 404));
       }
 
       if (branch.status !== "active") {
 
-        throw new ErrorHandler("Cannot create deliverer for an inactive branch", 400);
+        return next( new ErrorHandler("Cannot create deliverer for an inactive branch", 400));
       }
 
       const normalizedPhone = userModel.normalizePhone(phone);
 
       const [existingEmail, existingPhone] = await Promise.all([
-        userModel.findOne({ email }).session(session),
-        userModel.findOne({ phone: normalizedPhone }).session(session),
+        userModel.findOne({ email }),
+        // .session(session),
+        userModel.findOne({ phone: normalizedPhone }),
+        // .session(session),
         // userModel.findOne({ username }).session(session),
       ]);
 
       if (existingEmail) {
 
-        throw new ErrorHandler("Email already exists", 400);
+        return next( new ErrorHandler("Email already exists", 400));
       }
 
       if (existingPhone) {
-        throw new ErrorHandler("Phone number already exists", 400);
+        return next( new ErrorHandler("Phone number already exists", 400));
       }
 
       // if (existingUsername) {
@@ -197,7 +203,7 @@ export const createDeliverer = catchAsyncError(
             status: "pending",
           },
         ],
-        { session }
+        // { session }
       );
 
       const deliverer = await DelivererModel.create(
@@ -213,11 +219,11 @@ export const createDeliverer = catchAsyncError(
             isActive: true,
           },
         ],
-        { session }
+        // { session }
       );
 
-      await session.commitTransaction();
-      transactionCommitted = true;
+      // await session.commitTransaction();
+      // transactionCommitted = true;
 
 
       const branchName = branch?.name || "Branch";
@@ -265,14 +271,15 @@ export const createDeliverer = catchAsyncError(
 
       return next(error);
 
-    } finally {
+    } 
+    // finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+    //   if (!transactionCommitted) {
+    //     await session.abortTransaction().catch(() => {});
+    //   }
+    //   await session.endSession();
 
-    }
+    // }
   }
 );
 

@@ -290,9 +290,9 @@ const delivererSchema = new Schema<IDeliverer>({
   
   rating: {
     type: Number,
-    default: 0,
-    min: [0, 'Rating cannot be less than 0'],
-    max: [5, 'Rating cannot exceed 5'],
+    default: 0.0,
+    min: [0.0, 'Rating cannot be less than 0'],
+    max: [5.0, 'Rating cannot exceed 5'],
   },
 
   totalDeliveries: {
