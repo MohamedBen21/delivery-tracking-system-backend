@@ -15,6 +15,9 @@ import {
   requestPasswordReset,
   resendActivation,
   resetPassword,
+  resolvePlace,
+  reverseGeocodeAddress,
+  searchAddress,
   updateProfilePicture,
   updateUser,
   verifyOTP,
@@ -63,5 +66,16 @@ authRouter.post("/reset-password/confirm",    confirmPasswordReset);
 authRouter.get("/me/user", isAuthenticated, meUser);
 
 authRouter.post("/create-manager", createManager);
+
+// authRouter.get("/geocode/search", 
+//   //  isAuthenticated, 
+//    searchAddress);
+// authRouter.get("/geocode/reverse", 
+//   // isAuthenticated, 
+//   reverseGeocodeAddress);
+
+authRouter.get("/geocode/search",   searchAddress);
+authRouter.post("/geocode/resolve", resolvePlace);
+authRouter.get("/geocode/reverse",  reverseGeocodeAddress);
 
 export default authRouter;

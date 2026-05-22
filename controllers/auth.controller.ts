@@ -11,7 +11,6 @@ import {
 } from "../utils/Token.util";
 import axios from "axios";
 import path from "path";
-import { deleteImage } from "../utils/Multer.util";
 import fs from "fs";
 import { Mail } from "../utils/Mail.util";
 import { decrypt } from "../utils/Crypto.util";
@@ -36,7 +35,8 @@ import transporterModel from "../models/transporter.model";
 import SupervisorModel from "../models/supervisor.model";
 import freelancerModel from "../models/freelancer.model";
 import { notifyAdminsNewEntityPending, sendManagerAccountCreatedNotification, sendWelcomeNotification } from "../services/notification.service";
-import { geocodeAddress, reverseGeocode } from "../services/geocoding.service";
+import { geocodeConfirmedPlace, reverseGeocode, searchLocalPlaces } from "../services/geocoding.service";
+
 
 
 export const register = catchAsyncError(
@@ -1506,193 +1506,194 @@ export const createManager = catchAsyncError(
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NEW ENDPOINT 1 — Address autocomplete
+// ENDPOINT 1 — Autocomplete while typing
+// GET /api/auth/geocode/search?q=con&limit=10
 //
-// GET /freelancer/geocode/search?q=elkhroub&limit=5
-//
-// The frontend calls this while the user types the delivery city/district.
-// Returns up to `limit` validated suggestions with coordinates.
-// The user must pick one — the frontend should never let them submit a
-// free-text address that wasn't resolved by this endpoint.
+// Instant — reads from the JSON file in memory, zero network calls.
+// Call this on every keystroke (debounce 150–200ms on the frontend).
 // ─────────────────────────────────────────────────────────────────────────────
-
+ 
 export const searchAddress = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const { q, limit } = req.query as Record<string, string | undefined>;
-
+ 
     if (!q || !q.trim()) {
       return next(new ErrorHandler("Query parameter 'q' is required.", 400));
     }
-
-    const limitNum = limit ? parseInt(limit, 10) : 8;
-    if (isNaN(limitNum) || limitNum < 1 || limitNum > 10) {
-      return next(new ErrorHandler("limit must be between 1 and 10.", 400));
+ 
+    if (q.trim().length < 2) {
+      return res.status(200).json({ success: true, count: 0, data: [] });
     }
-
+ 
+    const limitNum = limit ? parseInt(limit, 10) : 10;
+    if (isNaN(limitNum) || limitNum < 1 || limitNum > 20) {
+      return next(new ErrorHandler("limit must be between 1 and 20.", 400));
+    }
+ 
+    const places = searchLocalPlaces(q.trim(), limitNum);
+ 
+    return res.status(200).json({
+      success: true,
+      count:   places.length,
+      data:    places,
+      // Each item in data has:
+      // { id, communeNameAscii, communeName, dairaNameAscii, dairaName,
+      //   wilayaCode, wilayaNameAscii, wilayaName, label }
+    });
+  },
+);
+ 
+ 
+// ─────────────────────────────────────────────────────────────────────────────
+// ENDPOINT 2 — Resolve coordinates for a confirmed selection
+// POST /api/auth/geocode/resolve
+// Body: { communeNameAscii: "El Khroub", wilayaNameAscii: "Constantine" }
+//
+// Called ONCE when the user taps a suggestion in the dropdown.
+// Hits Nominatim with the full canonical name → returns lat/lon.
+// Frontend stores the result and sends it with the createPackage request.
+// ─────────────────────────────────────────────────────────────────────────────
+ 
+export const resolvePlace = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { communeNameAscii, wilayaNameAscii } = req.body as {
+      communeNameAscii?: string;
+      wilayaNameAscii?: string;
+    };
+ 
+    if (!communeNameAscii?.trim() || !wilayaNameAscii?.trim()) {
+      return next(
+        new ErrorHandler("communeNameAscii and wilayaNameAscii are required.", 400),
+      );
+    }
+ 
     try {
-      const suggestions = await geocodeAddress(q.trim(), limitNum);
-
+      const result = await geocodeConfirmedPlace(
+        communeNameAscii.trim(),
+        wilayaNameAscii.trim(),
+      );
+ 
+      if (!result) {
+        return res.status(404).json({
+          success: false,
+          message: `Could not find or geocode "${communeNameAscii}, ${wilayaNameAscii}".`,
+        });
+      }
+ 
       return res.status(200).json({
         success: true,
-        count: suggestions.length,
-        data: suggestions,
+        data: result,
+        // result shape:
+        // { communeNameAscii, communeName, wilayaNameAscii, wilayaName,
+        //   wilayaCode, displayName, lat, lon }
       });
     } catch (err: any) {
-      // Geocoding service is down — tell the client gracefully
       return next(new ErrorHandler(err.message ?? "Geocoding failed.", 503));
     }
   },
 );
-
+ 
+ 
 // ─────────────────────────────────────────────────────────────────────────────
-// NEW ENDPOINT 2 — Reverse geocode
-//
-// GET /freelancer/geocode/reverse?lat=36.26&lon=6.69
-//
-// Optional — lets a deliverer confirm his GPS position as a readable address.
+// ENDPOINT 3 — Reverse geocode (for deliverer GPS confirmation)
+// GET /api/auth/geocode/reverse?lat=36.26&lon=6.69
 // ─────────────────────────────────────────────────────────────────────────────
-
+ 
 export const reverseGeocodeAddress = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const { lat, lon } = req.query as Record<string, string | undefined>;
-
+ 
     if (!lat || !lon) {
-      return next(new ErrorHandler("lat and lon query parameters are required.", 400));
+      return next(new ErrorHandler("lat and lon are required.", 400));
     }
-
+ 
     const latNum = parseFloat(lat);
     const lonNum = parseFloat(lon);
-
-    if (isNaN(latNum) || latNum < -90  || latNum > 90) {
-      return next(new ErrorHandler("lat must be a valid number between -90 and 90.", 400));
+ 
+    if (isNaN(latNum) || latNum < -90  || latNum > 90)  {
+      return next(new ErrorHandler("lat must be between -90 and 90.", 400));
     }
     if (isNaN(lonNum) || lonNum < -180 || lonNum > 180) {
-      return next(new ErrorHandler("lon must be a valid number between -180 and 180.", 400));
+      return next(new ErrorHandler("lon must be between -180 and 180.", 400));
     }
-
+ 
     try {
       const result = await reverseGeocode(latNum, lonNum);
-
+ 
       if (!result) {
         return res.status(404).json({
           success: false,
           message: "No address found for the given coordinates.",
         });
       }
-
-      return res.status(200).json({
-        success: true,
-        data: result,
-      });
+ 
+      return res.status(200).json({ success: true, data: result });
     } catch (err: any) {
       return next(new ErrorHandler(err.message ?? "Reverse geocoding failed.", 503));
     }
   },
 );
-
+ 
+ 
 // ─────────────────────────────────────────────────────────────────────────────
-// CHANGE IN createPackage — destination object
-//
-// In your existing createPackage function, replace the `destination` block
-// (around line 1350) with the version below.
-//
-// This adds lat/lon to the stored destination so the deliverer gets
-// coordinates instead of having to figure out the address himself.
+// ROUTES — add to your router file (auth.routes.ts or freelancer.routes.ts)
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ── BEFORE (what you have now): ──────────────────────────────────────────────
+ 
+// import { searchAddress, resolvePlace, reverseGeocodeAddress } from "../controllers/freelancer.controller";
 //
-//   const destination = {
-//     recipientName:  recipientName.trim(),
-//     recipientPhone: normalizedRecipientPhone,
-//     alternativePhone: normalizedAlternativePhone,
-//     address: recipientAddress.trim(),
-//     city:    recipientCity.trim(),
-//     state:   recipientState.trim(),
-//     postalCode: recipientPostalCode?.trim(),
-//     notes:   deliveryNotes?.trim(),
-//   };
-
-// ── AFTER (replace with this): ───────────────────────────────────────────────
-
-// First, add these two fields to ICreatePackageBody (wherever that type lives):
+// authRouter.get("/geocode/search",   searchAddress);
+// authRouter.post("/geocode/resolve", resolvePlace);
+// authRouter.get("/geocode/reverse",  reverseGeocodeAddress);
+ 
+ 
+// ─────────────────────────────────────────────────────────────────────────────
+// createPackage — destination block update
+// Replace the destination object in your existing createPackage function.
+//
+// Add these fields to ICreatePackageBody:
 //   deliveryLat?: number;
 //   deliveryLon?: number;
-//   deliveryDisplayName?: string;   // the display_name from the geocode result
-
-// Then in createPackage, after your phone normalisation, add this block:
-
+//   deliveryDisplayName?: string;
+//   deliveryCommuneAscii?: string;
+//   deliveryWilayaAscii?: string;
+// ─────────────────────────────────────────────────────────────────────────────
+ 
 /*
-
-  // ── Geocoding for home delivery ────────────────────────────────────────────
-  // If the caller already resolved the address (recommended flow — user picked
-  // a suggestion from /geocode/search), accept those coordinates directly.
-  // Otherwise fall back to a live lookup so coordinates are always stored.
-
-  let deliveryCoords: { lat: number; lon: number; displayName: string } | undefined;
-
+  const {
+    // ... your existing fields ...
+    deliveryLat,
+    deliveryLon,
+    deliveryDisplayName,
+    deliveryCommuneAscii,
+    deliveryWilayaAscii,
+  } = req.body as ICreatePackageBody;
+ 
+  // For home delivery, coordinates are required
   if (deliveryType === "home") {
-    const { deliveryLat, deliveryLon, deliveryDisplayName } = req.body as ICreatePackageBody;
-
     if (
-      deliveryLat !== undefined &&
-      deliveryLon !== undefined &&
-      typeof deliveryLat === "number" &&
-      typeof deliveryLon === "number"
+      deliveryLat === undefined || deliveryLon === undefined ||
+      typeof deliveryLat !== "number" || typeof deliveryLon !== "number"
     ) {
-      // Caller sent pre-resolved coordinates — trust them.
-      deliveryCoords = {
-        lat: deliveryLat,
-        lon: deliveryLon,
-        displayName: deliveryDisplayName ?? `${recipientCity}, ${recipientState}`,
-      };
-    } else {
-      // Fallback: geocode city + state on the fly.
-      try {
-        const fallbackQuery = `${recipientCity.trim()} ${recipientState.trim()}`;
-        const suggestions = await geocodeAddress(fallbackQuery, 1);
-        if (suggestions.length > 0) {
-          deliveryCoords = {
-            lat: suggestions[0].lat,
-            lon: suggestions[0].lon,
-            displayName: suggestions[0].displayName,
-          };
-        }
-      } catch {
-        // Non-fatal — we store the package even if geocoding is down.
-        // The deliverer can use the reverse geocode endpoint later.
-      }
+      throw new ErrorHandler(
+        "deliveryLat and deliveryLon are required for home delivery. " +
+        "Use /geocode/search then /geocode/resolve to obtain them.",
+        400,
+      );
     }
   }
-
+ 
   const destination = {
     recipientName:    recipientName.trim(),
     recipientPhone:   normalizedRecipientPhone,
     alternativePhone: normalizedAlternativePhone,
     address:          recipientAddress.trim(),
-    city:             recipientCity.trim(),
-    state:            recipientState.trim(),
+    city:             deliveryCommuneAscii?.trim() ?? recipientCity.trim(),
+    state:            deliveryWilayaAscii?.trim()  ?? recipientState.trim(),
     postalCode:       recipientPostalCode?.trim(),
     notes:            deliveryNotes?.trim(),
-    // Coordinates — present when deliveryType === "home"
-    coordinates: deliveryCoords
-      ? { lat: deliveryCoords.lat, lon: deliveryCoords.lon }
+    coordinates: (deliveryLat !== undefined && deliveryLon !== undefined)
+      ? { lat: deliveryLat, lon: deliveryLon }
       : undefined,
-    resolvedAddress: deliveryCoords?.displayName,
+    resolvedAddress: deliveryDisplayName?.trim(),
   };
-
 */
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ADD THESE TWO ROUTES to wherever your freelancer router is defined.
-//
-// Example (freelancer.routes.ts):
-//
-//   import { searchAddress, reverseGeocodeAddress } from "../controllers/freelancer.controller";
-//
-//   router.get("/geocode/search",  authenticate, searchAddress);
-//   router.get("/geocode/reverse", authenticate, reverseGeocodeAddress);
-//
-// These go BEFORE createPackage so the frontend can resolve the address
-// before submitting the package form.
-// ─────────────────────────────────────────────────────────────────────────────

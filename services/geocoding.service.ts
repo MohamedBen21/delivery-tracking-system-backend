@@ -1,13 +1,52 @@
-const NOMINATIM_BASE = process.env.NOMINATIM_URL ?? "http://localhost:8080";
+/**
+ * geocoding.service.ts
+ *
+ * Uses the official Algeria communes dataset (all ~1541 communes, 58 wilayas).
+ * Place the JSON file at: src/data/algeria_communes.json
+ *
+ * Flow:
+ *   1. /geocode/search?q=con   → searchLocalPlaces()  — instant, no network
+ *   2. /geocode/resolve        → geocodeConfirmedPlace() — calls Nominatim once with full name
+ */
 
+import communesRaw from "../data/algeria_communes.json";
 
+const NOMINATIM_BASE = process.env.NOMINATIM_URL ?? "http://nominatim:8080";
 
-export interface GeocodeSuggestion {
-  displayName: string;   // human-readable label shown in the autocomplete
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface AlgeriaCommune {
+  id: number;
+  commune_name_ascii: string;   // French / Latin name  e.g. "El Khroub"
+  commune_name: string;         // Arabic name           e.g. "الخروب"
+  daira_name_ascii: string;
+  daira_name: string;
+  wilaya_code: string;          // "01", "25", …
+  wilaya_name_ascii: string;    // "Constantine"
+  wilaya_name: string;          // "قسنطينة"
+}
+
+export interface PlaceSuggestion {
+  id: number;
+  communeNameAscii: string;
+  communeName: string;
+  dairaNameAscii: string;
+  dairaName: string;
+  wilayaCode: string;
+  wilayaNameAscii: string;
+  wilayaName: string;
+  label: string;   // ready-to-display label for the dropdown
+}
+
+export interface ResolvedPlace {
+  communeNameAscii: string;
+  communeName: string;
+  wilayaNameAscii: string;
+  wilayaName: string;
+  wilayaCode: string;
+  displayName: string;   // from Nominatim
   lat: number;
   lon: number;
-  type: string;          // city / town / village / suburb / …
-  importance: number;    // Nominatim's 0–1 relevance score
 }
 
 export interface ReverseGeocodeResult {
@@ -26,176 +65,266 @@ export interface ReverseGeocodeResult {
   lon: number;
 }
 
-// ─── Input normalisation ──────────────────────────────────────────────────────
+// ─── Build the in-memory search index once at startup ────────────────────────
 
-/**
- * Normalise Arabic / French / Arabizi text before sending to Nominatim.
- *
- * Steps applied:
- *   1. Trim + collapse extra whitespace
- *   2. Lowercase (safe for Arabic – has no case, harmless)
- *   3. Arabic letter variants → canonical form
- *      أ إ آ ٱ  →  ا
- *      ة        →  ه
- *      ى        →  ي
- *   4. Remove diacritics (tashkeel) so "قُسَنْطِينَة" == "قسنطينة"
- */
-export function normaliseInput(raw: string): string {
+const communes = communesRaw as AlgeriaCommune[];
+
+// Pre-normalise everything so search is fast on every request
+interface IndexedCommune {
+  original: AlgeriaCommune;
+  normAscii: string;    // normalised French name
+  normAr: string;       // normalised Arabic name
+  normWilaya: string;   // normalised wilaya name
+  normDaira: string;    // normalised daira name
+}
+
+function normaliseInput(raw: string): string {
   return raw
     .trim()
     .replace(/\s+/g, " ")
     .toLowerCase()
-    // Arabic hamza/alef variants
+    // Arabic letter variants
     .replace(/[أإآٱ]/g, "ا")
-    // ta-marbuta
     .replace(/ة/g, "ه")
-    // alef-maqsura
     .replace(/ى/g, "ي")
-    // Arabic diacritics (tashkeel U+064B–U+065F)
-    .replace(/[\u064B-\u065F]/g, "");
+    // Arabic diacritics
+    .replace(/[\u064B-\u065F]/g, "")
+    // French accents
+    .replace(/[éèêë]/g, "e")
+    .replace(/[àâä]/g, "a")
+    .replace(/[îï]/g, "i")
+    .replace(/[ôö]/g, "o")
+    .replace(/[ûü]/g, "u")
+    .replace(/ç/g, "c");
 }
 
-// ─── Place-type allow-list ────────────────────────────────────────────────────
+// Export so controller can use it too
+export { normaliseInput };
+
+const INDEX: IndexedCommune[] = communes.map((c) => ({
+  original: c,
+  normAscii:  normaliseInput(c.commune_name_ascii),
+  normAr:     normaliseInput(c.commune_name),
+  normWilaya: normaliseInput(c.wilaya_name_ascii),
+  normDaira:  normaliseInput(c.daira_name_ascii),
+}));
+
+// ─── Local prefix search ──────────────────────────────────────────────────────
 
 /**
- * We only want administrative / populated-place results – not individual
- * streets, POIs, or post codes – because we're geocoding a city/district
- * for the delivery destination, not a door address.
+ * Searches all 1541 communes instantly from memory.
  *
- * Adjust this list to suit your coverage area.
+ * Matches on:
+ *   - French commune name (prefix and substring)
+ *   - Arabic commune name (prefix and substring)
+ *   - Wilaya name (so "const" matches all communes in Constantine)
+ *   - Word-level prefix ("khroub" matches "El Khroub")
+ *
+ * Returns up to `limit` results sorted by relevance score.
  */
-const ALLOWED_PLACE_TYPES = new Set([
-  "city",
-  "town",
-  "village",
-  "hamlet",
-  "suburb",
-  "neighbourhood",
-  "municipality",
-  "administrative",
-  "county",
-  "state_district",
-]);
+export function searchLocalPlaces(query: string, limit = 10): PlaceSuggestion[] {
+  const q = normaliseInput(query);
+  if (q.length < 2) return [];
 
-function isAllowedType(type: string | undefined): boolean {
-  return type ? ALLOWED_PLACE_TYPES.has(type) : false;
+  const results: Array<{ entry: IndexedCommune; score: number }> = [];
+
+  for (const entry of INDEX) {
+    let score = 0;
+
+    // ── Exact match ──
+    if (entry.normAscii === q || entry.normAr === q) {
+      score = 300;
+    }
+    // ── Prefix match on French name ──
+    else if (entry.normAscii.startsWith(q)) {
+      score = 200 + Math.round((q.length / entry.normAscii.length) * 50);
+    }
+    // ── Prefix match on Arabic name ──
+    else if (entry.normAr.startsWith(q)) {
+      score = 200 + Math.round((q.length / entry.normAr.length) * 50);
+    }
+    // ── Word-level prefix on French name ("khroub" → "El Khroub") ──
+    else if (entry.normAscii.split(" ").some((w) => w.startsWith(q))) {
+      score = 150;
+    }
+    // ── Word-level prefix on Arabic name ──
+    else if (entry.normAr.split(" ").some((w) => w.startsWith(q))) {
+      score = 150;
+    }
+    // ── Substring match on French name ──
+    else if (entry.normAscii.includes(q)) {
+      score = 80;
+    }
+    // ── Substring match on Arabic name ──
+    else if (entry.normAr.includes(q)) {
+      score = 80;
+    }
+    // ── Wilaya-level match ("constantine" → all its communes) ──
+    else if (entry.normWilaya.startsWith(q)) {
+      score = 50;
+    }
+
+    if (score > 0) {
+      results.push({ entry, score });
+    }
+  }
+
+  return results
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(({ entry: { original: c } }) => ({
+      id:               c.id,
+      communeNameAscii: c.commune_name_ascii,
+      communeName:      c.commune_name,
+      dairaNameAscii:   c.daira_name_ascii,
+      dairaName:        c.daira_name,
+      wilayaCode:       c.wilaya_code,
+      wilayaNameAscii:  c.wilaya_name_ascii,
+      wilayaName:       c.wilaya_name,
+      // Dropdown label: "El Khroub — Constantine (الخروب)"
+      label: `${c.commune_name_ascii} — ${c.wilaya_name_ascii} (${c.commune_name})`,
+    }));
 }
 
-// ─── Geocode (text → coordinates) ────────────────────────────────────────────
+// ─── Geocode a confirmed selection ───────────────────────────────────────────
 
 /**
- * Search Nominatim for a place name.
- *
- * @param query  Raw user input (any language, any casing)
- * @param limit  Maximum number of suggestions to return (default 8, max 10)
- *
- * Returns up to `limit` suggestions sorted by Nominatim importance score.
+ * Called once after the user picks a commune from the dropdown.
+ * Sends the full canonical name to Nominatim and returns coordinates.
  */
-export async function geocodeAddress(
-  query: string,
-  limit = 8,
-): Promise<GeocodeSuggestion[]> {
-  const safeLimit = Math.min(Math.max(limit, 1), 10);
-  const normalised = normaliseInput(query);
+export async function geocodeConfirmedPlace(
+  communeAscii: string,
+  wilayaAscii: string,
+): Promise<ResolvedPlace | null> {
 
-  if (!normalised) return [];
+  const commune = communes.find(
+    (c) => normaliseInput(c.commune_name_ascii) === normaliseInput(communeAscii)
+      && normaliseInput(c.wilaya_name_ascii) === normaliseInput(wilayaAscii)
+  );
 
-  const params = new URLSearchParams({
-    q: normalised,
-    format: "json",
-    addressdetails: "1",
-    limit: String(safeLimit),
-    // Accept-Language tells Nominatim which language to prefer for display_name.
-    // "ar,fr,en" means: Arabic first, then French, then English.
+  if (!commune) return null;
+
+  // Structured search — most accurate for known city names
+  const structuredParams = new URLSearchParams({
+    city:              commune.commune_name_ascii,
+    state:             commune.wilaya_name_ascii,
+    country:           "Algeria",
+    countrycodes:      "dz",
+    format:            "json",
+    addressdetails:    "1",
+    limit:             "5",
     "accept-language": "ar,fr,en",
   });
 
-  const url = `${NOMINATIM_BASE}/search?${params.toString()}`;
-
-  let raw: any[];
-
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "DeliveryApp/1.0" },
-      signal: AbortSignal.timeout(5_000), // 5 s hard timeout
-    });
+    let raw: any[] = await nominatimFetch(
+      `${NOMINATIM_BASE}/search?${structuredParams.toString()}`
+    );
 
-    if (!res.ok) {
-      throw new Error(`Nominatim HTTP ${res.status}`);
+    // Fallback: free-text with wilaya context
+    if (raw.length === 0) {
+      const fallbackParams = new URLSearchParams({
+        q:                 `${commune.commune_name_ascii}, ${commune.wilaya_name_ascii}, Algeria`,
+        countrycodes:      "dz",
+        format:            "json",
+        addressdetails:    "1",
+        limit:             "5",
+        "accept-language": "ar,fr,en",
+      });
+      raw = await nominatimFetch(
+        `${NOMINATIM_BASE}/search?${fallbackParams.toString()}`
+      );
     }
 
-    raw = await res.json();
+    // Second fallback: Arabic name
+    if (raw.length === 0) {
+      const arabicParams = new URLSearchParams({
+        q:                 `${commune.commune_name}, ${commune.wilaya_name}`,
+        countrycodes:      "dz",
+        format:            "json",
+        addressdetails:    "1",
+        limit:             "3",
+        "accept-language": "ar,fr,en",
+      });
+      raw = await nominatimFetch(
+        `${NOMINATIM_BASE}/search?${arabicParams.toString()}`
+      );
+    }
+
+    if (raw.length === 0) return null;
+
+    // Prefer boundary/administrative results
+    const best = raw.sort((a: any, b: any) => {
+      const aAdmin = a.category === "boundary" ? 1 : 0;
+      const bAdmin = b.category === "boundary" ? 1 : 0;
+      return bAdmin - aAdmin || parseFloat(b.importance) - parseFloat(a.importance);
+    })[0];
+
+    return {
+      communeNameAscii: commune.commune_name_ascii,
+      communeName:      commune.commune_name,
+      wilayaNameAscii:  commune.wilaya_name_ascii,
+      wilayaName:       commune.wilaya_name,
+      wilayaCode:       commune.wilaya_code,
+      displayName:      best.display_name,
+      lat:              parseFloat(best.lat),
+      lon:              parseFloat(best.lon),
+    };
   } catch (err: any) {
-    // Surface a friendlier error so the controller can handle it
     throw new Error(`Geocoding service unavailable: ${err.message}`);
   }
-
-  // Filter to useful place types, then map to our DTO
-  const suggestions: GeocodeSuggestion[] = raw
-    .filter((r) => isAllowedType(r.type) || isAllowedType(r.addresstype))
-    .map((r) => ({
-      displayName: r.display_name as string,
-      lat: parseFloat(r.lat),
-      lon: parseFloat(r.lon),
-      type: (r.type ?? r.addresstype ?? "unknown") as string,
-      importance: parseFloat(r.importance ?? "0"),
-    }))
-    // Sort highest importance first (Nominatim already does this, but be safe)
-    .sort((a, b) => b.importance - a.importance)
-    .slice(0, safeLimit);
-
-  return suggestions;
 }
 
-// ─── Reverse geocode (coordinates → text) ────────────────────────────────────
+// ─── Reverse geocode ──────────────────────────────────────────────────────────
 
-/**
- * Convert a lat/lon pair back into a readable address.
- * Useful to confirm the location the deliverer is standing at.
- */
 export async function reverseGeocode(
   lat: number,
   lon: number,
 ): Promise<ReverseGeocodeResult | null> {
   const params = new URLSearchParams({
-    lat: String(lat),
-    lon: String(lon),
-    format: "json",
-    addressdetails: "1",
+    lat:               String(lat),
+    lon:               String(lon),
+    format:            "json",
+    addressdetails:    "1",
     "accept-language": "ar,fr,en",
   });
 
-  const url = `${NOMINATIM_BASE}/reverse?${params.toString()}`;
-
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "DeliveryApp/1.0" },
-      signal: AbortSignal.timeout(5_000),
-    });
+    const data = await nominatimFetch(
+      `${NOMINATIM_BASE}/reverse?${params.toString()}`
+    );
 
-    if (!res.ok) throw new Error(`Nominatim HTTP ${res.status}`);
-
-    const data = await res.json();
-
-    // Nominatim returns { error: "Unable to geocode" } when nothing is found
-    if (data.error) return null;
+    // reverse returns a single object, not an array
+    const result = Array.isArray(data) ? data[0] : data;
+    if (!result || result.error) return null;
 
     return {
-      displayName: data.display_name,
+      displayName: result.display_name,
       address: {
-        road:      data.address?.road,
-        suburb:    data.address?.suburb,
-        city:      data.address?.city ?? data.address?.town ?? data.address?.village,
-        town:      data.address?.town,
-        village:   data.address?.village,
-        state:     data.address?.state,
-        postcode:  data.address?.postcode,
-        country:   data.address?.country,
+        road:     result.address?.road,
+        suburb:   result.address?.suburb,
+        city:     result.address?.city ?? result.address?.town ?? result.address?.village,
+        town:     result.address?.town,
+        village:  result.address?.village,
+        state:    result.address?.state,
+        postcode: result.address?.postcode,
+        country:  result.address?.country,
       },
-      lat: parseFloat(data.lat),
-      lon: parseFloat(data.lon),
+      lat: parseFloat(result.lat),
+      lon: parseFloat(result.lon),
     };
   } catch (err: any) {
     throw new Error(`Reverse geocoding service unavailable: ${err.message}`);
   }
+}
+
+// ─── Internal fetch helper ────────────────────────────────────────────────────
+
+async function nominatimFetch(url: string): Promise<any> {
+  const res = await fetch(url, {
+    headers: { "User-Agent": "DeliveryApp/1.0" },
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!res.ok) throw new Error(`Nominatim HTTP ${res.status}`);
+  return res.json();
 }
