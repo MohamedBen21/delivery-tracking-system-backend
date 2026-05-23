@@ -8,6 +8,8 @@ import CompanyModel from "../models/company.model";
 import BranchModel from "../models/branch.model";
 import userModel from "../models/user.model";
 import { notifyAdminsNewEntityPending } from "../services/notification.service";
+import DelivererModel from "../models/deliverer.model";
+import TransporterModel from "../models/transporter.model";
 
 const VEHICLE_TYPES: VehicleType[] = [
   "motorcycle",
@@ -1305,8 +1307,10 @@ export const getCompanyVehicles = catchAsyncError(
 
 export const assignVehicle = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+
     const session = await mongoose.startSession();
     session.startTransaction();
+    
     let transactionCommitted = false;
 
     try {
@@ -1334,7 +1338,7 @@ export const assignVehicle = catchAsyncError(
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
-      const validRoles = ["transporter", "deliverer", "driver"];
+      const validRoles = ["transporter", "deliverer"];
       if (assignedUserRole && !validRoles.includes(assignedUserRole)) {
         return next(
           new ErrorHandler(`assignedUserRole must be one of: ${validRoles.join(", ")}`, 400)
@@ -1364,10 +1368,15 @@ export const assignVehicle = catchAsyncError(
         throw new ErrorHandler("Branch not found or does not belong to this company", 404);
       }
 
+      if (assignedUser.status !== "active") {
+        throw new ErrorHandler(`Cannot assign vehicle to user with status: ${assignedUser.status}`, 400);
+      }
+
       if (vehicle.status !== "available") {
         throw new ErrorHandler(`Vehicle cannot be assigned. Current status: ${vehicle.status}`, 400);
       }
 
+      // ── Update vehicle document ──────────────────────────────────────────────
       vehicle.assignedUserId = assignedUserId;
       vehicle.assignedUserRole = assignedUserRole || assignedUser.role;
       vehicle.currentBranchId = branchId;
@@ -1375,20 +1384,92 @@ export const assignVehicle = catchAsyncError(
 
       await vehicle.save({ session });
 
+      // ── Update assigned user's document (deliverer or transporter) ───────────
+      const userRole = assignedUserRole || assignedUser.role;
+      
+      if (userRole === "deliverer") {
+        const deliverer = await DelivererModel.findOne({ userId: assignedUserId }).session(session);
+        
+        if (!deliverer) {
+          throw new ErrorHandler("Deliverer profile not found for this user", 404);
+        }
+        
+        // // Check if deliverer is already assigned to another vehicle
+        // if (deliverer.currentVehicleId) {
+        //   throw new ErrorHandler(`Deliverer already has an assigned vehicle: ${deliverer.currentVehicleId}`, 400);
+        // }
+        
+        deliverer.currentVehicleId = vehicle._id;
+        deliverer.lastActiveAt = new Date();
+        
+        // If deliverer is available, set to on_route (or keep as is)
+        if (deliverer.availabilityStatus === "available") {
+          deliverer.availabilityStatus = "on_route";
+        }
+        
+        await deliverer.save({ session });
+        
+      } else if (userRole === "transporter") {
+        const transporter = await TransporterModel.findOne({ userId: assignedUserId }).session(session);
+        
+        if (!transporter) {
+          throw new ErrorHandler("Transporter profile not found for this user", 404);
+        }
+        
+        // // Check if transporter is already assigned to another vehicle
+        // if (transporter.currentVehicleId) {
+        //   throw new ErrorHandler(`Transporter already has an assigned vehicle: ${transporter.currentVehicleId}`, 400);
+        // }
+        
+        transporter.currentVehicleId = vehicle._id;
+        transporter.lastActiveAt = new Date();
+        
+        // If transporter is available, set to on_route
+        if (transporter.availabilityStatus === "available") {
+          transporter.availabilityStatus = "on_route";
+        }
+        
+        await transporter.save({ session });
+        
+      } else {
+        throw new ErrorHandler(`Cannot assign vehicle to user role: ${userRole}. Only deliverers and transporters can be assigned vehicles.`, 400);
+      }
+
       await session.commitTransaction();
       transactionCommitted = true;
 
+      // ── Fetch updated vehicle with populated fields ─────────────────────────
       const updatedVehicle = await VehicleModel.findById(vehicleId)
         .populate("companyId", "name businessType status")
         .populate("currentBranchId", "name code address status")
         .populate("assignedUserId", "firstName lastName email phone role")
         .lean();
 
+      // ── Fetch updated assigned user profile (for response) ──────────────────
+      let assignedProfile = null;
+      if (userRole === "deliverer") {
+        assignedProfile = await DelivererModel.findOne({ userId: assignedUserId })
+          .select("userId currentVehicleId availabilityStatus lastActiveAt")
+          .lean();
+      } else if (userRole === "transporter") {
+        assignedProfile = await TransporterModel.findOne({ userId: assignedUserId })
+          .select("userId currentVehicleId availabilityStatus lastActiveAt")
+          .lean();
+      }
+
       return res.status(200).json({
         success: true,
         message: "Vehicle assigned successfully",
-        data: updatedVehicle,
+        data: {
+          vehicle: updatedVehicle,
+          assignedUser: {
+            userId: assignedUserId,
+            role: userRole,
+            profile: assignedProfile,
+          },
+        },
       });
+      
     } catch (error: any) {
       if (error.name === "ValidationError") {
         return next(new ErrorHandler(
