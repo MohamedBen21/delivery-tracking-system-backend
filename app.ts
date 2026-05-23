@@ -10,6 +10,7 @@ import managerRouter from "./routes/manager.routes";
 import supervisorRouter from "./routes/supervisor.routes";
 import transporterRouter from "./routes/transporter.routes";
 import delivererRouter from "./routes/deliverer.routes";
+import vehicleRouter from "./routes/vehicle.routes";
 
 app.use(express.json({ limit: "50mb" }));
 
@@ -36,6 +37,8 @@ app.use("/api/manager", managerRouter);
 app.use("/api/supervisor", supervisorRouter);
 app.use("/api/transporter", transporterRouter);
 app.use("/api/deliverer", delivererRouter);
+app.use("/api/vehicle", vehicleRouter);
+
 
 app.all("*", (req: Request, res: Response, next: NextFunction) => {
   const err = new Error(`route ${req.originalUrl} not found :(`) as any;

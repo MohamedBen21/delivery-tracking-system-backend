@@ -3436,21 +3436,16 @@ export class SocketService {
     }).lean();
     if (!route) return;
 
-    // currentStopIndex is the source of truth — completeStop() and failStop()
-    // both increment it, so this always points at the stop needing action.
+    // currentStopIndex IS the queue pointer. completeStop() and failStop()
+    // both advance it, so every stop before it is already done.
+    // The stop it points to is exactly what the deliverer must act on next.
+    // On a requeue, a brand-new stop is appended with the same package and
+    // the cursor moves to it — so stops[currentStopIndex].packageIds[0]
+    // is always the correct package, no filtering needed.
     const stop = route.stops[route.currentStopIndex];
     if (!stop) return;
 
-    // First package at this stop not yet in completed / failed / skipped.
-    // Each stop normally has exactly one package; requeued stops also have one
-    // (the same package re-appended as a fresh stop at the end of the array).
-    const resolvedAtStop = new Set([
-      ...stop.completedPackages.map(String),
-      ...stop.failedPackages.map(String),
-      ...stop.skippedPackages.map(String),
-    ]);
-    const activePackageId =
-      stop.packageIds.find((id) => !resolvedAtStop.has(id.toString())) ?? null;
+    const activePackageId = stop.packageIds[0] ?? null;
     if (!activePackageId) return;
 
     // ── Fetch package document ────────────────────────────────────────────────
@@ -3564,51 +3559,33 @@ export class SocketService {
     }).lean();
     if (!route) return;
 
-    // currentStopIndex is the source of truth — same as deliverer logic.
+    // currentStopIndex IS the queue pointer — same reasoning as deliverer.
+    // All manifests/packages at this stop are pending; the cursor would have
+    // moved past it already if anything here were already settled.
     const hubRoute = isHubRoute(route.type);
     const stop = route.stops[route.currentStopIndex];
     if (!stop) return;
 
-    // ── Pending manifests at this stop (hub routes) ───────────────────────────
-    // Manifests not yet in completedManifests or discrepancyManifests
-    // are still physically on the truck and need to be handed over.
+    // Hub routes: every manifest in stop.manifestIds is still on the truck.
     let pendingManifests: any[] = [];
-    if (hubRoute) {
-      const doneSet = new Set([
-        ...stop.completedManifests.map(String),
-        ...stop.discrepancyManifests.map(String),
-      ]);
-      const pendingIds = (stop.manifestIds ?? []).filter(
-        (id) => !doneSet.has(id.toString()),
-      );
-      if (pendingIds.length > 0) {
-        pendingManifests = await ManifestModel.find({
-          _id: { $in: pendingIds },
-        })
-          .select(
-            "_id manifestCode status packageCount totalDeclaredWeight originBranchId destinationBranchId",
-          )
-          .lean();
-      }
+    if (hubRoute && (stop.manifestIds ?? []).length > 0) {
+      pendingManifests = await ManifestModel.find({
+        _id: { $in: stop.manifestIds },
+      })
+        .select(
+          "_id manifestCode status packageCount totalDeclaredWeight originBranchId destinationBranchId",
+        )
+        .lean();
     }
 
-    // ── Pending packages at this stop (non-hub routes) ────────────────────────
-    // Packages not yet in completedPackages / failedPackages / skippedPackages.
+    // Non-hub routes: every package in stop.packageIds is still in the vehicle.
     let pendingPackages: any[] = [];
-    if (!hubRoute) {
-      const doneSet = new Set([
-        ...stop.completedPackages.map(String),
-        ...stop.failedPackages.map(String),
-        ...stop.skippedPackages.map(String),
-      ]);
-      const pendingIds = stop.packageIds.filter(
-        (id) => !doneSet.has(id.toString()),
-      );
-      if (pendingIds.length > 0) {
-        pendingPackages = await PackageModel.find({ _id: { $in: pendingIds } })
-          .select("_id trackingNumber status destination currentBranchId")
-          .lean();
-      }
+    if (!hubRoute && stop.packageIds.length > 0) {
+      pendingPackages = await PackageModel.find({
+        _id: { $in: stop.packageIds },
+      })
+        .select("_id trackingNumber status destination currentBranchId")
+        .lean();
     }
 
     // ── Live QR session check (hub routes only) ───────────────────────────────

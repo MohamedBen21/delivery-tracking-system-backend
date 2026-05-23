@@ -55,14 +55,14 @@ vehicleRouter.get(
 vehicleRouter.patch(
   "/company/:companyId/vehicle/:vehicleId/assign",
   isAuthenticated,
-  authorizeRoles("manager"),
+  authorizeRoles("manager", "supervisor" , "admin"),
   assignVehicle
 );
 
 vehicleRouter.patch(
   "/company/:companyId/vehicle/:vehicleId/release",
   isAuthenticated,
-  authorizeRoles("manager"),
+  authorizeRoles("manager", "supervisor" , "admin"),
   releaseVehicle
 );
 
@@ -70,7 +70,7 @@ vehicleRouter.patch(
 vehicleRouter.get(
   "/vehicle/:id",
   isAuthenticated,
-  authorizeRoles("manager", "admin", "supervisor"),
+  authorizeRoles("manager", "admin", "supervisor", "transporter", "deliverer"),
   getVehicleById
 );
 
