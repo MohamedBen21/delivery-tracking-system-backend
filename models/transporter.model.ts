@@ -126,6 +126,21 @@ export interface ITransporter extends Document {
   isHubTransporter: boolean;
   isHubToHub: boolean;
   isHubToBranch: boolean;
+  todayCompletionRate: number;
+  efficiencyScore: number;
+
+
+  verify(verifiedBy: mongoose.Types.ObjectId, notes?: string): Promise<ITransporter>;
+  reject(verifiedBy: mongoose.Types.ObjectId, reason: string, notes?: string): Promise<ITransporter>;
+  setAvailability(status: AvailabilityStatus): Promise<ITransporter>;
+  assign(branchId: mongoose.Types.ObjectId, vehicleId: mongoose.Types.ObjectId): Promise<ITransporter>;
+  release(): Promise<ITransporter>;
+  assignHubLine(hubAId: mongoose.Types.ObjectId, hubBId: mongoose.Types.ObjectId): Promise<ITransporter>;
+  assignBranches(branchIds: mongoose.Types.ObjectId[]): Promise<ITransporter>;
+  startTrip(manifestCount: number, totalWeight: number): Promise<ITransporter>;
+  completeTrip(manifestCount: number, isLastStop: boolean): Promise<ITransporter>;
+  resetDailyCounters(): Promise<ITransporter>;
+  setAssignedManifests(count: number): Promise<ITransporter>;
 }
 
 
@@ -460,6 +475,24 @@ transporterSchema.virtual('canAcceptJobs').get(function () {
 });
 
 
+transporterSchema.virtual('efficiencyScore').get(function () {
+  if (this.totalTrips === 0) return 0;
+  const completionRate = (this.completedTrips / this.totalTrips) * 100;
+  const manifestRate   = this.totalManifestsTransported > 0
+    ? Math.min(100, (this.todayTransportedCount / Math.max(1, this.todayAssignedManifests)) * 100)
+    : 100;
+  return Math.round((completionRate + manifestRate) / 2);
+});
+
+
+
+transporterSchema.virtual('todayCompletionRate').get(function () {
+  if (this.todayAssignedManifests + this.todayTransportedCount === 0) return 0;
+  const total = this.todayAssignedManifests + this.todayTransportedCount;
+  return Math.round((this.todayTransportedCount / total) * 100);
+});
+
+
 // ── Instance methods ──────────────────────────────────────────────────────────
 
 transporterSchema.methods.verify = function (
@@ -575,8 +608,9 @@ transporterSchema.methods.completeTrip = function (
 
   if (isLastStop) {
     this.todayCompletedTrips += 1;
-    this.totalTrips += 1;
-    this.completedTrips += 1;
+    
+    // this.totalTrips += 1; //commented because we are already in the socket service and controller.
+    // this.completedTrips += 1;
   }
 
   this.lastActiveAt = new Date();
@@ -654,6 +688,7 @@ transporterSchema.index({ assignedLine: 1 });
 transporterSchema.index({ assignedBranches: 1 });
 transporterSchema.index({ rating: -1 });
 transporterSchema.index({ lastActiveAt: -1 });
+transporterSchema.index({ companyId: 1, currentBranchId: 1, availabilityStatus: 1 });
 
 
 const TransporterModel: Model<ITransporter> = mongoose.model<ITransporter>('Transporter', transporterSchema);

@@ -13,6 +13,7 @@ import VehicleModel, { AssignedUserRole, IVehicleDocuments, VehicleStatus, Vehic
 import { notifyAdminsNewEntityPending, sendSupervisorAccountCreatedNotification, sendSupervisorBlockStatusNotification } from "../services/notification.service";
 import TariffModel, { ITariff, ITariffEntry } from "../models/tariff.model";
 import { WILAYAS, isValidWilayaCode, wilayaName } from "../models/wilayas.constant";
+import TransporterModel from "../models/transporter.model";
 
 
 type CompanyBusinessType = "solo" | "company";
@@ -2864,6 +2865,272 @@ export const deleteTariff = catchAsyncError(
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
+    }
+  },
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ASSIGN HUB LINE  (hub_to_hub transporter)
+//
+//  POST /manager/transporters/:id/assign-hub-line
+//  Body: { hubAId: string, hubBId: string }
+//
+//  Sets this transporter's type to hub_to_hub and records the two main-hub
+//  branch IDs they shuttle between.  The transporter may travel in either
+//  direction; the optimizer decides direction based on available manifests.
+//
+//  Validations:
+//    • Both IDs are valid ObjectIds
+//    • Both IDs are distinct
+//    • Both branches belong to this company
+//    • Both branches are regional_main_hub
+//    • Transporter belongs to this company
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const assignTransporterHubLine = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const managerId = req.user?._id;
+      if (!managerId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      const { id: transporterDocId } = req.params;
+      const { hubAId, hubBId }        = req.body as { hubAId?: string; hubBId?: string };
+
+      // ── Basic input validation ──────────────────────────────────────────────
+      if (!transporterDocId || !mongoose.Types.ObjectId.isValid(transporterDocId.toString())) {
+        return next(new ErrorHandler("Invalid transporter ID.", 400));
+      }
+      if (!hubAId || !mongoose.Types.ObjectId.isValid(hubAId)) {
+        return next(new ErrorHandler("hubAId is required and must be a valid ObjectId.", 400));
+      }
+      if (!hubBId || !mongoose.Types.ObjectId.isValid(hubBId)) {
+        return next(new ErrorHandler("hubBId is required and must be a valid ObjectId.", 400));
+      }
+      if (hubAId === hubBId) {
+        return next(new ErrorHandler("hubAId and hubBId must be different branches.", 400));
+      }
+
+      // ── Manager resolution ─────────────────────────────────────────────────
+      const manager = await ManagerModel.findOne({
+        userId:   managerId,
+        isActive: true,
+      }).lean();
+
+      if (!manager) {
+        return next(new ErrorHandler("Manager profile not found or inactive.", 404));
+      }
+
+      const companyId = manager.companyId;
+
+
+      const transporter = await TransporterModel.findOne({
+        _id:       transporterDocId,
+        companyId,
+      });
+
+      if (!transporter) {
+        return next(
+          new ErrorHandler("Transporter not found or does not belong to your company.", 404),
+        );
+      }
+
+      // ── Validate both hubs exist, belong to this company, are regional_main_hub
+      const hubAOid = new mongoose.Types.ObjectId(hubAId);
+      const hubBOid = new mongoose.Types.ObjectId(hubBId);
+
+      const [hubA, hubB] = await Promise.all([
+        BranchModel.findOne({ _id: hubAOid, companyId, branchType: "regional_main_hub" }).lean(),
+        BranchModel.findOne({ _id: hubBOid, companyId, branchType: "regional_main_hub" }).lean(),
+      ]);
+
+      if (!hubA) {
+        return next(
+          new ErrorHandler(
+            `hubAId (${hubAId}) is not a valid regional_main_hub for this company.`,
+            400,
+          ),
+        );
+      }
+      if (!hubB) {
+        return next(
+          new ErrorHandler(
+            `hubBId (${hubBId}) is not a valid regional_main_hub for this company.`,
+            400,
+          ),
+        );
+      }
+
+      // ── Apply assignment using the model's instance method ─────────────────
+      await transporter.assignHubLine(hubAOid, hubBOid);
+
+      return res.status(200).json({
+        success: true,
+        message: `Transporter assigned to hub line: ${(hubA as any).name} ↔ ${(hubB as any).name}.`,
+        data: {
+          transporterId:   transporter._id,
+          transporterType: "hub_to_hub",
+          assignedLine: [
+            { _id: hubAOid, name: (hubA as any).name, code: (hubA as any).code },
+            { _id: hubBOid, name: (hubB as any).name, code: (hubB as any).code },
+          ],
+        },
+      });
+    } catch (error: any) {
+      // The model's assignHubLine throws a plain Error for bad input
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400,
+          ),
+        );
+      }
+      return next(error);
+    }
+  },
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ASSIGN BRANCHES  (hub_to_branch transporter)
+//
+//  POST /manager/transporters/:id/assign-branches
+//  Body: { branchIds: string[] }
+//
+//  Sets this transporter's type to hub_to_branch and records the set of local
+//  branches they deliver manifests to from their home hub.
+//  The optimizer will only build stops at branches in this list.
+//
+//  Validations:
+//    • branchIds is a non-empty array
+//    • All IDs are valid ObjectIds
+//    • All IDs are distinct
+//    • All branches belong to this company
+//    • All branches are local_branch (not hubs)
+//    • Transporter belongs to this company
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const assignTransporterBranches = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const managerId = req.user?._id;
+      if (!managerId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      const { id: transporterDocId } = req.params;
+      const { branchIds }             = req.body as { branchIds?: string[] };
+
+      // ── Basic input validation ──────────────────────────────────────────────
+      if (!transporterDocId || !mongoose.Types.ObjectId.isValid(transporterDocId.toString())) {
+        return next(new ErrorHandler("Invalid transporter ID.", 400));
+      }
+      if (!branchIds || !Array.isArray(branchIds) || branchIds.length === 0) {
+        return next(new ErrorHandler("branchIds must be a non-empty array.", 400));
+      }
+
+      const invalidIds = branchIds.filter((id) => !mongoose.Types.ObjectId.isValid(id));
+      if (invalidIds.length > 0) {
+        return next(
+          new ErrorHandler(
+            `Invalid branch ID(s): ${invalidIds.join(", ")}`,
+            400,
+          ),
+        );
+      }
+
+      const uniqueBranchIds = [...new Set(branchIds)];
+      if (uniqueBranchIds.length !== branchIds.length) {
+        return next(new ErrorHandler("branchIds must not contain duplicates.", 400));
+      }
+
+      // ── Manager resolution ─────────────────────────────────────────────────
+      const manager = await ManagerModel.findOne({
+        userId:   managerId,
+        isActive: true,
+      }).lean();
+
+      if (!manager) {
+        return next(new ErrorHandler("Manager profile not found or inactive.", 404));
+      }
+
+      const companyId = manager.companyId;
+
+      // ── Validate transporter belongs to this company ────────────────────────
+      const transporter = await TransporterModel.findOne({
+        _id:       transporterDocId,
+        companyId,
+      });
+
+      if (!transporter) {
+        return next(
+          new ErrorHandler("Transporter not found or does not belong to your company.", 404),
+        );
+      }
+
+      // ── Validate all branches exist, belong to this company, are local_branch ─
+      const branchOids = uniqueBranchIds.map((id) => new mongoose.Types.ObjectId(id));
+
+      const foundBranches = await BranchModel.find({
+        _id:       { $in: branchOids },
+        companyId,
+      })
+        .select("_id name code branchType")
+        .lean();
+
+      if (foundBranches.length !== branchOids.length) {
+        const foundIds  = new Set(foundBranches.map((b) => b._id.toString()));
+        const missingIds = uniqueBranchIds.filter((id) => !foundIds.has(id));
+        return next(
+          new ErrorHandler(
+            `The following branch ID(s) were not found in your company: ${missingIds.join(", ")}`,
+            400,
+          ),
+        );
+      }
+
+      const hubBranches = foundBranches.filter(
+        (b) => (b as any).branchType === "regional_main_hub",
+      );
+      if (hubBranches.length > 0) {
+        return next(
+          new ErrorHandler(
+            `The following ID(s) are hubs, not local branches — a hub_to_branch transporter ` +
+            `serves local branches only: ${hubBranches.map((b) => (b as any).code).join(", ")}`,
+            400,
+          ),
+        );
+      }
+
+      // ── Apply assignment using the model's instance method ─────────────────
+      await transporter.assignBranches(branchOids);
+
+      return res.status(200).json({
+        success: true,
+        message: `Transporter assigned to ${branchOids.length} local branch(es).`,
+        data: {
+          transporterId:   transporter._id,
+          transporterType: "hub_to_branch",
+          assignedBranches: foundBranches.map((b) => ({
+            _id:  b._id,
+            name: (b as any).name,
+            code: (b as any).code,
+          })),
+        },
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400,
+          ),
+        );
+      }
+      return next(error);
     }
   },
 );
