@@ -26,8 +26,28 @@ import {
   OptimizerRoute,
   OptimizerWorker,
 } from "./services/optimizerClient";
-import RouteModel from "../models/route.model";
+import RouteModel   from "../models/route.model";
 import PackageModel from "../models/package.model";
+import { haversineKm } from "./algorithms/haversine.util";
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const OSRM_URL             = process.env.OSRM_URL        ?? "http://localhost:5000";
+const OSRM_TIMEOUT_MS      = parseInt(process.env.OSRM_TIMEOUT_MS ?? "15000");
+/**
+ * Road-to-straight-line correction factor for Algeria intercity routes.
+ * Haversine gives the straight-line ("as the crow flies") distance.
+ * Algerian intercity roads average ~40% longer due to terrain and routing.
+ * Applied only when OSRM is unavailable.
+ */
+const HAVERSINE_ROAD_FACTOR = 1.4;
+/** Average intercity driving speed (km/h) for hub-to-hub time estimates. */
+const HUB_TO_HUB_SPEED_KMH  = 90;
+/** Dwell time at destination hub for manifest handover (minutes). */
+const HUB_HUB_DWELL_MINUTES  = 30;
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -482,13 +502,34 @@ async function persistOptimizedRoute(
   const packageIds   = route.packageIds.map((id) => new mongoose.Types.ObjectId(id));
   const manifestIds  = route.manifestIds.map((id) => new mongoose.Types.ObjectId(id));
 
+  // ── Resolve real distance + time for hub_to_hub routes ─────────────────
+  //  Python returns distanceKm=0 / distanceSource="n/a" for hub_to_hub because
+  //  Haversine is too inaccurate for long Algerian hauls and the microservice's
+  //  OSRM instance may not cover 2000 km intercity routes.
+  //  We resolve it here with the full OSRM Route API, falling back to corrected
+  //  Haversine, so the route document is created with correct values immediately.
+  let finalDistanceKm:    number = route.distanceKm;
+  let finalDistanceSource: string = route.distanceSource;
+  let finalEstimatedTime: number = route.estimatedTimeMinutes;
+
+  if (route.routeType === "hub_to_hub" && route.stops.length > 0) {
+    const originCoords = branch.coordinates;            // [lng, lat]
+    const destCoords   = route.stops[0].coordinates;   // [lng, lat]
+
+    const resolved = await _resolveHubToHubDistance(originCoords, destCoords);
+    finalDistanceKm     = resolved.distanceKm;
+    finalDistanceSource = resolved.source;
+    // Drive time + dwell at destination hub
+    finalEstimatedTime  = resolved.driveMinutes + HUB_HUB_DWELL_MINUTES;
+  }
+
   const scheduledEnd = new Date(
-    scheduledStart.getTime() + route.estimatedTimeMinutes * 60_000,
+    scheduledStart.getTime() + finalEstimatedTime * 60_000,
   );
 
   // ── Determine stop dwell time by route type ──────────────────────────────
   const dwellMinutes =
-    route.routeType === "hub_to_hub"    ? 30 :
+    route.routeType === "hub_to_hub"    ? HUB_HUB_DWELL_MINUTES :
     route.routeType === "hub_to_branch" ? 20 :
     route.routeType === "inter_branch"  ? 20 : 8;
 
@@ -563,9 +604,9 @@ async function persistOptimizedRoute(
           ? { assignedTransporterId: workerId }
           : { assignedDelivererId:   workerId }),
         stops,
-        distance:              route.distanceKm,
-        estimatedTime:         route.estimatedTimeMinutes,
-        distanceSource:        route.distanceSource,
+        distance:              parseFloat(finalDistanceKm.toFixed(2)),
+        estimatedTime:         finalEstimatedTime,
+        distanceSource:        finalDistanceSource,
         status:                "assigned",
         currentStopIndex:      0,
         completedStops:        0,
@@ -623,6 +664,56 @@ async function persistOptimizedRoute(
 // ─────────────────────────────────────────────────────────────────────────────
 //  HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  HUB-TO-HUB DISTANCE RESOLVER
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Resolves the real road distance between two hub coordinates.
+ *
+ * Strategy:
+ *   1. Try OSRM Route API  → accurate road distance and duration.
+ *   2. Fall back to Haversine × HAVERSINE_ROAD_FACTOR  → corrected estimate.
+ *
+ * Returns { distanceKm, driveMinutes, source }.
+ * Never throws — always returns a usable value.
+ */
+async function _resolveHubToHubDistance(
+  origin: [number, number],
+  dest:   [number, number],
+): Promise<{ distanceKm: number; driveMinutes: number; source: "osrm" | "haversine" }> {
+  // ── Try OSRM ──────────────────────────────────────────────────────────────
+  try {
+    const coordStr = `${origin[0]},${origin[1]};${dest[0]},${dest[1]}`;
+    const url      = `${OSRM_URL}/route/v1/driving/${coordStr}?overview=false`;
+
+    const controller = new AbortController();
+    const timeout    = setTimeout(() => controller.abort(), OSRM_TIMEOUT_MS);
+
+    const res  = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.code === "Ok" && data.routes?.[0]) {
+        const distanceKm  = data.routes[0].distance / 1000;
+        const driveMinutes = Math.round(data.routes[0].duration / 60);
+        return { distanceKm, driveMinutes, source: "osrm" };
+      }
+    }
+  } catch {
+    // OSRM unavailable or timed out — fall through to Haversine
+  }
+
+  // ── Haversine fallback ────────────────────────────────────────────────────
+  const straightLineKm = haversineKm(origin, dest);
+  const correctedKm    = straightLineKm * HAVERSINE_ROAD_FACTOR;
+  const driveMinutes   = Math.round((correctedKm / HUB_TO_HUB_SPEED_KMH) * 60);
+
+  return { distanceKm: correctedKm, driveMinutes, source: "haversine" };
+}
+
 
 function buildScheduledStart(date: Date): Date {
   const d = new Date(date);
