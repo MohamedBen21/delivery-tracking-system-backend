@@ -12862,3 +12862,281 @@ export const getStopQrInfo = catchAsyncError(
     }
   },
 );
+
+
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  controllers/transporter.controller.ts  (add this export)
+//
+//  GET /transporter/my-routes
+//  Returns today's routes for the authenticated transporter, ordered by
+//  scheduledStart ASC.  Designed for the "Today's Routes" screen.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getMyRoutes = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const transporterUserId = req.user?._id;
+    if (!transporterUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+
+    const transporter = await TransporterModel
+      .findOne({ userId: transporterUserId })
+      .select("_id companyId currentBranchId transporterType assignedLine assignedBranches availabilityStatus isActive isSuspended")
+      .lean();
+
+    if (!transporter) {
+      return next(new ErrorHandler("Transporter profile not found.", 404));
+    }
+    if (!transporter.isActive || transporter.isSuspended) {
+      return next(new ErrorHandler("Transporter account is not active.", 403));
+    }
+
+
+    const now    = new Date();
+    const dayStart = new Date(now);
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const dayEnd = new Date(now);
+    dayEnd.setUTCHours(23, 59, 59, 999);
+
+
+    const routes = await RouteModel
+      .find({
+        assignedTransporterId: transporter._id,
+        status: { $in: ["assigned", "active", "paused"] },
+        $or: [
+
+          { scheduledStart: { $gte: dayStart, $lte: dayEnd } },
+
+          { actualStart: { $gte: dayStart, $lte: dayEnd } },
+        ],
+      })
+      .select(
+        "_id routeNumber type status " +
+        "originBranchId destinationBranchId " +
+        "assignedVehicleId " +
+        "stops " +
+        "distance estimatedTime distanceSource " +
+        "totalManifests " +
+        "scheduledStart scheduledEnd actualStart actualEnd " +
+        "currentStopIndex completedStops "
+      )
+      .sort({ scheduledStart: 1 })   
+      .lean();
+
+    if (routes.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: "No routes assigned for today.",
+        data: {
+          transporterId:    transporter._id,
+          transporterType:  transporter.transporterType ?? "legacy",
+          routes:           [],
+          totalRoutes:      0,
+          canStartFirst:    false,
+        },
+      });
+    }
+
+
+    const branchIds = new Set<string>();
+    for (const r of routes) {
+      if (r.originBranchId)      branchIds.add(r.originBranchId.toString());
+      if (r.destinationBranchId) branchIds.add(r.destinationBranchId.toString());
+    }
+
+    const branches = await BranchModel
+      .find({ _id: { $in: Array.from(branchIds) } })
+      .select("_id name code address.city")
+      .lean();
+
+    const branchMap = new Map(
+      branches.map((b) => [
+        b._id.toString(),
+        { name: (b as any).name, code: (b as any).code, city: (b as any).address?.city ?? "" },
+      ])
+    );
+
+    // ── Determine which route can be started ─────────────────────────────────
+    //  The first route in ascending scheduledStart order that is "assigned"
+    //  is the one the transporter should tap.  All subsequent routes are
+    //  locked until the previous one completes.
+    //
+    //  Special case: if a route is already "active" or "paused", that one
+    //  is the current route — the transporter is mid-trip.
+    const activeOrPausedIdx = routes.findIndex(
+      (r) => r.status === "active" || r.status === "paused"
+    );
+    const currentRouteIndex = activeOrPausedIdx !== -1
+      ? activeOrPausedIdx
+      : routes.findIndex((r) => r.status === "assigned");
+
+
+    const shapedRoutes = routes.map((r, idx) => {
+      const origin = r.originBranchId
+        ? branchMap.get(r.originBranchId.toString())
+        : null;
+      const destination = r.destinationBranchId
+        ? branchMap.get(r.destinationBranchId.toString())
+        : null;
+
+      // Count manifests and packages across stops
+      const totalManifests = (r.stops as any[]).reduce(
+        (sum: number, s: any) => sum + (s.manifestIds?.length ?? 0), 0
+      );
+      const totalPackages = (r.stops as any[]).reduce(
+        (sum: number, s: any) => sum + (s.packageIds?.length ?? 0), 0
+      );
+      const totalWeight = (r.stops as any[]).reduce(
+        (sum: number, s: any) => sum + (s.manifestIds?.length ?? 0) * 0, 0
+        // Weight is on the manifest docs, not denormalized to stops.
+        // The frontend should use route.totalWeight if available, or
+        // fetch from manifest docs.  We expose stop-level manifest IDs
+        // so the frontend can resolve weights client-side if needed.
+      );
+
+      // Is this the route the transporter can act on right now?
+      const isCurrentRoute = idx === currentRouteIndex;
+      // Is this route locked (a previous route must complete first)?
+      const isLocked = idx > currentRouteIndex && currentRouteIndex !== -1;
+      // Already done (shouldn't normally appear since we filter status, but defensive)
+      const isCompleted = r.status === "completed";
+
+      // Build a compact stop list for the frontend
+      const stops = (r.stops as any[]).map((s) => ({
+        stopId:       s._id,
+        order:        s.order,
+        branchId:     s.branchId,
+        branchName:   s.branchId ? branchMap.get(s.branchId.toString())?.name : undefined,
+        address:      s.address,
+        location:     s.location?.coordinates,
+        status:       s.status,
+        manifestIds:  s.manifestIds ?? [],
+        packageIds:   s.packageIds ?? [],
+        manifestCount: s.manifestIds?.length ?? 0,
+        packageCount:  s.packageIds?.length ?? 0,
+        expectedArrival: s.expectedArrival,
+        actualArrival:   s.actualArrival,
+      }));
+
+      // Human-readable label for the route card
+      const originLabel      = origin      ? `${origin.name} (${origin.code})`      : "—";
+      const destinationLabel = destination ? `${destination.name} (${destination.code})` : "—";
+
+      // Status label for the UI
+      let statusLabel: string;
+      let actionHint: string | null = null;
+      if (r.status === "active") {
+        statusLabel = "In progress";
+        actionHint  = "Tap to view route progress";
+      } else if (r.status === "paused") {
+        statusLabel = "Paused";
+        actionHint  = "Tap to resume";
+      } else if (isCurrentRoute) {
+        statusLabel = "Assigned — ready to start";
+        actionHint  = "Tap to start";
+      } else if (isLocked) {
+        const prevRoute = routes[idx - 1];
+        statusLabel = "Assigned";
+        actionHint  = `Complete ${prevRoute?.routeNumber ?? "previous route"} first`;
+      } else {
+        statusLabel = "Assigned";
+      }
+
+      return {
+        routeId:        r._id,
+        routeNumber:    r.routeNumber,
+        routeType:      r.type,
+        status:         r.status,
+        statusLabel,
+        actionHint,
+        isCurrentRoute,
+        isLocked,
+
+
+        originBranchId:      r.originBranchId,
+        destinationBranchId: r.destinationBranchId,
+        originLabel,
+        destinationLabel,
+        originCity:          origin?.city      ?? "",
+        destinationCity:     destination?.city ?? "",
+
+
+        totalManifests,
+        totalPackages,
+        loadUnit: totalManifests > 0 ? "manifests" : "packages",
+
+
+        distanceKm:          r.distance,
+        distanceSource:      r.distanceSource,
+        estimatedTimeMinutes: r.estimatedTime,
+        estimatedTimeLabel:  _formatMinutes(r.estimatedTime),
+
+
+        currentStopIndex: r.currentStopIndex,
+        completedStops:   r.completedStops,
+        totalStops:       (r.stops as any[]).length,
+        progressPercent:  (r.stops as any[]).length > 0
+          ? Math.round((r.currentStopIndex / (r.stops as any[]).length) * 100)
+          : 0,
+
+
+        scheduledStart: r.scheduledStart,
+        scheduledEnd:   r.scheduledEnd,
+        actualStart:    r.actualStart ?? null,
+        actualEnd:      r.actualEnd   ?? null,
+
+
+        stops,
+      };
+    });
+
+
+    const totalManifestsToday = shapedRoutes.reduce(
+      (s, r) => s + r.totalManifests, 0
+    );
+    const totalDistanceToday = shapedRoutes.reduce(
+      (s, r) => s + (r.distanceKm ?? 0), 0
+    );
+    const activeRoute = shapedRoutes.find(
+      (r) => r.status === "active" || r.status === "paused"
+    ) ?? null;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        transporterId:   transporter._id,
+        transporterType: transporter.transporterType ?? "legacy",
+
+
+        totalRoutes:         shapedRoutes.length,
+        totalManifestsToday,
+        totalDistanceToday:  parseFloat(totalDistanceToday.toFixed(1)),
+
+
+        activeRoute,
+        currentRouteIndex,
+        canStartFirst: currentRouteIndex === 0 && routes[0]?.status === "assigned",
+
+        // Full ordered list
+        routes: shapedRoutes,
+      },
+    });
+  }
+);
+
+
+
+
+function _formatMinutes(minutes: number): string {
+  if (!minutes || minutes <= 0) return "—";
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m}min`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}min`;
+}
