@@ -36,6 +36,10 @@ import SupervisorModel from "../models/supervisor.model";
 import freelancerModel from "../models/freelancer.model";
 import { notifyAdminsNewEntityPending, sendManagerAccountCreatedNotification, sendWelcomeNotification } from "../services/notification.service";
 import { geocodeConfirmedPlace, reverseGeocode, searchLocalPlaces } from "../services/geocoding.service";
+import { Coordinates } from "../services/eta.types";
+import { getOSRMRoute } from "../services/osrm.service";
+import { estimateTrafficFactor } from "../services/traffic.service";
+import { fetchWeatherFactor } from "../services/weather.service";
 
 
 
@@ -1699,3 +1703,198 @@ export const reverseGeocodeAddress = catchAsyncError(
     resolvedAddress: deliveryDisplayName?.trim(),
   };
 */
+
+
+
+
+
+// POST /api/eta/calculate
+//
+// Accessible by: deliverers and transporters only (enforced via isDelivererOrTransporter middleware).
+//
+// Body:
+// {
+//   currentLat : number,   // user's current GPS latitude
+//   currentLon : number,   // user's current GPS longitude
+//   destinationLat : number,  // branch hub / branch / delivery address lat
+//   destinationLon : number,  // branch hub / branch / delivery address lon
+// }
+//
+// Returns:
+// {
+//   success          : true,
+//   data: {
+//     baseDurationMin  : number,   // raw OSRM time
+//     finalDurationMin : number,   // smart-adjusted time
+//     adjustmentPercent: number,   // total % added
+//     estimatedArrival : ISO string,
+//     confidence       : 'high' | 'medium' | 'low',
+//     distanceKm       : number,
+//     traffic          : { factor, level, label },
+//     weather          : { factor, severity, label },
+//   }
+// }
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const calculateETA = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return next(new ErrorHandler("Authentication required.", 401));
+    }
+
+    // ── 1. Validate body ─────────────────────────────────────────────
+    const { currentLat, currentLon, destinationLat, destinationLon } =
+      req.body as Record<string, unknown>;
+
+    if (
+      currentLat === undefined ||
+      currentLon === undefined ||
+      destinationLat === undefined ||
+      destinationLon === undefined
+    ) {
+      return next(
+        new ErrorHandler(
+          "currentLat, currentLon, destinationLat and destinationLon are required.",
+          400
+        )
+      );
+    }
+
+    const cLat = parseFloat(String(currentLat));
+    const cLon = parseFloat(String(currentLon));
+    const dLat = parseFloat(String(destinationLat));
+    const dLon = parseFloat(String(destinationLon));
+
+    if (
+      isNaN(cLat) || cLat < -90 || cLat > 90 ||
+      isNaN(cLon) || cLon < -180 || cLon > 180 ||
+      isNaN(dLat) || dLat < -90 || dLat > 90 ||
+      isNaN(dLon) || dLon < -180 || dLon > 180
+    ) {
+      return next(
+        new ErrorHandler("One or more coordinates are out of valid range.", 400)
+      );
+    }
+
+    // ── 2. Role check ────────────────────────────────────────────────
+    const [deliverer, transporter] = await Promise.all([
+      delivererModel.findOne({ userId, isActive: true, isSuspended: false }),
+      transporterModel.findOne({ userId, isActive: true, isSuspended: false }),
+    ]);
+
+    if (!deliverer && !transporter) {
+      return next(
+        new ErrorHandler(
+          "Access denied. Only active deliverers and transporters can request ETA.",
+          403
+        )
+      );
+    }
+
+    // ── 3. Coordinates ───────────────────────────────────────────────
+    const origin: Coordinates = { lat: cLat, lon: cLon };
+    const destination: Coordinates = { lat: dLat, lon: dLon };
+
+    const midpoint: Coordinates = {
+      lat: (cLat + dLat) / 2,
+      lon: (cLon + dLon) / 2,
+    };
+
+    // ── 4. OSRM + environment factors ────────────────────────────────
+    let osrmResult;
+
+    try {
+      osrmResult = await getOSRMRoute(origin, destination);
+    } catch {
+      return next(
+        new ErrorHandler(
+          "Could not calculate route. Make sure coordinates are reachable by road.",
+          502
+        )
+      );
+    }
+
+    const now = new Date();
+
+    const [trafficResult, weatherResult] = await Promise.all([
+      Promise.resolve(estimateTrafficFactor(now)),
+      fetchWeatherFactor(midpoint),
+    ]);
+
+    // ── 5. SPEED-AWARE TRAFFIC MODEL ──────────────────────────────────
+    // Prevent division issues
+    const avgSpeed = osrmResult.avgSpeedKmh || 1;
+
+    // Adaptive reference speed:
+    // - Urban (<15km): 35 km/h (OSRM over-optimistic in cities)
+    // - Mixed/long routes: 55 km/h
+    const isUrban = osrmResult.distance < 15_000;
+
+    const REFERENCE_SPEED = isUrban ? 35 : 55;
+
+    const speedRatio = avgSpeed / REFERENCE_SPEED;
+
+    // Stronger correction for urban routes (cap higher)
+    const speedCorrection = isUrban
+      ? Math.min(1.50, Math.max(0.75, 1 / speedRatio))
+      : Math.min(1.40, Math.max(0.75, 1 / speedRatio));
+
+    const adjustedTrafficFactor =
+      trafficResult.factor * speedCorrection;
+
+    // ── 6. COMBINED EFFECT ───────────────────────────────────────────
+    const rawSum = adjustedTrafficFactor + weatherResult.factor;
+
+    const MAX_ADJUSTMENT = 0.60;
+    const MIN_DURATION_SEC = 60;
+
+    const dampened = Math.min(
+      1 - Math.exp(-rawSum),
+      MAX_ADJUSTMENT
+    );
+
+    const baseSec = Math.max(osrmResult.baseDuration, MIN_DURATION_SEC);
+    const finalSec = baseSec * (1 + dampened);
+
+    const baseDurationMin = Math.round(baseSec / 60);
+    const finalDurationMin = Math.ceil(finalSec / 60);
+
+    const adjustmentPercent = Math.round(dampened * 100);
+
+    const estimatedArrival = new Date(now.getTime() + finalSec * 1000);
+
+    // ── 7. CONFIDENCE SCORE ──────────────────────────────────────────
+    const confidence: "high" | "medium" | "low" =
+      rawSum < 0.10 ? "high" :
+      rawSum < 0.30 ? "medium" :
+      "low";
+
+    // ── 8. RESPONSE ──────────────────────────────────────────────────
+    return res.status(200).json({
+      success: true,
+      data: {
+        baseDurationMin,
+        finalDurationMin,
+        adjustmentPercent,
+        estimatedArrival,
+        confidence,
+        distanceKm: parseFloat((osrmResult.distance / 1000).toFixed(2)),
+        avgSpeedKmh: osrmResult.avgSpeedKmh,
+
+        traffic: {
+          factor: trafficResult.factor,
+          level: trafficResult.level,
+          label: trafficResult.label,
+        },
+
+        weather: {
+          factor: weatherResult.factor,
+          severity: weatherResult.severity,
+          label: weatherResult.label,
+        },
+      },
+    });
+  }
+);

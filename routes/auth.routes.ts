@@ -1,6 +1,7 @@
 import express from "express";
 import {
   activate,
+  calculateETA,
   changeEmail,
   confirmPasswordReset,
   createManager,
@@ -23,7 +24,7 @@ import {
   verifyOTP,
 } from "../controllers/auth.controller";
 import { checkFailedLogins, limiters } from "../middleware/redisRateLimiter";
-import { isAuthenticated } from "../middleware/auth";
+import { authorizeRoles, isAuthenticated } from "../middleware/auth";
 import { profileImageUpload } from "../middleware/uploadProfile";
 
 const authRouter = express.Router();
@@ -77,5 +78,13 @@ authRouter.post("/create-manager", createManager);
 authRouter.get("/geocode/search",   searchAddress);
 authRouter.post("/geocode/resolve", resolvePlace);
 authRouter.get("/geocode/reverse",  reverseGeocodeAddress);
+
+
+authRouter.post(
+  "/calculate-eta",
+  isAuthenticated,
+  authorizeRoles("deliverer", "transporter"),
+  calculateETA,
+);
 
 export default authRouter;
