@@ -10,6 +10,7 @@ import { Server } from 'socket.io';
 import { socketAuth } from './middleware/socketAuth';
 import { SocketService } from './services/socket.service';
 import { startStalePresenceCleanup } from './Cron/cleanupStalePresence.job'; 
+import { resolveCorsOrigin } from "./utils/corsOrigin";
 
 const port = process.env.PORT || 8080;
 
@@ -28,7 +29,7 @@ async function bootstrap() {
 
   const io = new Server(httpServer, {
     cors: {
-      origin: process.env.ORIGIN || "http://localhost:5173",
+      origin: resolveCorsOrigin(process.env.ORIGIN, "http://localhost:5173"),
       methods: ["GET", "POST"],
       credentials: true
     },

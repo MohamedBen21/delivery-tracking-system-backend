@@ -4,6 +4,7 @@ import cors from "cors";
 export const app = express();
 import cookieParser from "cookie-parser";
 import { ErrorMiddleware } from "./middleware/errors";
+import { resolveCorsOrigin } from "./utils/corsOrigin";
 import authRouter from "./routes/auth.routes";
 import freelancerRouter from "./routes/freelancer.routes";
 import managerRouter from "./routes/manager.routes";
@@ -18,8 +19,7 @@ app.use(cookieParser());
 
 app.use(
   cors({
-    // origin: process.env.ORIGIN,
-    origin: process.env.ORIGIN || "http://localhost:3000",
+    origin: resolveCorsOrigin(process.env.ORIGIN, "http://localhost:3000"),
     credentials: true,
   }),
 );
