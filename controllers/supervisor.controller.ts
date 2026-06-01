@@ -23,6 +23,8 @@ import ManifestModel, { ManifestPriority, ManifestStatus } from "../models/manif
 import crypto from "crypto";
 import { generateCashReturnQr, getCashReturnInfo, verifyAndProcessCashReturn } from "../services/cashReturn.service";
 import StopQrSessionModel from "../models/stopQrSession.model";
+import CashierModel, { ICashier } from "../models/cashier.model";
+import LoaderModel, { ILoader } from "../models/loader.model";
 
 
 interface ILocationBody {
@@ -215,7 +217,7 @@ export const createDeliverer = catchAsyncError(
             ...(currentLocation && { currentLocation }),
             ...(documents && { documents }),
             availabilityStatus: "off_duty",
-            verificationStatus: "pending",
+            verificationStatus: "verified",
             isActive: true,
           },
         ],
@@ -410,7 +412,14 @@ export const updateDeliverer = catchAsyncError(
       // if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
 
       if (body.currentLocation) delivererUpdates.currentLocation = body.currentLocation;
-      if (body.documents) delivererUpdates.documents = body.documents;
+
+      if (body.documents) {
+        deliverer.documents = {
+          ...deliverer.documents,
+          ...body.documents,
+        } as any;
+      }
+
       if (body.availabilityStatus) delivererUpdates.availabilityStatus = body.availabilityStatus;
 
 
@@ -470,6 +479,7 @@ export const toggleBlockDeliverer = catchAsyncError(
     try {
       const supervisorUserId = req.user?._id;
       const { branchId, delivererId } = req.params;
+      const { suspensionReason } = req.body as { suspensionReason?: string };
 
       if (!supervisorUserId) {
 
@@ -506,16 +516,28 @@ export const toggleBlockDeliverer = catchAsyncError(
         throw new ErrorHandler("Not authorized to change this deliverer's status", 403);
       }
 
+      // Toggle
       const newIsActive = !deliverer.isActive;
 
-      await Promise.all([
-        deliverer.set({ isActive: newIsActive }).save({ session }),
-        userModel.findByIdAndUpdate(
-          deliverer.userId,
-          { status: newIsActive ? "active" : "suspended" },
-          { session }
-        ),
-      ]);
+      if (newIsActive) {
+        // Activating
+        deliverer.isActive = true;
+        deliverer.isSuspended = false;
+        deliverer.suspensionReason = "";
+      } else {
+        // Suspending
+        deliverer.isActive = false;
+        deliverer.isSuspended = true;
+        deliverer.suspensionReason = suspensionReason || "Suspended by supervisor";
+      }
+
+      await deliverer.save({ session });
+
+      await userModel.findByIdAndUpdate(
+        deliverer.userId,
+        { status: newIsActive ? "active" : "suspended" },
+        { session }
+      );
 
       await session.commitTransaction();
       transactionCommitted = true;
@@ -853,7 +875,7 @@ export const createTransporter = catchAsyncError(
             lastName,
             // imageUrl,
             role: "transporter",
-            status: "pending",
+            status: "active",
           },
         ],
         { session }
@@ -866,7 +888,7 @@ export const createTransporter = catchAsyncError(
             companyId,
             ...(documents && { documents }),
             availabilityStatus: "off_duty",
-            verificationStatus: "pending",
+            verificationStatus: "verified",
             isActive: true,
           },
         ],
@@ -1047,7 +1069,13 @@ export const updateTransporter = catchAsyncError(
       if (body.lastName) userUpdates.lastName = body.lastName;
       // if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
 
-      if (body.documents) transporterUpdates.documents = body.documents;
+      if (body.documents) {
+        transporter.documents = {
+          ...transporter.documents,
+          ...body.documents,
+        } as any;
+      }
+
       if (body.availabilityStatus) transporterUpdates.availabilityStatus = body.availabilityStatus;
       if (body.currentBranchId !== undefined) {
         transporterUpdates.currentBranchId = body.currentBranchId
@@ -1111,9 +1139,12 @@ export const toggleBlockTransporter = catchAsyncError(
     try {
       const managerId = req.user?._id;
       const { companyId, transporterId } = req.params;
+      const { suspensionReason, suspensionEndDate } = req.body as {
+        suspensionReason?: string;
+        suspensionEndDate?: string;
+      };
 
       if (!managerId) {
-
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
@@ -1148,15 +1179,30 @@ export const toggleBlockTransporter = catchAsyncError(
 
       const newIsActive = !transporter.isActive;
 
+      if (newIsActive) {
+        // Activating
+        transporter.isActive = true;
+        transporter.isSuspended = false;
+        transporter.suspensionReason = "";
+        transporter.suspensionEndDate = undefined;
+      } else {
+        // Suspending
+        transporter.isActive = false;
+        transporter.isOnline = false;
+        transporter.isSuspended = true;
+        transporter.suspensionReason = suspensionReason || "Suspended by manager";
+        transporter.suspensionEndDate = suspensionEndDate
+          ? new Date(suspensionEndDate)
+          : undefined;
+      }
 
-      await Promise.all([
-        transporter.set({ isActive: newIsActive }).save({ session }),
-        userModel.findByIdAndUpdate(
-          transporter.userId,
-          { status: newIsActive ? "active" : "suspended" },
-          { session }
-        ),
-      ]);
+      await transporter.save({ session });
+
+      await userModel.findByIdAndUpdate(
+        transporter.userId,
+        { status: newIsActive ? "active" : "suspended" },
+        { session }
+      );
 
       await session.commitTransaction();
       transactionCommitted = true;
@@ -1202,7 +1248,7 @@ export const toggleBlockTransporter = catchAsyncError(
       await session.endSession();
 
     }
-
+    
   }
 );
 
@@ -1211,10 +1257,11 @@ export const toggleBlockTransporter = catchAsyncError(
 //  GET TRANSPORTER BY ID
 export const getTransporter = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-    const managerId = req.user?._id;
+    const userId = req.user?._id;
+    const userRole = req.user?.role;
     const { companyId, transporterId } = req.params;
 
-    if (!managerId) {
+    if (!userId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
 
@@ -1226,26 +1273,36 @@ export const getTransporter = catchAsyncError(
       return next(new ErrorHandler("Invalid transporter ID", 400));
     }
 
-    const [transporter, manager, requestingUser] = await Promise.all([
+    const [transporter, requestingUser] = await Promise.all([
       TransporterModel.findOne({ _id: transporterId, companyId })
         .populate("userId", "firstName lastName email phone username imageUrl role status")
         .populate("companyId", "name businessType status")
         .populate("currentBranchId", "name code address status")
         .populate("currentVehicleId", "type brand model registrationNumber")
         .lean(),
-      ManagerModel.findOne({ userId: managerId, companyId }).lean(),
-      userModel.findById(managerId).select("role").lean(),
+      userModel.findById(userId).select("role").lean(),
     ]);
-
-    const isAdmin = requestingUser?.role === "admin";
-    const isAuthorizedManager = manager && manager.isActive;
-
-    if (!isAdmin && !isAuthorizedManager) {
-      return next(new ErrorHandler("Not authorized to view this transporter", 403));
-    }
 
     if (!transporter) {
       return next(new ErrorHandler("Transporter not found", 404));
+    }
+
+    const isAdmin = requestingUser?.role === "admin";
+
+    let isAuthorized = isAdmin;
+
+    if (!isAuthorized && requestingUser?.role === "manager") {
+      const manager = await ManagerModel.findOne({ userId, companyId }).lean();
+      isAuthorized = !!(manager && manager.isActive);
+    }
+
+    if (!isAuthorized && requestingUser?.role === "supervisor") {
+      const supervisor = await SupervisorModel.findOne({ userId }).lean();
+      isAuthorized = !!(supervisor && supervisor.isActive);
+    }
+
+    if (!isAuthorized) {
+      return next(new ErrorHandler("Not authorized to view this transporter", 403));
     }
 
     return res.status(200).json({
@@ -1260,10 +1317,11 @@ export const getTransporter = catchAsyncError(
 //  GET ALL MY TRANSPORTERS (COMPANY)
 export const getMyTransporters = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-    const managerId = req.user?._id;
+    const userId = req.user?._id;
+    const userRole = req.user?.role;
     const { companyId } = req.params;
 
-    if (!managerId) {
+    if (!userId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
 
@@ -1271,17 +1329,37 @@ export const getMyTransporters = catchAsyncError(
       return next(new ErrorHandler("Invalid company ID", 400));
     }
 
-    const [company, manager] = await Promise.all([
+    const [company, requestingUser] = await Promise.all([
       CompanyModel.findById(companyId).lean(),
-      ManagerModel.findOne({ userId: managerId, companyId }).lean(),
+      userModel.findById(userId).select("role").lean(),
     ]);
 
     if (!company) {
       return next(new ErrorHandler("Company not found", 404));
     }
 
-    if (!manager || !manager.isActive) {
-      return next(new ErrorHandler("You are not an active manager of this company", 403));
+    const isAdmin = requestingUser?.role === "admin";
+
+    let isAuthorized = isAdmin;
+
+    if (!isAuthorized && requestingUser?.role === "manager") {
+      const manager = await ManagerModel.findOne({ userId, companyId }).lean();
+      if (!manager || !manager.isActive) {
+        return next(new ErrorHandler("You are not an active manager of this company", 403));
+      }
+      isAuthorized = true;
+    }
+
+    if (!isAuthorized && requestingUser?.role === "supervisor") {
+      const supervisor = await SupervisorModel.findOne({ userId }).lean();
+      if (!supervisor || !supervisor.isActive) {
+        return next(new ErrorHandler("You are not an active supervisor", 403));
+      }
+      isAuthorized = true;
+    }
+
+    if (!isAuthorized) {
+      return next(new ErrorHandler("Not authorized to view transporters", 403));
     }
 
     const transporterQuery: mongoose.FilterQuery<typeof TransporterModel> = {
@@ -2543,7 +2621,14 @@ export const getMyBranchPackages = catchAsyncError(
     } = req.query;
 
     if (status && typeof status === "string") {
-      packageQuery.status = status;
+      const raw = status.split(",").map((s) => s.trim());
+      const invalid = raw.filter((s) => !PACKAGE_STATUSES.includes(s as PackageStatus));
+      if (invalid.length) {
+        return next(
+          new ErrorHandler(`Invalid status value(s): ${invalid.join(", ")}`, 400),
+        );
+      }
+      packageQuery.status = raw.length === 1 ? raw[0] : { $in: raw };
     }
 
     if (clientId && typeof clientId === "string" && mongoose.Types.ObjectId.isValid(clientId)) {
@@ -3058,7 +3143,8 @@ export const createFreelancer = catchAsyncError(
             lastName,
             // imageUrl,
             role: "freelancer",
-            status: "pending",
+            // status: "pending",
+            status: "active",
           },
         ],
         { session }
@@ -3073,7 +3159,8 @@ export const createFreelancer = catchAsyncError(
             ...(businessName && { businessName }),
             ...(businessType && { businessType }),
             ...(preferredDeliveryType && { preferredDeliveryType }),
-            status: "pending_verification",
+            // status: "pending_verification",
+            status: "active",
           },
         ],
         { session }
@@ -5007,7 +5094,7 @@ export const getBranchPackages = catchAsyncError(
     // needsAttention and isOverdue override any explicit status filter
     if (needsAttention === "true") {
       baseMatch.status = {
-        $in: ["failed_delivery", "damaged", "lost", "on_hold"],
+        $in: ["failed_delivery", "failed_delivery_attempt", "damaged", "lost", "on_hold"],
       };
     }
 
@@ -5031,19 +5118,17 @@ export const getBranchPackages = catchAsyncError(
     // ─────────────────────────────────────────────────────────────────────
     //  PATH A — home delivery: split response
     //
-    //  Runs when deliveryType=home OR no deliveryType filter is given,
-    //  because home packages need their own UI section ("already dispatched").
-    //
-    //  If the caller also passed a status filter we intersect it with each
-    //  branch's own status so one section is simply empty — no extra errors.
+    //  Groups packages by lifecycle stage:
+    //    pendingPackages   → pending, accepted, at_origin_branch
+    //    inTransit         → in_transit_to_branch, manifested
+    //    atBranch          → at_destination_branch
+    //    outForDelivery    → out_for_delivery, failed_delivery, failed_delivery_attempt, rescheduled
+    //    terminal          → delivered, cancelled, returned, lost, damaged, on_hold
     // ─────────────────────────────────────────────────────────────────────
     const isHomePath =
       deliveryType === "home" || deliveryType === undefined;
 
     if (isHomePath) {
-      // Pull the caller's explicit status constraint (if any) so we can
-      // intersect it per-branch, then remove it from the shared match so the
-      // $facet branches can each add their own status condition.
       const callerStatuses: string[] | null = baseMatch.status
         ? baseMatch.status.$in
           ? baseMatch.status.$in
@@ -5051,21 +5136,30 @@ export const getBranchPackages = catchAsyncError(
         : null;
 
       const sharedMatch: Record<string, any> = { ...baseMatch, deliveryType: "home" };
-      delete sharedMatch.status; // each facet branch applies its own
+      delete sharedMatch.status;
 
       /**
-       * Returns a $match stage for a given target status.
-       * If the caller requested specific statuses and targetStatus is not among
-       * them, the stage forces an empty result via an impossible condition.
+       * Returns a $match stage for the given target statuses.
+       * If the caller requested specific statuses, only matching ones pass.
+       * If no caller filter, all target statuses pass.
        */
-      const branchStatusMatch = (
-        targetStatus: string,
-      ): mongoose.PipelineStage.Match => ({
-        $match:
-          callerStatuses === null || callerStatuses.includes(targetStatus)
-            ? { status: targetStatus }
-            : { status: "__no_match__" },
-      });
+      const multiStatusMatch = (targetStatuses: string[]): mongoose.PipelineStage.Match => {
+        if (callerStatuses === null) {
+          return { $match: { status: { $in: targetStatuses } } };
+        }
+        const allowed = targetStatuses.filter((s) => callerStatuses.includes(s));
+        if (allowed.length === 0) {
+          return { $match: { status: "__no_match__" } };
+        }
+        return { $match: { status: allowed.length === 1 ? allowed[0] : { $in: allowed } } };
+      };
+
+      const singleStatusMatch = (targetStatus: string): mongoose.PipelineStage.Match => {
+        if (callerStatuses === null || callerStatuses.includes(targetStatus)) {
+          return { $match: { status: targetStatus } };
+        }
+        return { $match: { status: "__no_match__" } };
+      };
 
       const splitPipeline: mongoose.PipelineStage[] = [
         { $match: sharedMatch },
@@ -5074,31 +5168,67 @@ export const getBranchPackages = catchAsyncError(
         { $sort: { [sortBy]: sortDirection } },
         {
           $facet: {
-            // ── Group 1: waiting at the branch ──────────────────────────
+            // ── Stage 1: At Origin (pending, accepted, at_origin_branch) ──────
+            pendingPackages: [
+              multiStatusMatch(["pending", "accepted", "at_origin_branch"]),
+              { $skip: skip },
+              { $limit: limitNum },
+              PROJECT_STRIP_HISTORY,
+            ],
+            pendingCount: [
+              multiStatusMatch(["pending", "accepted", "at_origin_branch"]),
+              { $count: "count" },
+            ],
+
+            // ── Stage 2: In Transit ──────────────────────────────────────────
+            inTransit: [
+              multiStatusMatch(["in_transit_to_branch", "manifested"]),
+              { $skip: skip },
+              { $limit: limitNum },
+              PROJECT_STRIP_HISTORY,
+            ],
+            inTransitCount: [
+              multiStatusMatch(["in_transit_to_branch", "manifested"]),
+              { $count: "count" },
+            ],
+
+            // ── Stage 3: At Destination Branch ───────────────────────────────
             atBranch: [
-              branchStatusMatch("at_destination_branch"),
+              singleStatusMatch("at_destination_branch"),
               { $skip: skip },
               { $limit: limitNum },
               PROJECT_STRIP_HISTORY,
             ],
             atBranchCount: [
-              branchStatusMatch("at_destination_branch"),
+              singleStatusMatch("at_destination_branch"),
               { $count: "count" },
             ],
 
-            // ── Group 2: already dispatched ─────────────────────────────
+            // ── Stage 4: Out for Delivery + Failed Attempts ──────────────────
             outForDelivery: [
-              branchStatusMatch("out_for_delivery"),
+              multiStatusMatch(["out_for_delivery", "failed_delivery", "failed_delivery_attempt", "rescheduled"]),
               { $skip: skip },
               { $limit: limitNum },
               PROJECT_STRIP_HISTORY,
             ],
             outForDeliveryCount: [
-              branchStatusMatch("out_for_delivery"),
+              multiStatusMatch(["out_for_delivery", "failed_delivery", "failed_delivery_attempt", "rescheduled"]),
               { $count: "count" },
             ],
 
-            // ── Summary across all matched home packages ─────────────────
+            // ── Stage 5: Terminal (completed/finished) ───────────────────────
+            terminal: [
+              multiStatusMatch(["delivered", "cancelled", "returned", "lost", "damaged", "on_hold"]),
+              { $skip: skip },
+              { $limit: limitNum },
+              PROJECT_STRIP_HISTORY,
+            ],
+            terminalCount: [
+              multiStatusMatch(["delivered", "cancelled", "returned", "lost", "damaged", "on_hold"]),
+              { $count: "count" },
+            ],
+
+            // ── Summary ──────────────────────────────────────────────────────
             statusBreakdown: [
               { $group: { _id: "$status", count: { $sum: 1 } } },
             ],
@@ -5124,9 +5254,11 @@ export const getBranchPackages = catchAsyncError(
 
       const [result] = await PackageModel.aggregate(splitPipeline);
 
-      const atBranchTotal: number = result.atBranchCount[0]?.count ?? 0;
-      const outForDeliveryTotal: number =
-        result.outForDeliveryCount[0]?.count ?? 0;
+      const pendingTotal     = result.pendingCount[0]?.count ?? 0;
+      const inTransitTotal   = result.inTransitCount[0]?.count ?? 0;
+      const atBranchTotal    = result.atBranchCount[0]?.count ?? 0;
+      const outForDeliveryTotal = result.outForDeliveryCount[0]?.count ?? 0;
+      const terminalTotal    = result.terminalCount[0]?.count ?? 0;
 
       const statusBreakdown = Object.fromEntries(
         (result.statusBreakdown as { _id: string; count: number }[]).map(
@@ -5145,28 +5277,25 @@ export const getBranchPackages = catchAsyncError(
         success: true,
         deliveryType: "home",
         data: {
+          pending: {
+            packages: result.pendingPackages,
+            pagination: paginationMeta(pendingTotal, pageNum, limitNum),
+          },
+          inTransit: {
+            packages: result.inTransit,
+            pagination: paginationMeta(inTransitTotal, pageNum, limitNum),
+          },
           atBranch: {
             packages: result.atBranch,
-            pagination: {
-              total: atBranchTotal,
-              page: pageNum,
-              limit: limitNum,
-              totalPages: Math.ceil(atBranchTotal / limitNum),
-              hasNextPage: pageNum < Math.ceil(atBranchTotal / limitNum),
-              hasPrevPage: pageNum > 1,
-            },
+            pagination: paginationMeta(atBranchTotal, pageNum, limitNum),
           },
           outForDelivery: {
             packages: result.outForDelivery,
-            pagination: {
-              total: outForDeliveryTotal,
-              page: pageNum,
-              limit: limitNum,
-              totalPages: Math.ceil(outForDeliveryTotal / limitNum),
-              hasNextPage:
-                pageNum < Math.ceil(outForDeliveryTotal / limitNum),
-              hasPrevPage: pageNum > 1,
-            },
+            pagination: paginationMeta(outForDeliveryTotal, pageNum, limitNum),
+          },
+          terminal: {
+            packages: result.terminal,
+            pagination: paginationMeta(terminalTotal, pageNum, limitNum),
           },
         },
         summary: {
@@ -5236,14 +5365,7 @@ export const getBranchPackages = catchAsyncError(
       success: true,
       deliveryType: "branch_pickup",
       data: result.data,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages,
-        hasNextPage: pageNum < totalPages,
-        hasPrevPage: pageNum > 1,
-      },
+      pagination: paginationMeta(total, pageNum, limitNum),
       summary: {
         byStatus: statusBreakdown,
         actionable: counters,
@@ -6173,16 +6295,15 @@ export const getPackageHistory = catchAsyncError(
         _id: packageOid,
         currentBranchId: branchOid,
       })
-        .select("trackingNumber status deliveryType destination companyId")
-        .lean(),
-      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+        .select("trackingNumber status deliveryType destination companyId"),
+      SupervisorModel.findOne({ userId: supervisorUserId,   branchId: new mongoose.Types.ObjectId(branchId.toString())  }).lean(),
     ]);
 
     if (!packageDoc) {
       return next(new ErrorHandler("Package not found in this branch", 404));
     }
 
-    if (!supervisor || !supervisor.isActive || supervisor.branchId.toString() !== branchId.toString()) {
+    if (!supervisor  || !supervisor.isActive || supervisor.branchId.toString() !== branchId.toString()) {
       return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
     }
 
@@ -13140,3 +13261,5 @@ function _formatMinutes(minutes: number): string {
   if (m === 0) return `${h}h`;
   return `${h}h ${m}min`;
 }
+
+

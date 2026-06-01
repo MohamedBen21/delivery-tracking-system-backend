@@ -181,6 +181,15 @@ export const createCompany = catchAsyncError(
       throw new ErrorHandler("User Not found", 400)
       }
 
+
+      if (!manager) {
+
+      throw new ErrorHandler("Manager Not found", 400)
+      }
+
+
+
+
       if (companyWithSameRegistration) {
 
       throw new ErrorHandler(
@@ -205,6 +214,12 @@ export const createCompany = catchAsyncError(
         ],
         { session },
       );
+
+
+
+      manager.companyId = company[0]._id;
+      await manager.save({ session });
+        
 
       await session.commitTransaction();
       transactionCommitted = true;
@@ -506,7 +521,7 @@ export const toggleBlockCompany = catchAsyncError(
 
       const isAdmin = user?.role === "admin";
       const isAuthorizedManager =
-        manager && manager.hasPermission("can_manage_settings");
+        manager && manager.companyId?.toString() === companyId && manager.hasPermission("can_manage_settings");
 
       if (!isAdmin && !isAuthorizedManager) {
 
@@ -523,8 +538,12 @@ export const toggleBlockCompany = catchAsyncError(
         company.status === "active" ? "suspended" : "active";
 
       company.status = newStatus;
+      // console.log("Before save — status:", company.status, "isModified:", company.isModified("status"));
       await company.save({ session });
+      // console.log("After save — status:", company.status);
 
+      await session.commitTransaction();
+      transactionCommitted = true;
 
       const updatedCompany = await CompanyModel.findById(companyId)
         .populate("userId", "firstName lastName email phone username")
@@ -937,6 +956,15 @@ export const createBranch = catchAsyncError(
         { session },
       );
 
+      if (branchType === "local_branch" && parentHubId) {
+
+        await BranchModel.findByIdAndUpdate(
+          parentHubId,
+          { $addToSet: { servesBranches: branch[0]._id } },
+          { session },
+        );
+
+      }
 
       if (servesBranches && servesBranches.length > 0) {
 
@@ -1507,7 +1535,7 @@ export const getBranch = catchAsyncError(
       BranchModel.findOne({ _id: branchId, companyId })
         .populate("companyId", "name businessType status")
         .lean(),
-      ManagerModel.findOne({ userId, companyId }).lean(),
+      ManagerModel.findOne({ userId, companyId }),
       userModel.findById(userId).select("role").lean(),
     ]);
 
@@ -2139,7 +2167,7 @@ export const getBranchSupervisor = catchAsyncError(
         .populate("userId", "firstName lastName email phone username imageUrl")
         .populate("branchId", "name code address status")
         .lean(),
-      ManagerModel.findOne({ userId: managerId, companyId }).lean(),
+      ManagerModel.findOne({ userId: managerId, companyId }),
       userModel.findById(managerId).select("role").lean(),
     ]);
 
@@ -2424,8 +2452,8 @@ export const getMyTariffs = catchAsyncError(
         isActive: true,
       }).lean();
 
-      if (!manager) {
-        return next(new ErrorHandler("Manager profile not found or inactive.", 404));
+      if (!manager || !manager.companyId) {
+        return next(new ErrorHandler("Manager profile not found or inactive or doesnt have a company.", 404));
       }
 
       const tariff = await TariffModel.findByCompany(manager.companyId.toString());
@@ -2497,8 +2525,8 @@ export const getTariffPrice = catchAsyncError(
         isActive: true,
       }).lean();
 
-      if (!manager) {
-        return next(new ErrorHandler("Manager profile not found or inactive.", 404));
+      if (!manager || !manager.companyId) {
+        return next(new ErrorHandler("Manager profile not found or inactive or doesnt have a company.", 404));
       }
 
       const from = parseInt(req.query.from as string);
@@ -2606,8 +2634,8 @@ export const upsertTariff = catchAsyncError(
         isActive: true,
       }).session(session);
 
-      if (!manager) {
-        throw new ErrorHandler("Manager profile not found or inactive.", 404);
+      if (!manager || !manager.companyId) {
+        throw new ErrorHandler("Manager profile not found or inactive or doesnt have a company.", 404);
       }
 
       if (!manager.hasPermission("can_manage_settings")) {
@@ -2731,8 +2759,8 @@ export const bulkUpsertTariffs = catchAsyncError(
         isActive: true,
       }).session(session);
 
-      if (!manager) {
-        throw new ErrorHandler("Manager profile not found or inactive.", 404);
+      if (!manager || !manager.companyId) {
+        throw new ErrorHandler("Manager profile not found or inactive or doesnt have a company.", 404);
       }
 
       if (!manager.hasPermission("can_manage_settings")) {
@@ -3134,3 +3162,10 @@ export const assignTransporterBranches = catchAsyncError(
     }
   },
 );
+
+
+
+//functions from the tarrifs and below are not tested
+//in the supervisor controller i made the verification status and the status active for the create transproter and deliverer and freelancer
+//we can add later a function to activate them / desactivate    
+//missing stats update (in the supervisor and the other controllers) when creating deliverer / transporter / accepting a package by cashier , creating cashier or a loader ..etc
