@@ -1278,3 +1278,286 @@ function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFirst: b
 }
 
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  FUNCTION 1 — Single bordereau
+//  GET /cashier/bordereau/:trackingNumber
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const printSingleBordereau = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const cashierUserId = req.user?._id;
+    const cashier = await resolveCashier(cashierUserId, next);
+    if (!cashier) return;
+
+    const { trackingNumber } = req.params;
+
+    if (!trackingNumber?.toString().trim()) {
+      return next(new ErrorHandler("trackingNumber param is required.", 400));
+    }
+
+    // ── Fetch package ──────────────────────────────────────────────────────────
+    const pkg = await PackageModel.findOne({
+      trackingNumber: trackingNumber.toString().trim().toUpperCase(),
+      originBranchId: cashier.assignedBranchId,   // must belong to this branch
+      status: "pending"
+    }).lean();
+
+    if (!pkg) {
+      return next(
+        new ErrorHandler(
+          `Package ${trackingNumber} not found at your branch or it is already handled.`,
+          404,
+        ),
+      );
+    }
+
+    // ── Fetch sender (freelancer + user) ───────────────────────────────────────
+    const [freelancer, senderUser, originBranch, destinationBranch] =
+      await Promise.all([
+        FreelancerModel.findOne({ userId: pkg.senderId }).lean(),
+        userModel.findById(pkg.senderId).select("firstName lastName phone").lean(),
+        BranchModel.findById(pkg.originBranchId).select("name code address").lean(),
+        pkg.destinationBranchId
+          ? BranchModel.findById(pkg.destinationBranchId).select("name code address").lean()
+          : Promise.resolve(null),
+      ]);
+
+    // ── Assemble bordereau data ────────────────────────────────────────────────
+    const data: IBordereauData = {
+      trackingNumber: pkg.trackingNumber,
+      generatedAt:    new Date(),
+      sender: {
+        businessName: (freelancer as any)?.businessName ?? null,
+        phone:        (senderUser as any)?.phone ?? null,
+        firstName:    (senderUser as any)?.firstName ?? "",
+        lastName:     (senderUser as any)?.lastName  ?? "",
+      },
+      recipient: {
+        name:             pkg.destination.recipientName,
+        phone:            pkg.destination.recipientPhone,
+        alternativePhone: pkg.destination.alternativePhone,
+        address:          pkg.destination.address,
+        city:             pkg.destination.city,
+        state:            pkg.destination.state,
+        postalCode:       pkg.destination.postalCode,
+        notes:            pkg.destination.notes,
+      },
+      pkg: {
+        weight:          pkg.weight,
+        type:            pkg.type,
+        isFragile:       pkg.isFragile,
+        declaredValue:   pkg.declaredValue ?? null,
+        deliveryType:    pkg.deliveryType,
+        deliveryPriority: pkg.deliveryPriority,
+        description:     pkg.description,
+      },
+      originBranch: {
+        name:    (originBranch as any)?.name    ?? "",
+        code:    (originBranch as any)?.code    ?? "",
+        address: (originBranch as any)?.address ?? "",
+      },
+      destinationBranch: destinationBranch
+        ? {
+            name:    (destinationBranch as any).name,
+            code:    (destinationBranch as any).code,
+            address: (destinationBranch as any).address,
+          }
+        : null,
+      totalPrice:    pkg.totalPrice,
+      paymentMethod: (pkg as any).paymentMethod ?? "cod",
+    };
+
+    // ── Stream PDF ─────────────────────────────────────────────────────────────
+    const doc = new PDFDocument({
+      size:    [A6_W, A6_H],
+      margins: { top: 0, bottom: 0, left: 0, right: 0 },
+      info: {
+        Title:  `Bordereau ${pkg.trackingNumber}`,
+        Author: "Delivery System",
+      },
+    });
+
+    res.setHeader("Content-Type",        "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="bordereau-${pkg.trackingNumber}.pdf"`);
+
+    doc.pipe(res);
+    drawBordereau(doc, data, true);
+    doc.end();
+  },
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  FUNCTION 2 — Bulk bordereau (one PDF, one page per package)
+//  POST /cashier/bordereau/bulk
+//  Body: { trackingNumbers: string[] }   (max 100)
+//     OR: { freelancerUserId: string }   (prints all pending for that freelancer)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const printBulkBordereau = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
+    const cashierUserId = req.user?._id;
+    const cashier = await resolveCashier(cashierUserId, next);
+    if (!cashier) return;
+
+    const {
+      trackingNumbers,
+      freelancerUserId,
+    } = req.body as {
+      trackingNumbers?: string[];
+      freelancerUserId?: string;
+    };
+
+    // ── Must supply one of the two selectors ──────────────────────────────────
+    if (!trackingNumbers?.length && !freelancerUserId) {
+      return next(
+        new ErrorHandler(
+          "Provide either 'trackingNumbers' (array) or 'freelancerUserId'.",
+          400,
+        ),
+      );
+    }
+
+    if (trackingNumbers && trackingNumbers.length > 100) {
+      return next(new ErrorHandler("Cannot bulk-print more than 100 bordereaux at once.", 400));
+    }
+
+    // ── Build package query ────────────────────────────────────────────────────
+    const baseFilter: Record<string, any> = {
+      originBranchId: cashier.assignedBranchId,
+    };
+
+    if (trackingNumbers?.length) {
+      baseFilter.trackingNumber = {
+        $in: trackingNumbers.map((t) => t.trim().toUpperCase()),
+      };
+    } else if (freelancerUserId) {
+      if (!mongoose.Types.ObjectId.isValid(freelancerUserId)) {
+        return next(new ErrorHandler("Invalid freelancerUserId.", 400));
+      }
+      baseFilter.senderId   = new mongoose.Types.ObjectId(freelancerUserId);
+      baseFilter.senderType = "freelancer";
+      // Print pending + cashier_claimed packages for this freelancer
+      baseFilter.status     = { $in: ["pending", 
+        // "cashier_claimed"
+    ] };
+    }
+
+    const packages = await PackageModel.find(baseFilter)
+      .sort({ createdAt: 1 })
+      .lean();
+
+    if (!packages.length) {
+      return next(new ErrorHandler("No packages found matching your criteria.", 404));
+    }
+
+    // ── Pre-fetch all branches & senders in two round-trips ───────────────────
+    const branchIds = [
+      ...new Set([
+        ...packages.map((p) => p.originBranchId?.toString()),
+        ...packages
+          .filter((p) => p.destinationBranchId)
+          .map((p) => p.destinationBranchId!.toString()),
+      ]),
+    ].filter(Boolean);
+
+    const senderIds = [...new Set(packages.map((p) => p.senderId?.toString()))];
+
+    const [branches, senderUsers, freelancers] = await Promise.all([
+      BranchModel.find({ _id: { $in: branchIds } })
+        .select("name code address")
+        .lean(),
+      userModel.find({ _id: { $in: senderIds } })
+        .select("firstName lastName phone")
+        .lean(),
+      FreelancerModel.find({ userId: { $in: senderIds } })
+        .select("userId businessName")
+        .lean(),
+    ]);
+
+    // Build lookup maps for O(1) access
+    const branchMap    = new Map(branches.map((b)    => [(b as any)._id.toString(), b]));
+    const userMap      = new Map(senderUsers.map((u)  => [(u as any)._id.toString(), u]));
+    const freelancerMap = new Map(freelancers.map((f) => [(f as any).userId.toString(), f]));
+
+    // ── Stream bulk PDF ────────────────────────────────────────────────────────
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const filename  = freelancerUserId
+      ? `bordereaux-freelancer-${timestamp}.pdf`
+      : `bordereaux-bulk-${timestamp}.pdf`;
+
+    const doc = new PDFDocument({
+      size:    [A6_W, A6_H],
+      margins: { top: 0, bottom: 0, left: 0, right: 0 },
+      info: {
+        Title:  `Bordereaux groupés — ${packages.length} colis`,
+        Author: "Delivery System",
+      },
+    });
+
+    res.setHeader("Content-Type",        "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+
+    doc.pipe(res);
+
+    packages.forEach((pkg, index) => {
+      const originBranch      = branchMap.get(pkg.originBranchId?.toString())      ?? null;
+      const destinationBranch = pkg.destinationBranchId
+        ? branchMap.get(pkg.destinationBranchId.toString()) ?? null
+        : null;
+      const senderUser   = userMap.get(pkg.senderId?.toString())       ?? null;
+      const freelancer   = freelancerMap.get(pkg.senderId?.toString()) ?? null;
+
+      const data: IBordereauData = {
+        trackingNumber: pkg.trackingNumber,
+        generatedAt:    new Date(),
+        sender: {
+          businessName: (freelancer as any)?.businessName ?? null,
+          phone:        (senderUser as any)?.phone        ?? null,
+          firstName:    (senderUser as any)?.firstName    ?? "",
+          lastName:     (senderUser as any)?.lastName     ?? "",
+        },
+        recipient: {
+          name:             pkg.destination.recipientName,
+          phone:            pkg.destination.recipientPhone,
+          alternativePhone: pkg.destination.alternativePhone,
+          address:          pkg.destination.address,
+          city:             pkg.destination.city,
+          state:            pkg.destination.state,
+          postalCode:       pkg.destination.postalCode,
+          notes:            pkg.destination.notes,
+        },
+        pkg: {
+          weight:           pkg.weight,
+          type:             pkg.type,
+          isFragile:        pkg.isFragile,
+          declaredValue:    pkg.declaredValue ?? null,
+          deliveryType:     pkg.deliveryType,
+          deliveryPriority: pkg.deliveryPriority,
+          description:      pkg.description,
+        },
+        originBranch: {
+          name:    (originBranch as any)?.name    ?? "",
+          code:    (originBranch as any)?.code    ?? "",
+          address: (originBranch as any)?.address ?? "",
+        },
+        destinationBranch: destinationBranch
+          ? {
+              name:    (destinationBranch as any).name,
+              code:    (destinationBranch as any).code,
+              address: (destinationBranch as any).address,
+            }
+          : null,
+        totalPrice:    pkg.totalPrice,
+        paymentMethod: (pkg as any).paymentMethod ?? "cod",
+      };
+
+      drawBordereau(doc, data, index === 0);
+    });
+
+    doc.end();
+  },
+);
