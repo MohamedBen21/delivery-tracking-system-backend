@@ -73,6 +73,18 @@ export const register = catchAsyncError(
         password,
       });
 
+      const pendingUser = new User({
+        firstName,
+        lastName,
+        phone: normalizedPhone,
+        email,
+        passwordHash: password,
+        status: "pending",
+        role: "client",
+      });
+
+      await pendingUser.save();
+
       const activation_url = `http://localhost:3000/activation/${activation_token}`;
 
       const templatePath = path.join(__dirname, "..", "mails", "activate.ejs");
@@ -91,6 +103,11 @@ export const register = catchAsyncError(
           subject: `Activation Code is ${activation_number}`,
           html,
         });
+      } else {
+        await User.deleteOne({ _id: pendingUser._id });
+        return next(
+          new ErrorHandler("Activation email template is missing.", 500),
+        );
       }
 
       res.cookie("activation_token", activation_token, {
@@ -260,28 +277,56 @@ export const activate = catchAsyncError(
  
     const normalizedPhone = User.normalizePhone(phone);
 
-    const existingUser = await User.findOne({ 
-      $or: [
-        { email },
-        { phone: normalizedPhone }
-      ]
+    const existingUser = await User.findOne({
+      $or: [{ email }, { phone: normalizedPhone }],
     });
 
-    if (existingUser) {
+    if (!existingUser) {
+      const newUser = new User({
+        firstName,
+        lastName,
+        phone,
+        email,
+        passwordHash: password,
+        status: "active",
+        role: "client",
+      });
+
+      await newUser.save();
+
+      res.clearCookie("activation_token", {
+        httpOnly: true,
+        sameSite: "none",
+        secure: true,
+      });
+
+      sendWelcomeNotification(
+        newUser._id.toString(),
+        newUser.firstName,
+        newUser.role
+      ).catch(error => {
+
+        console.error('Welcome notification sending failed:', error);
+
+      });
+
+      await sendToken(newUser, 200, res, "Account activated successfully");
+      return;
+    }
+
+    if (existingUser.status === "active") {
       return next(new ErrorHandler("User already exists", 400));
     }
- 
-    const newUser = new User({
-      firstName,
-      lastName,
-      phone,
-      email,
-      passwordHash: password,
-      status: "active",
-      role: "client",
-    });
- 
-    await newUser.save();
+
+    existingUser.firstName = firstName;
+    existingUser.lastName = lastName;
+    existingUser.phone = phone;
+    existingUser.email = tokenEmail;
+    existingUser.passwordHash = password;
+    existingUser.status = "active";
+    existingUser.role = "client";
+
+    await existingUser.save();
  
     res.clearCookie("activation_token", {
       httpOnly: true,
@@ -292,16 +337,16 @@ export const activate = catchAsyncError(
     
 
     sendWelcomeNotification(
-      newUser._id.toString(),
-      newUser.firstName,
-      newUser.role
+      existingUser._id.toString(),
+      existingUser.firstName,
+      existingUser.role
     ).catch(error => {
 
       console.error('Welcome notification sending failed:', error);
 
     });
 
-    await sendToken(newUser, 200, res, "Account activated successfully");
+    await sendToken(existingUser, 200, res, "Account activated successfully");
   },
 );
 

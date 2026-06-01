@@ -11,6 +11,8 @@ import supervisorRouter from "./routes/supervisor.routes";
 import transporterRouter from "./routes/transporter.routes";
 import delivererRouter from "./routes/deliverer.routes";
 import vehicleRouter from "./routes/vehicle.routes";
+import cashierRouter from "./routes/cashier.routes";
+import loaderRouter from "./routes/loader.routes";
 
 app.use(express.json({ limit: "50mb" }));
 
@@ -38,6 +40,8 @@ app.use("/api/supervisor", supervisorRouter);
 app.use("/api/transporter", transporterRouter);
 app.use("/api/deliverer", delivererRouter);
 app.use("/api/vehicle", vehicleRouter);
+app.use("/api/cashier", cashierRouter);
+app.use("/api/loader", loaderRouter);
 
 
 app.all("*", (req: Request, res: Response, next: NextFunction) => {
