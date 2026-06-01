@@ -7,12 +7,20 @@ let mongoConnection: typeof mongoose | null = null;
 
 export async function connectMongo(): Promise<typeof mongoose> {
   if (mongoConnection) return mongoConnection;
-
+  
   try {
-    const conn = await mongoose.connect(
-      dbKeys.mongodb.uri,
-      dbConf.mongodb.options,
-    );
+    const conn = await mongoose.connect(dbKeys.mongodb.uri, dbConf.mongodb.options);
+
+    // ← add these
+    mongoose.connection.on("error", (err) => {
+      Logger.error("MongoDB connection error:", err);
+      mongoConnection = null;
+    });
+
+    mongoose.connection.on("disconnected", () => {
+      Logger.warn("MongoDB disconnected, clearing connection cache");
+      mongoConnection = null;
+    });
 
     Logger.info("✅ MongoDB connected");
     mongoConnection = conn;
