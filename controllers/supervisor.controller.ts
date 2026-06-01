@@ -13263,3 +13263,404 @@ function _formatMinutes(minutes: number): string {
 }
 
 
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PERMISSIONS = {
+  MANAGE_DELIVERERS: "can_manage_deliverers",
+  MANAGE_USERS: "can_manage_users",
+  MANAGE_CASHIERS: "can_manage_cashiers",
+  MANAGE_LOADERS: "can_manage_loaders",
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns the requesting user's role from the DB (one query, shared by all handlers).
+ * Used to decide whether the caller is an admin, manager, or supervisor.
+ */
+async function getRequestingUserRole(
+  userId: mongoose.Types.ObjectId,
+  session?: mongoose.ClientSession
+): Promise<string | undefined> {
+  const query = userModel.findById(userId).select("role");
+  if (session) query.session(session);
+  const user = await query.lean();
+  return user?.role;
+}
+
+/**
+ * Verifies the caller is either an admin or an active supervisor with the given
+ * permission for the given branch. Throws ErrorHandler on failure.
+ */
+async function assertSupervisorOrAdmin(
+  requestingUserId: mongoose.Types.ObjectId,
+  branchId: string,
+  permission: string,
+  session: mongoose.ClientSession
+): Promise<void> {
+  const [role, supervisor] = await Promise.all([
+    getRequestingUserRole(requestingUserId, session),
+    SupervisorModel.findOne({ userId: requestingUserId, branchId }).session(session),
+  ]);
+
+  if (role === "admin") return; // admins bypass all checks
+
+  if (!supervisor || !supervisor.isActive) {
+    throw new ErrorHandler("You are not an active supervisor of this branch", 403);
+  }
+
+  if (!supervisor.hasPermission(permission as any)) {
+    throw new ErrorHandler("You don't have permission to perform this action", 403);
+  }
+}
+
+/**
+ * Generates an auto-incrementing-style employee code that is unique in the DB.
+ * Format: PREFIX-BRANCHCODE-NNNNNN (e.g. CSH-ALG-000042)
+ * Falls back to a random suffix after 20 collision attempts.
+ */
+async function generateEmployeeCode(
+  prefix: "CSH" | "LDR",
+  branchCode: string,
+  Model: typeof CashierModel | typeof LoaderModel
+): Promise<string> {
+  const tag = branchCode.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 5) || "BR";
+
+  // Try 20 times with random numbers
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const random = Math.floor(100000 + Math.random() * 900000); // 6 digits
+    const code = `${prefix}-${tag}-${random}`;
+
+    const existing = await (Model as any).findOne({ employeeCode: code }).lean();
+    if (!existing) return code;
+  }
+
+  // Fallback: use timestamp + random for absolute uniqueness
+  const timestamp = Date.now().toString().slice(-6);
+  const random = Math.floor(1000 + Math.random() * 9000);
+  const fallbackCode = `${prefix}-${tag}-${timestamp}${random}`;
+  
+  const existing = await (Model as any).findOne({ employeeCode: fallbackCode }).lean();
+  if (!existing) return fallbackCode;
+  
+  throw new ErrorHandler("Failed to generate a unique employee code, please try again", 500);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  CASHIER CONTROLLERS
+// ═════════════════════════════════════════════════════════════════════════════
+
+interface ICreateCashier {
+  email: string;
+  phone: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+  counterNumber?: number;
+  notes?: string;
+}
+
+interface IUpdateCashier {
+  email?: string;
+  phone?: string;
+  firstName?: string;
+  lastName?: string;
+  counterNumber?: number;
+  notes?: string;
+  // password?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CREATE CASHIER
+// ─────────────────────────────────────────────────────────────────────────────
+export const createCashier = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const requestingUserId = req.user?._id;
+      const { branchId } = req.params;
+
+      if (!requestingUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      const {
+        email,
+        phone,
+        password,
+        firstName,
+        lastName,
+        counterNumber,
+        notes,
+      } = req.body as ICreateCashier;
+
+      // ── required fields ──────────────────────────────────────────────────
+      if (!email || !phone || !password || !firstName || !lastName) {
+        return next(
+          new ErrorHandler(
+            "email, phone, password, firstName, and lastName are required",
+            400
+          )
+        );
+      }
+
+      if (
+        typeof email !== "string" ||
+        typeof phone !== "string" ||
+        typeof password !== "string" ||
+        typeof firstName !== "string" ||
+        typeof lastName !== "string"
+      ) {
+        return next(new ErrorHandler("All required fields must be strings", 400));
+      }
+
+      if (counterNumber !== undefined && (typeof counterNumber !== "number" || counterNumber < 1 || counterNumber > 99)) {
+        return next(new ErrorHandler("counterNumber must be a number between 1 and 99", 400));
+      }
+
+      // ── auth & branch checks ─────────────────────────────────────────────
+      const branch = await BranchModel.findById(branchId).session(session);
+
+      await assertSupervisorOrAdmin(requestingUserId, branchId.toString(), PERMISSIONS.MANAGE_DELIVERERS, session);
+
+      if (!branch) {
+        throw new ErrorHandler("Branch not found", 404);
+      }
+
+      if (branch.status !== "active") {
+        throw new ErrorHandler("Cannot create cashier for an inactive branch", 400);
+      }
+
+      // ── uniqueness checks ────────────────────────────────────────────────
+      let normalizedPhone: string;
+      try {
+        normalizedPhone = userModel.normalizePhone(phone);
+      } catch (error: any) {
+        throw new ErrorHandler(error.message, 400);
+      }
+
+      const [existingEmail, existingPhone] = await Promise.all([
+        userModel.findOne({ email }).session(session),
+        userModel.findOne({ phone: normalizedPhone }).session(session),
+      ]);
+
+      if (existingEmail) throw new ErrorHandler("Email already exists", 400);
+      if (existingPhone) throw new ErrorHandler("Phone number already exists", 400);
+
+      // ── employee code ────────────────────────────────────────────────────
+      const employeeCode = await generateEmployeeCode("CSH", branch.code || branch.name, CashierModel);
+
+      // ── create user + cashier ────────────────────────────────────────────
+      const [user] = await userModel.create(
+        [
+          {
+            email,
+            phone: normalizedPhone,
+            passwordHash: password,
+            firstName,
+            lastName,
+            role: "cashier",
+            status: "active",
+          },
+        ],
+        { session }
+      );
+
+      const [cashier] = await CashierModel.create(
+        [
+          {
+            userId: user._id,
+            companyId: branch.companyId,
+            assignedBranchId: branchId,
+            employeeCode,
+            status: "active",
+            ...(counterNumber !== undefined && { counterNumber }),
+            ...(notes && { notes }),
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      const populated = await CashierModel.findById(cashier._id)
+        .populate("userId", "firstName lastName email phone imageUrl role status")
+        .populate("assignedBranchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(201).json({
+        success: true,
+        message: "Cashier created successfully",
+        data: populated,
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400
+          )
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  UPDATE CASHIER
+// ─────────────────────────────────────────────────────────────────────────────
+export const updateCashier = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const requestingUserId = req.user?._id;
+      const { branchId, cashierId } = req.params;
+
+      if (!requestingUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!cashierId || !mongoose.Types.ObjectId.isValid(cashierId.toString())) {
+        return next(new ErrorHandler("Invalid cashier ID", 400));
+      }
+
+      const body = req.body as IUpdateCashier;
+
+      if (Object.keys(body).length === 0) {
+        return next(new ErrorHandler("No update data provided", 400));
+      }
+
+      // ── type guards ──────────────────────────────────────────────────────
+      if (body.email !== undefined && typeof body.email !== "string") {
+        return next(new ErrorHandler("email must be a string", 400));
+      }
+
+      if (body.phone !== undefined && typeof body.phone !== "string") {
+        return next(new ErrorHandler("phone must be a string", 400));
+      }
+
+      // if (body.password !== undefined && typeof body.password !== "string") {
+      //   return next(new ErrorHandler("password must be a string", 400));
+      // }
+
+      if (
+        body.counterNumber !== undefined &&
+        (typeof body.counterNumber !== "number" || body.counterNumber < 1 || body.counterNumber > 99)
+      ) {
+        return next(new ErrorHandler("counterNumber must be a number between 1 and 99", 400));
+      }
+
+      // ── fetch cashier + auth ─────────────────────────────────────────────
+      const cashier = await CashierModel.findOne({ _id: cashierId, assignedBranchId: branchId }).session(session);
+
+      await assertSupervisorOrAdmin(requestingUserId, branchId.toString(), PERMISSIONS.MANAGE_DELIVERERS, session);
+
+      if (!cashier) {
+        throw new ErrorHandler("Cashier not found in this branch", 404);
+      }
+
+      // ── uniqueness checks for changed fields ─────────────────────────────
+      const duplicateChecks: Promise<any>[] = [];
+
+      if (body.email) {
+        duplicateChecks.push(
+          userModel.findOne({ email: body.email, _id: { $ne: cashier.userId } }).session(session)
+        );
+      }
+
+      if (body.phone) {
+        let normalizedPhone: string;
+        try {
+          normalizedPhone = userModel.normalizePhone(body.phone);
+        } catch (error: any) {
+          throw new ErrorHandler(error.message, 400);
+        }
+        duplicateChecks.push(
+          userModel.findOne({ phone: normalizedPhone, _id: { $ne: cashier.userId } }).session(session)
+        );
+      }
+
+      const duplicateResults = await Promise.all(duplicateChecks);
+      if (duplicateResults.some((r) => r !== null)) {
+        throw new ErrorHandler("Email or phone already exists", 400);
+      }
+
+      // ── apply updates ────────────────────────────────────────────────────
+      const userUpdates: Record<string, any> = {};
+      const cashierUpdates: Record<string, any> = {};
+
+      if (body.email) userUpdates.email = body.email;
+      if (body.phone) {
+        userUpdates.phone = userModel.normalizePhone(body.phone);
+      }
+      // if (body.password) userUpdates.passwordHash = body.password;
+      if (body.firstName) userUpdates.firstName = body.firstName;
+      if (body.lastName) userUpdates.lastName = body.lastName;
+
+      if (body.counterNumber !== undefined) cashierUpdates.counterNumber = body.counterNumber;
+      if (body.notes !== undefined) cashierUpdates.notes = body.notes;
+
+      if (Object.keys(userUpdates).length > 0) {
+        await userModel.findByIdAndUpdate(cashier.userId, { $set: userUpdates }, { session });
+      }
+
+      Object.assign(cashier, cashierUpdates);
+      await cashier.save({ session });
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      const populated = await CashierModel.findById(cashierId)
+        .populate("userId", "firstName lastName email phone imageUrl role status")
+        .populate("assignedBranchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: "Cashier updated successfully",
+        data: populated,
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400
+          )
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  }
+);
+
