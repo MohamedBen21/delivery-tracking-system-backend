@@ -2,6 +2,7 @@ import { Router } from "express";
 import { isAuthenticated, authorizeRoles } from "../middleware/auth";
 import {
   cancelPackage,
+  createPackage,
   getMeFreelancer,
   getMyActivePackages,
   getMyDeliveredPackages,
@@ -22,5 +23,7 @@ freelancerRouter.get("/packages/active", getMyActivePackages);
 freelancerRouter.get("/packages/delivered", getMyDeliveredPackages);
 freelancerRouter.get("/packages/:packageId/track", trackPackage);
 freelancerRouter.patch("/packages/:packageId/cancel", cancelPackage);
+
+freelancerRouter.post("/packages" , createPackage);
 
 export default freelancerRouter;

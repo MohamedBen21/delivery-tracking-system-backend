@@ -8,7 +8,7 @@ import {
   getCompanyVehicles,
   assignVehicle,
   releaseVehicle,
-  getVehicleById,
+  // getVehicleById,
 } from "../controllers/vehicle.controller";
 
 const vehicleRouter = express.Router();
@@ -67,11 +67,11 @@ vehicleRouter.patch(
 );
 
 
-vehicleRouter.get(
-  "/vehicle/:id",
-  isAuthenticated,
-  authorizeRoles("manager", "admin", "supervisor", "transporter", "deliverer"),
-  getVehicleById
-);
+// vehicleRouter.get(
+//   "/vehicle/:id",
+//   isAuthenticated,
+//   authorizeRoles("manager", "admin", "supervisor", "transporter", "deliverer"),
+//   getVehicleById
+// );
 
 export default vehicleRouter;

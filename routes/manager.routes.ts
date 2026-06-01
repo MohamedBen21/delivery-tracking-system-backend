@@ -73,10 +73,12 @@ managerRouter.post(
   ...managerOrAdmin,
   assignTransporter,
 );
-managerRouter.get("/companies/:companyId/transporters", ...managerOrAdmin, getMyTransporters);
+
+managerRouter.get("/companies/:companyId/transporters", isAuthenticated, authorizeRoles("admin" , "manager" ), getMyTransporters);
 managerRouter.get(
   "/companies/:companyId/transporters/:transporterId",
-  ...managerOrAdmin,
+  isAuthenticated,
+  authorizeRoles("admin" , "manager" , "supervisor"),
   getTransporter,
 );
 managerRouter.patch(
