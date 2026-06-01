@@ -14272,3 +14272,300 @@ export const updateLoader = catchAsyncError(
   }
 );
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  TOGGLE BLOCK / ACTIVATE LOADER
+// ─────────────────────────────────────────────────────────────────────────────
+export const toggleBlockLoader = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const requestingUserId = req.user?._id;
+      const { branchId, loaderId } = req.params;
+
+      if (!requestingUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!loaderId || !mongoose.Types.ObjectId.isValid(loaderId.toString())) {
+        return next(new ErrorHandler("Invalid loader ID", 400));
+      }
+
+      const [loader, requestingRole] = await Promise.all([
+        LoaderModel.findOne({ _id: loaderId, assignedBranchId: branchId }).session(session),
+        getRequestingUserRole(requestingUserId, session),
+      ]);
+
+      if (!loader) {
+        throw new ErrorHandler("Loader not found in this branch", 404);
+      }
+
+      // Auth: admin, manager of this company, or active supervisor of this branch
+      let isAuthorized = requestingRole === "admin";
+
+      if (!isAuthorized && requestingRole === "manager") {
+        const manager = await ManagerModel.findOne({
+          userId: requestingUserId,
+          companyId: loader.companyId,
+        }).session(session);
+        isAuthorized = !!(manager && manager.isActive && manager.hasPermission(PERMISSIONS.MANAGE_USERS));
+      }
+
+      if (!isAuthorized && requestingRole === "supervisor") {
+        const supervisor = await SupervisorModel.findOne({
+          userId: requestingUserId,
+          branchId,
+        }).session(session);
+        isAuthorized = !!(
+          supervisor &&
+          supervisor.isActive &&
+          supervisor.hasPermission(PERMISSIONS.MANAGE_DELIVERERS)
+        );
+      }
+
+      if (!isAuthorized) {
+        throw new ErrorHandler("Not authorized to change this loader's status", 403);
+      }
+
+      // Toggle: active → suspended, suspended/inactive → active
+      let newStatus: "active" | "suspended";
+
+      if (loader.status === "active") {
+        newStatus = "suspended";
+      } else if (loader.status === "suspended" || loader.status === "inactive") {
+        newStatus = "active";
+      } else {
+        throw new ErrorHandler("Cannot toggle loader with current status", 400);
+      }
+
+      loader.status = newStatus;
+      await loader.save({ session });
+
+      await userModel.findByIdAndUpdate(
+        loader.userId,
+        { status: newStatus === "active" ? "active" : "suspended" },
+        { session }
+      );
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      const updated = await LoaderModel.findById(loaderId)
+        .populate("userId", "firstName lastName email phone imageUrl role status")
+        .populate("assignedBranchId", "name code address status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: `Loader ${newStatus === "active" ? "activated" : "suspended"} successfully`,
+        data: { loader: updated, status: newStatus },
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400
+          )
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET LOADER BY ID
+// ─────────────────────────────────────────────────────────────────────────────
+export const getLoader = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const requestingUserId = req.user?._id;
+    const { branchId, loaderId } = req.params;
+
+    if (!requestingUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    if (!loaderId || !mongoose.Types.ObjectId.isValid(loaderId.toString())) {
+      return next(new ErrorHandler("Invalid loader ID", 400));
+    }
+
+    const [loader, requestingUser] = await Promise.all([
+      LoaderModel.findOne({ _id: loaderId, assignedBranchId: branchId })
+        .populate("userId", "firstName lastName email phone imageUrl role status")
+        .populate("assignedBranchId", "name code address status")
+        .populate("temporaryBranchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean(),
+      userModel.findById(requestingUserId).select("role").lean(),
+    ]);
+
+    if (!loader) {
+      return next(new ErrorHandler("Loader not found in this branch", 404));
+    }
+
+    const isAdmin = requestingUser?.role === "admin";
+    let isAuthorized = isAdmin;
+
+    if (!isAuthorized && requestingUser?.role === "supervisor") {
+      const supervisor = await SupervisorModel.findOne({ userId: requestingUserId, branchId }).lean();
+      isAuthorized = !!(supervisor && supervisor.isActive);
+    }
+
+    if (!isAuthorized && requestingUser?.role === "manager") {
+      const manager = await ManagerModel.findOne({
+        userId: requestingUserId,
+        companyId: (loader as any).companyId?._id ?? (loader as any).companyId,
+      }).lean();
+      isAuthorized = !!(manager && manager.isActive);
+    }
+
+    if (!isAuthorized) {
+      return next(new ErrorHandler("Not authorized to view this loader", 403));
+    }
+
+    return res.status(200).json({ success: true, data: loader });
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET ALL LOADERS OF A BRANCH
+// ─────────────────────────────────────────────────────────────────────────────
+export const getMyLoaders = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const requestingUserId = req.user?._id;
+    const { branchId } = req.params;
+
+    if (!requestingUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    const [branch, requestingUser] = await Promise.all([
+      BranchModel.findById(branchId).lean(),
+      userModel.findById(requestingUserId).select("role").lean(),
+    ]);
+
+    if (!branch) {
+      return next(new ErrorHandler("Branch not found", 404));
+    }
+
+    // Auth check
+    const isAdmin = requestingUser?.role === "admin";
+    let isAuthorized = isAdmin;
+
+    if (!isAuthorized && requestingUser?.role === "supervisor") {
+      const supervisor = await SupervisorModel.findOne({ userId: requestingUserId, branchId }).lean();
+      if (!supervisor || !supervisor.isActive) {
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+      isAuthorized = true;
+    }
+
+    if (!isAuthorized && requestingUser?.role === "manager") {
+      const manager = await ManagerModel.findOne({
+        userId: requestingUserId,
+        companyId: branch.companyId,
+      }).lean();
+      if (!manager || !manager.isActive) {
+        return next(new ErrorHandler("You are not an active manager of this company", 403));
+      }
+      isAuthorized = true;
+    }
+
+    if (!isAuthorized) {
+      return next(new ErrorHandler("Not authorized to view loaders of this branch", 403));
+    }
+
+    // ── query filters ────────────────────────────────────────────────────────
+    const loaderQuery: mongoose.FilterQuery<ILoader> = {
+      $or: [
+        { assignedBranchId: branchId },
+        { temporaryBranchId: branchId },
+      ],
+    };
+
+    const { status, isCheckedIn, search } = req.query;
+
+    if (status && typeof status === "string") {
+      loaderQuery.status = status;
+    }
+
+    if (isCheckedIn !== undefined) {
+      if (isCheckedIn === "true") {
+        loaderQuery["currentShift.status"] = "active";
+      } else if (isCheckedIn === "false") {
+        loaderQuery.$and = [
+          ...(loaderQuery.$and || []),
+          {
+            $or: [
+              { currentShift: null },
+              { "currentShift.status": { $ne: "active" } },
+            ],
+          },
+        ];
+      }
+    }
+
+    if (search && typeof search === "string") {
+      const matchingUsers = await userModel
+        .find({
+          $or: [
+            { firstName: { $regex: search, $options: "i" } },
+            { lastName: { $regex: search, $options: "i" } },
+            { email: { $regex: search, $options: "i" } },
+          ],
+        })
+        .select("_id")
+        .lean();
+
+      const matchingUserIds = matchingUsers.map((u) => u._id);
+
+      const searchOrClauses: any[] = [
+        { employeeCode: { $regex: search, $options: "i" } },
+      ];
+      if (matchingUserIds.length > 0) {
+        searchOrClauses.push({ userId: { $in: matchingUserIds } });
+      }
+
+      loaderQuery.$and = [
+        ...(loaderQuery.$and || []),
+        { $or: searchOrClauses },
+      ];
+
+      if (matchingUserIds.length === 0 && !/^LDR-/i.test(search)) {
+        return res.status(200).json({ success: true, count: 0, data: [] });
+      }
+    }
+
+    const loaders = await LoaderModel.find(loaderQuery)
+      .populate("userId", "firstName lastName email phone imageUrl role status")
+      .populate("assignedBranchId", "name code address status")
+      .populate("temporaryBranchId", "name code address status")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: loaders.length,
+      data: loaders,
+    });
+  }
+);
