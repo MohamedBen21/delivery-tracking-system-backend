@@ -10,6 +10,7 @@ import BranchModel from "../models/branch.model";
 import userModel from "../models/user.model";
 import PaymentModel from "../models/payment.model";
 import { sendPackageAcceptedIntoBranchNotification, sendPackageClaimedByCashierNotification, sendPackageRejectedByCashierNotification } from "../services/notification.service";
+import PDFDocument from "pdfkit";
 
 
 async function resolveCashier(
@@ -1004,5 +1005,276 @@ return res.status(200).json({
 });
 },
 );
+
+
+
+
+
+
+
+
+
+// ─── Shared helper: build a single bordereau page into a PDFDocument ─────────
+//
+//  Layout (A6 thermal-friendly, 105 × 148 mm):
+//
+//  ┌─────────────────────────────────────────┐
+//  │  COMPANY LOGO / NAME          [BARCODE] │
+//  │─────────────────────────────────────────│
+//  │  SENDER                                 │
+//  │  Business name · phone                  │
+//  │─────────────────────────────────────────│
+//  │  RECIPIENT                              │
+//  │  Name · phone · address                 │
+//  │─────────────────────────────────────────│
+//  │  PACKAGE DETAILS                        │
+//  │  Type · Weight · Priority · Fragile     │
+//  │─────────────────────────────────────────│
+//  │  ORIGIN BRANCH → DESTINATION BRANCH    │
+//  │─────────────────────────────────────────│
+//  │  PRICE  [amount]   METHOD  [method]     │
+//  │  DELIVERY TYPE  [home / branch_pickup]  │
+//  └─────────────────────────────────────────┘
+
+interface IBordereauData {
+  trackingNumber:    string;
+  generatedAt:       Date;
+  sender: {
+    businessName:    string | null;
+    phone:           string | null;
+    firstName:       string;
+    lastName:        string;
+  };
+  recipient: {
+    name:            string;
+    phone:           string;
+    alternativePhone?: string;
+    address:         string;
+    city:            string;
+    state:           string;
+    postalCode?:     string;
+    notes?:          string;
+  };
+  pkg: {
+    weight:          number;
+    type:            string;
+    isFragile:       boolean;
+    declaredValue:   number | null;
+    deliveryType:    string;
+    deliveryPriority: string;
+    description?:    string;
+  };
+  originBranch: {
+    name:  string;
+    code:  string;
+    address?: string;
+  };
+  destinationBranch: {
+    name:  string;
+    code:  string;
+    address?: string;
+  } | null;
+  totalPrice:    number;
+  paymentMethod: string;
+}
+
+// A6 in points  (1 mm = 2.8346 pt)
+const A6_W = 297.6;   // 105 mm
+const A6_H = 419.5;   // 148 mm
+
+const COLORS = {
+  primary:   "#1a237e",   // deep navy
+  accent:    "#0d47a1",
+  light:     "#e8eaf6",
+  separator: "#c5cae9",
+  text:      "#212121",
+  muted:     "#757575",
+  white:     "#ffffff",
+  danger:    "#b71c1c",
+};
+
+function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFirst: boolean) {
+
+  if (!isFirst) doc.addPage();
+
+  const M   = 14;           // margin
+  const W   = A6_W - M * 2; // usable width
+  let   y   = M;
+
+  // ── helper lambdas ──────────────────────────────────────────────────────────
+
+  const line = (yPos: number) => {
+    doc
+      .moveTo(M, yPos)
+      .lineTo(A6_W - M, yPos)
+      .strokeColor(COLORS.separator)
+      .lineWidth(0.5)
+      .stroke();
+  };
+
+  const sectionHeader = (label: string, yPos: number): number => {
+    doc
+      .rect(M, yPos, W, 13)
+      .fill(COLORS.primary);
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(6.5)
+      .fillColor(COLORS.white)
+      .text(label.toUpperCase(), M + 4, yPos + 3.5, { width: W - 8 });
+    return yPos + 13;
+  };
+
+  const row = (label: string, value: string, yPos: number, indent = 0): number => {
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(6)
+      .fillColor(COLORS.muted)
+      .text(label, M + indent, yPos, { width: 60 });
+    doc
+      .font("Helvetica")
+      .fontSize(6.5)
+      .fillColor(COLORS.text)
+      .text(value, M + indent + 62, yPos, { width: W - 62 - indent });
+    return yPos + 10;
+  };
+
+  // ── HEADER BAND ─────────────────────────────────────────────────────────────
+  doc.rect(0, 0, A6_W, 28).fill(COLORS.primary);
+
+  // Company label
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(10)
+    .fillColor(COLORS.white)
+    .text("BORDEREAU D'EXPÉDITION", M, 6, { width: W * 0.65 });
+
+  doc
+    .font("Helvetica")
+    .fontSize(6)
+    .fillColor(COLORS.light)
+    .text(`Généré le ${data.generatedAt.toLocaleDateString("fr-DZ")}`, M, 18, { width: W * 0.65 });
+
+  // Tracking number block (top-right)
+  const tnX = M + W * 0.67;
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(7.5)
+    .fillColor(COLORS.white)
+    .text(data.trackingNumber, tnX, 8, { width: W * 0.33, align: "right" });
+
+  y = 34;
+
+  // ── FRAGILE BADGE ───────────────────────────────────────────────────────────
+  if (data.pkg.isFragile) {
+    doc
+      .rect(M, y, W, 11)
+      .fill(COLORS.danger);
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(7)
+      .fillColor(COLORS.white)
+      .text("⚠  FRAGILE — HANDLE WITH CARE", M + 4, y + 2.5, { width: W - 8, align: "center" });
+    y += 14;
+  }
+
+  // ── SENDER SECTION ──────────────────────────────────────────────────────────
+  y = sectionHeader("Expéditeur (Sender)", y);
+  y += 3;
+  const senderName = data.sender.businessName
+    ? `${data.sender.businessName} (${data.sender.firstName} ${data.sender.lastName})`
+    : `${data.sender.firstName} ${data.sender.lastName}`;
+  y = row("Nom / Name",  senderName,             y);
+  y = row("Téléphone",   data.sender.phone ?? "", y);
+  y += 2;
+  line(y); y += 4;
+
+  // ── RECIPIENT SECTION ───────────────────────────────────────────────────────
+  y = sectionHeader("Destinataire (Recipient)", y);
+  y += 3;
+  y = row("Nom / Name",  data.recipient.name,  y);
+  y = row("Téléphone",   data.recipient.phone, y);
+  if (data.recipient.alternativePhone) {
+    y = row("Tél. alt.", data.recipient.alternativePhone, y);
+  }
+  y = row("Adresse",     data.recipient.address, y);
+  y = row("Ville/État",  `${data.recipient.city}, ${data.recipient.state}`, y);
+  if (data.recipient.postalCode) {
+    y = row("Code postal", data.recipient.postalCode, y);
+  }
+  if (data.recipient.notes) {
+    y = row("Notes livr.", data.recipient.notes, y);
+  }
+  y += 2;
+  line(y); y += 4;
+
+  // ── PACKAGE SECTION ─────────────────────────────────────────────────────────
+  y = sectionHeader("Détails du Colis (Package)", y);
+  y += 3;
+  y = row("Type",        data.pkg.type.charAt(0).toUpperCase() + data.pkg.type.slice(1), y);
+  y = row("Poids",       `${data.pkg.weight} kg`,    y);
+  y = row("Priorité",    data.pkg.deliveryPriority.replace("_", " "), y);
+  if (data.pkg.description) {
+    y = row("Description", data.pkg.description, y);
+  }
+  if (data.pkg.declaredValue) {
+    y = row("Valeur décl.", `${data.pkg.declaredValue.toLocaleString("fr-DZ")} DA`, y);
+  }
+  y += 2;
+  line(y); y += 4;
+
+  // ── ROUTE SECTION ───────────────────────────────────────────────────────────
+  y = sectionHeader("Itinéraire (Route)", y);
+  y += 3;
+  y = row("Origine",       `[${data.originBranch.code}] ${data.originBranch.name}`, y);
+  if (data.destinationBranch) {
+    y = row("Destination", `[${data.destinationBranch.code}] ${data.destinationBranch.name}`, y);
+  } else {
+    y = row("Destination",  "Livraison à domicile", y);
+  }
+  y = row("Mode livr.",    data.pkg.deliveryType === "home" ? "À domicile" : "Retrait agence", y);
+  y += 2;
+  line(y); y += 4;
+
+  // ── PAYMENT FOOTER BAND ─────────────────────────────────────────────────────
+  const footerH = 22;
+  const footerY = A6_H - footerH - 2;
+
+  doc.rect(M, footerY, W, footerH).fill(COLORS.light);
+
+  // Price block
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(11)
+    .fillColor(COLORS.primary)
+    .text(`${data.totalPrice.toLocaleString("fr-DZ")} DA`, M + 4, footerY + 5, { width: W * 0.45 });
+
+  // Payment method block
+  const methodLabel = data.paymentMethod.toUpperCase().replace("_", " ");
+  doc
+    .rect(M + W * 0.5, footerY + 3, W * 0.5, 16)
+    .fill(COLORS.primary);
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(7)
+    .fillColor(COLORS.white)
+    .text(methodLabel, M + W * 0.5 + 4, footerY + 7.5, { width: W * 0.5 - 8, align: "center" });
+
+  // ── BARCODE TEXT (CODE128 stub — real barcode needs barcode128 pkg) ──────────
+  // In production swap this block for an actual barcode image rendered with
+  // the `bwip-js` package:  bwip.toBuffer({ bcid:'code128', text: trackingNumber })
+  // then doc.image(barcodeBuffer, x, y, { width, height })
+  doc
+    .rect(M, footerY - 16, W, 14)
+    .fill(COLORS.white)
+    .stroke();
+  doc
+    .font("Courier-Bold")
+    .fontSize(8)
+    .fillColor(COLORS.text)
+    .text(`||||| ${data.trackingNumber} |||||`, M + 2, footerY - 13, {
+      width: W - 4,
+      align: "center",
+    });
+}
 
 
