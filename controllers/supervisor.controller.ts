@@ -13664,3 +13664,287 @@ export const updateCashier = catchAsyncError(
   }
 );
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  TOGGLE BLOCK / ACTIVATE CASHIER
+// ─────────────────────────────────────────────────────────────────────────────
+export const toggleBlockCashier = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const requestingUserId = req.user?._id;
+      const { branchId, cashierId } = req.params;
+
+      if (!requestingUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!cashierId || !mongoose.Types.ObjectId.isValid(cashierId.toString())) {
+        return next(new ErrorHandler("Invalid cashier ID", 400));
+      }
+
+      const [cashier, requestingRole] = await Promise.all([
+        CashierModel.findOne({ _id: cashierId, assignedBranchId: branchId }).session(session),
+        getRequestingUserRole(requestingUserId, session),
+      ]);
+
+      if (!cashier) {
+        throw new ErrorHandler("Cashier not found in this branch", 404);
+      }
+
+      // Auth: admin, manager of this company, or active supervisor of this branch
+      let isAuthorized = requestingRole === "admin";
+
+      if (!isAuthorized && requestingRole === "manager") {
+        const manager = await ManagerModel.findOne({
+          userId: requestingUserId,
+          companyId: cashier.companyId,
+        }).session(session);
+        isAuthorized = !!(manager && manager.isActive && manager.hasPermission(PERMISSIONS.MANAGE_USERS));
+      }
+
+      if (!isAuthorized && requestingRole === "supervisor") {
+        const supervisor = await SupervisorModel.findOne({
+          userId: requestingUserId,
+          branchId,
+        }).session(session);
+        isAuthorized = !!(
+          supervisor &&
+          supervisor.isActive &&
+          supervisor.hasPermission(PERMISSIONS.MANAGE_DELIVERERS)
+        );
+      }
+
+      if (!isAuthorized) {
+        throw new ErrorHandler("Not authorized to change this cashier's status", 403);
+      }
+
+      // Toggle: active → suspended, suspended/inactive → active
+      let newStatus: "active" | "suspended";
+
+      if (cashier.status === "active") {
+        newStatus = "suspended";
+      } else if (cashier.status === "suspended" || cashier.status === "inactive") {
+        newStatus = "active";
+      } else {
+        throw new ErrorHandler("Cannot toggle cashier with current status", 400);
+      }
+
+      cashier.status = newStatus;
+      await cashier.save({ session });
+
+      await userModel.findByIdAndUpdate(
+        cashier.userId,
+        { status: newStatus === "active" ? "active" : "suspended" },
+        { session }
+      );
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      const updated = await CashierModel.findById(cashierId)
+        .populate("userId", "firstName lastName email phone imageUrl role status")
+        .populate("assignedBranchId", "name code address status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: `Cashier ${newStatus === "active" ? "activated" : "suspended"} successfully`,
+        data: { cashier: updated, status: newStatus },
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400
+          )
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET CASHIER BY ID
+// ─────────────────────────────────────────────────────────────────────────────
+export const getCashier = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const requestingUserId = req.user?._id;
+    const { branchId, cashierId } = req.params;
+
+    if (!requestingUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    if (!cashierId || !mongoose.Types.ObjectId.isValid(cashierId.toString())) {
+      return next(new ErrorHandler("Invalid cashier ID", 400));
+    }
+
+    const [cashier, requestingUser] = await Promise.all([
+      CashierModel.findOne({ _id: cashierId, assignedBranchId: branchId })
+        .populate("userId", "firstName lastName email phone imageUrl role status")
+        .populate("assignedBranchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean(),
+      userModel.findById(requestingUserId).select("role").lean(),
+    ]);
+
+    if (!cashier) {
+      return next(new ErrorHandler("Cashier not found in this branch", 404));
+    }
+
+    // Auth: admin, or active supervisor/manager of this branch/company
+    const isAdmin = requestingUser?.role === "admin";
+    let isAuthorized = isAdmin;
+
+    if (!isAuthorized && requestingUser?.role === "supervisor") {
+      const supervisor = await SupervisorModel.findOne({ userId: requestingUserId, branchId }).lean();
+      isAuthorized = !!(supervisor && supervisor.isActive);
+    }
+
+    if (!isAuthorized && requestingUser?.role === "manager") {
+      const manager = await ManagerModel.findOne({
+        userId: requestingUserId,
+        companyId: (cashier as any).companyId?._id ?? (cashier as any).companyId,
+      }).lean();
+      isAuthorized = !!(manager && manager.isActive);
+    }
+
+    if (!isAuthorized) {
+      return next(new ErrorHandler("Not authorized to view this cashier", 403));
+    }
+
+    return res.status(200).json({ success: true, data: cashier });
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET ALL CASHIERS OF A BRANCH
+// ─────────────────────────────────────────────────────────────────────────────
+export const getMyCashiers = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const requestingUserId = req.user?._id;
+    const { branchId } = req.params;
+
+    if (!requestingUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+      return next(new ErrorHandler("Invalid branch ID", 400));
+    }
+
+    const [branch, requestingUser] = await Promise.all([
+      BranchModel.findById(branchId).lean(),
+      userModel.findById(requestingUserId).select("role").lean(),
+    ]);
+
+    if (!branch) {
+      return next(new ErrorHandler("Branch not found", 404));
+    }
+
+    // Auth check
+    const isAdmin = requestingUser?.role === "admin";
+    let isAuthorized = isAdmin;
+
+    if (!isAuthorized && requestingUser?.role === "supervisor") {
+      const supervisor = await SupervisorModel.findOne({ userId: requestingUserId, branchId }).lean();
+      if (!supervisor || !supervisor.isActive) {
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+      isAuthorized = true;
+    }
+
+    if (!isAuthorized && requestingUser?.role === "manager") {
+      const manager = await ManagerModel.findOne({
+        userId: requestingUserId,
+        companyId: branch.companyId,
+      }).lean();
+      if (!manager || !manager.isActive) {
+        return next(new ErrorHandler("You are not an active manager of this company", 403));
+      }
+      isAuthorized = true;
+    }
+
+    if (!isAuthorized) {
+      return next(new ErrorHandler("Not authorized to view cashiers of this branch", 403));
+    }
+
+    // ── query filters ────────────────────────────────────────────────────────
+    const cashierQuery: mongoose.FilterQuery<ICashier> = {
+      assignedBranchId: branchId,
+    };
+
+    const { status, isCheckedIn, search } = req.query;
+
+    if (status && typeof status === "string") {
+      cashierQuery.status = status;
+    }
+
+    // Filter by whether cashier is currently on an active shift
+    if (isCheckedIn !== undefined) {
+      if (isCheckedIn === "true") {
+        cashierQuery["currentShift.status"] = "active";
+      } else if (isCheckedIn === "false") {
+        cashierQuery.$or = [
+          { currentShift: null },
+          { "currentShift.status": { $ne: "active" } },
+        ];
+      }
+    }
+
+    if (search && typeof search === "string") {
+      // Search by employeeCode directly, or look up by name/email on the user side
+      const matchingUsers = await userModel
+        .find({
+          $or: [
+            { firstName: { $regex: search, $options: "i" } },
+            { lastName: { $regex: search, $options: "i" } },
+            { email: { $regex: search, $options: "i" } },
+          ],
+        })
+        .select("_id")
+        .lean();
+
+      const matchingUserIds = matchingUsers.map((u) => u._id);
+
+      cashierQuery.$or = [
+        ...(matchingUserIds.length > 0 ? [{ userId: { $in: matchingUserIds } }] : []),
+        { employeeCode: { $regex: search, $options: "i" } },
+      ];
+
+      // If nothing can match, short-circuit
+      if (matchingUserIds.length === 0 && !/^CSH-/i.test(search)) {
+        return res.status(200).json({ success: true, count: 0, data: [] });
+      }
+    }
+
+    const cashiers = await CashierModel.find(cashierQuery)
+      .populate("userId", "firstName lastName email phone imageUrl role status")
+      .populate("assignedBranchId", "name code address status")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: cashiers.length,
+      data: cashiers,
+    });
+  }
+);
