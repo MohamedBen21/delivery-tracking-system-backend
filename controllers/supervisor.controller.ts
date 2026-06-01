@@ -13948,3 +13948,327 @@ export const getMyCashiers = catchAsyncError(
     });
   }
 );
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  LOADER CONTROLLERS
+// ═════════════════════════════════════════════════════════════════════════════
+
+interface ICreateLoader {
+  email: string;
+  phone: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+  notes?: string;
+}
+
+interface IUpdateLoader {
+  email?: string;
+  phone?: string;
+  firstName?: string;
+  lastName?: string;
+  temporaryBranchId?: string | null;
+  notes?: string;
+  // password?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CREATE LOADER
+// ─────────────────────────────────────────────────────────────────────────────
+export const createLoader = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const requestingUserId = req.user?._id;
+      const { branchId } = req.params;
+
+      if (!requestingUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      const {
+        email,
+        phone,
+        password,
+        firstName,
+        lastName,
+        notes,
+      } = req.body as ICreateLoader;
+
+      // ── required fields ──────────────────────────────────────────────────
+      if (!email || !phone || !password || !firstName || !lastName) {
+        return next(
+          new ErrorHandler(
+            "email, phone, password, firstName, and lastName are required",
+            400
+          )
+        );
+      }
+
+      if (
+        typeof email !== "string" ||
+        typeof phone !== "string" ||
+        typeof password !== "string" ||
+        typeof firstName !== "string" ||
+        typeof lastName !== "string"
+      ) {
+        return next(new ErrorHandler("All required fields must be strings", 400));
+      }
+
+      // ── auth & branch checks ─────────────────────────────────────────────
+      await assertSupervisorOrAdmin(requestingUserId, branchId.toString(), PERMISSIONS.MANAGE_DELIVERERS, session);
+
+      const branch = await BranchModel.findById(branchId).session(session);
+
+      if (!branch) {
+        throw new ErrorHandler("Branch not found", 404);
+      }
+
+      if (branch.status !== "active") {
+        throw new ErrorHandler("Cannot create loader for an inactive branch", 400);
+      }
+
+      // ── uniqueness checks ────────────────────────────────────────────────
+      let normalizedPhone: string;
+      try {
+        normalizedPhone = userModel.normalizePhone(phone);
+      } catch (error: any) {
+        throw new ErrorHandler(error.message, 400);
+      }
+
+      const [existingEmail, existingPhone] = await Promise.all([
+        userModel.findOne({ email }).session(session),
+        userModel.findOne({ phone: normalizedPhone }).session(session),
+      ]);
+
+      if (existingEmail) throw new ErrorHandler("Email already exists", 400);
+      if (existingPhone) throw new ErrorHandler("Phone number already exists", 400);
+
+      // ── employee code ────────────────────────────────────────────────────
+      const employeeCode = await generateEmployeeCode("LDR", branch.code || branch.name, LoaderModel);
+
+      // ── create user + loader ─────────────────────────────────────────────
+      const [user] = await userModel.create(
+        [
+          {
+            email,
+            phone: normalizedPhone,
+            passwordHash: password,
+            firstName,
+            lastName,
+            role: "loader",
+            status: "active",
+          },
+        ],
+        { session }
+      );
+
+      const [loader] = await LoaderModel.create(
+        [
+          {
+            userId: user._id,
+            companyId: branch.companyId,
+            assignedBranchId: branchId,
+            employeeCode,
+            status: "active",
+            ...(notes && { notes }),
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      const populated = await LoaderModel.findById(loader._id)
+        .populate("userId", "firstName lastName email phone imageUrl role status")
+        .populate("assignedBranchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(201).json({
+        success: true,
+        message: "Loader created successfully",
+        data: populated,
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400
+          )
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  UPDATE LOADER
+// ─────────────────────────────────────────────────────────────────────────────
+export const updateLoader = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const requestingUserId = req.user?._id;
+      const { branchId, loaderId } = req.params;
+
+      if (!requestingUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!loaderId || !mongoose.Types.ObjectId.isValid(loaderId.toString())) {
+        return next(new ErrorHandler("Invalid loader ID", 400));
+      }
+
+      const body = req.body as IUpdateLoader;
+
+      if (Object.keys(body).length === 0) {
+        return next(new ErrorHandler("No update data provided", 400));
+      }
+
+      // ── type guards ──────────────────────────────────────────────────────
+      if (body.email !== undefined && typeof body.email !== "string") {
+        return next(new ErrorHandler("email must be a string", 400));
+      }
+
+      if (body.phone !== undefined && typeof body.phone !== "string") {
+        return next(new ErrorHandler("phone must be a string", 400));
+      }
+
+      // if (body.password !== undefined && typeof body.password !== "string") {
+      //   return next(new ErrorHandler("password must be a string", 400));
+      // }
+
+      if (
+        body.temporaryBranchId !== undefined &&
+        body.temporaryBranchId !== null &&
+        !mongoose.Types.ObjectId.isValid(body.temporaryBranchId)
+      ) {
+        return next(new ErrorHandler("Invalid temporaryBranchId", 400));
+      }
+
+      // ── fetch loader + auth ──────────────────────────────────────────────
+      const loader = await LoaderModel.findOne({
+        _id: loaderId,
+        assignedBranchId: branchId,
+      }).session(session);
+
+      await assertSupervisorOrAdmin(requestingUserId, branchId.toString(), PERMISSIONS.MANAGE_DELIVERERS, session);
+
+      if (!loader) {
+        throw new ErrorHandler("Loader not found in this branch", 404);
+      }
+
+      // If a temporaryBranchId is given, verify that branch exists
+      if (body.temporaryBranchId) {
+        const tempBranch = await BranchModel.findById(body.temporaryBranchId).session(session);
+        if (!tempBranch) {
+          throw new ErrorHandler("Temporary branch not found", 404);
+        }
+      }
+
+      // ── uniqueness checks ────────────────────────────────────────────────
+      const duplicateChecks: Promise<any>[] = [];
+
+      if (body.email) {
+        duplicateChecks.push(
+          userModel.findOne({ email: body.email, _id: { $ne: loader.userId } }).session(session)
+        );
+      }
+
+      if (body.phone) {
+        let normalizedPhone: string;
+        try {
+          normalizedPhone = userModel.normalizePhone(body.phone);
+        } catch (error: any) {
+          throw new ErrorHandler(error.message, 400);
+        }
+        duplicateChecks.push(
+          userModel.findOne({ phone: normalizedPhone, _id: { $ne: loader.userId } }).session(session)
+        );
+      }
+
+      const duplicateResults = await Promise.all(duplicateChecks);
+      if (duplicateResults.some((r) => r !== null)) {
+        throw new ErrorHandler("Email or phone already exists", 400);
+      }
+
+      // ── apply updates ────────────────────────────────────────────────────
+      const userUpdates: Record<string, any> = {};
+      const loaderUpdates: Record<string, any> = {};
+
+      if (body.email) userUpdates.email = body.email;
+      if (body.phone) {
+        userUpdates.phone = userModel.normalizePhone(body.phone);
+      }
+      // if (body.password) userUpdates.passwordHash = body.password;
+      if (body.firstName) userUpdates.firstName = body.firstName;
+      if (body.lastName) userUpdates.lastName = body.lastName;
+
+      if (body.notes !== undefined) loaderUpdates.notes = body.notes;
+
+      if (body.temporaryBranchId !== undefined) {
+        loaderUpdates.temporaryBranchId = body.temporaryBranchId
+          ? new mongoose.Types.ObjectId(body.temporaryBranchId)
+          : null;
+      }
+
+      if (Object.keys(userUpdates).length > 0) {
+        await userModel.findByIdAndUpdate(loader.userId, { $set: userUpdates }, { session });
+      }
+
+      Object.assign(loader, loaderUpdates);
+      await loader.save({ session });
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      const populated = await LoaderModel.findById(loaderId)
+        .populate("userId", "firstName lastName email phone imageUrl role status")
+        .populate("assignedBranchId", "name code address status")
+        .populate("temporaryBranchId", "name code address status")
+        .populate("companyId", "name businessType status")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        message: "Loader updated successfully",
+        data: populated,
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400
+          )
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted) await session.abortTransaction().catch(() => {});
+      await session.endSession();
+    }
+  }
+);
+
