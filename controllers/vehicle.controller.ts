@@ -955,6 +955,7 @@ export const toggleVehicleStatus = catchAsyncError(
 export const getVehicle = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?._id;
+    const userRole = req.user?.role;
     const { companyId, vehicleId } = req.params;
 
     if (!userId) {
@@ -969,25 +970,53 @@ export const getVehicle = catchAsyncError(
       return next(new ErrorHandler("Invalid vehicle ID", 400));
     }
 
-    const [vehicle, manager, requestingUser] = await Promise.all([
-      VehicleModel.findOne({ _id: vehicleId, companyId })
-        .populate("companyId", "name businessType status")
-        .populate("currentBranchId", "name code address status")
-        .populate("assignedUserId", "firstName lastName email phone role")
-        .lean(),
-      ManagerModel.findOne({ userId, companyId }).lean(),
-      userModel.findById(userId).select("role").lean(),
-    ]);
 
-    const isAdmin = requestingUser?.role === "admin";
-    const isAuthorizedManager = manager && manager.isActive;
-
-    if (!isAdmin && !isAuthorizedManager) {
-      return next(new ErrorHandler("Not authorized to view this vehicle", 403));
-    }
+    const vehicle = await VehicleModel.findOne({ _id: vehicleId, companyId })
+      .populate("companyId", "name businessType status")
+      .populate("currentBranchId", "name code address status")
+      .populate("assignedUserId", "firstName lastName email phone role")
+      .lean();
 
     if (!vehicle) {
       return next(new ErrorHandler("Vehicle not found", 404));
+    }
+
+  
+    const requestingUser = await userModel.findById(userId).select("role").lean();
+
+    if (!requestingUser) {
+      return next(new ErrorHandler("User not found", 404));
+    }
+
+    let isAuthorized = false;
+
+    if (requestingUser.role === "admin") {
+
+      isAuthorized = true;
+    } else if (requestingUser.role === "manager") {
+
+      const manager = await ManagerModel.findOne({ userId, companyId }).lean();
+      isAuthorized = !!(manager && manager.isActive);
+    } else if (requestingUser.role === "transporter") {
+
+      const transporter = await TransporterModel.findOne({ userId }).lean();
+      isAuthorized = !!(
+        transporter &&
+        vehicle.assignedUserId &&
+        (vehicle.assignedUserId as any)._id?.toString() === transporter.userId.toString()
+      );
+    } else if (requestingUser.role === "deliverer") {
+
+      const deliverer = await DelivererModel.findOne({ userId }).lean();
+      isAuthorized = !!(
+        deliverer &&
+        vehicle.assignedUserId &&
+        (vehicle.assignedUserId as any)._id?.toString() === deliverer.userId.toString()
+      );
+    }
+
+    if (!isAuthorized) {
+      return next(new ErrorHandler("Not authorized to view this vehicle", 403));
     }
 
     return res.status(200).json({
@@ -1529,6 +1558,40 @@ export const releaseVehicle = catchAsyncError(
         throw new ErrorHandler("Vehicle is not currently in use", 400);
       }
 
+      // ── Clear vehicle from assigned user's profile ───────────────────────
+      if (vehicle.assignedUserId) {
+        const assignedRole = vehicle.assignedUserRole;
+
+        if (assignedRole === "deliverer") {
+          const updated = await DelivererModel.findOneAndUpdate(
+            { userId: vehicle.assignedUserId },
+            {
+              $unset: { currentVehicleId: "" },      // ← Use $unset to remove the field entirely
+              $set: {
+                availabilityStatus: "available",
+                lastActiveAt: new Date(),
+              },
+            },
+            { new: true, session },                   // ← Add new: true
+          );
+          // console.log("Deliverer after release:", updated?.currentVehicleId);
+        } else if (assignedRole === "transporter") {
+            const updated = await TransporterModel.findOneAndUpdate(
+              { userId: vehicle.assignedUserId },
+              {
+                $unset: { currentVehicleId: "" },
+                $set: {
+                  availabilityStatus: "available",
+                  lastActiveAt: new Date(),
+                },
+              },
+              { new: true, session },
+            );
+            // console.log("Transporter after release:", updated?.currentVehicleId);
+          }
+      }
+
+      // ── Release the vehicle ─────────────────────────────────────────────
       vehicle.assignedUserId = undefined;
       vehicle.assignedUserRole = undefined;
       vehicle.status = "available";
@@ -1566,50 +1629,50 @@ export const releaseVehicle = catchAsyncError(
 
 
 
-export const getVehicleById = catchAsyncError(
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
+// export const getVehicleById = catchAsyncError(
+//   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+//     try {
 
-      const userId = req.user?._id;
+//       const userId = req.user?._id;
 
-      if(!userId){
-        return next(new ErrorHandler("Authentication required.", 401));
-      }
+//       if(!userId){
+//         return next(new ErrorHandler("Authentication required.", 401));
+//       }
 
-      const user = await userModel.findById(userId);
+//       const user = await userModel.findById(userId);
 
-      if(!user || (user.role != "admin" && user.role != "supervisor" && user.role != "manager")){
+//       if(!user || (user.role != "admin" && user.role != "supervisor" && user.role != "manager")){
 
-        return next(new ErrorHandler("Access denied. only admins and supervisors or a manager.", 403));
+//         return next(new ErrorHandler("Access denied. only admins and supervisors or a manager.", 403));
 
-      }
+//       }
 
 
-      const { id } = req.params;
+//       const { id } = req.params;
 
-      if (!id || !mongoose.Types.ObjectId.isValid(id.toString())) {
-        return next(new ErrorHandler("Invalid vehicle ID.", 400));
-      }
+//       if (!id || !mongoose.Types.ObjectId.isValid(id.toString())) {
+//         return next(new ErrorHandler("Invalid vehicle ID.", 400));
+//       }
 
-      const vehicle = await VehicleModel.findById(id)
-        .populate("companyId", "name")
-        .populate("currentBranchId", "name code address")
-        .populate("assignedUserId", "name email phone")
-        .lean({ virtuals: true });
+//       const vehicle = await VehicleModel.findById(id)
+//         .populate("companyId", "name")
+//         .populate("currentBranchId", "name code address")
+//         .populate("assignedUserId", "name email phone")
+//         .lean({ virtuals: true });
 
-      if (!vehicle) {
-        return next(new ErrorHandler("Vehicle not found.", 404));
-      }
+//       if (!vehicle) {
+//         return next(new ErrorHandler("Vehicle not found.", 404));
+//       }
 
-      res.status(200).json({
-        success: true,
-        vehicle
-      });
+//       res.status(200).json({
+//         success: true,
+//         vehicle
+//       });
 
-    } catch (error: any) {
-      return next(
-        new ErrorHandler(error.message || "Error fetching vehicle.", 500),
-      );
-    }
-  },
-);
+//     } catch (error: any) {
+//       return next(
+//         new ErrorHandler(error.message || "Error fetching vehicle.", 500),
+//       );
+//     }
+//   },
+// );

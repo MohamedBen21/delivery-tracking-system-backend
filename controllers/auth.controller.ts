@@ -40,6 +40,8 @@ import { Coordinates } from "../services/eta.types";
 import { getOSRMRoute } from "../services/osrm.service";
 import { estimateTrafficFactor } from "../services/traffic.service";
 import { fetchWeatherFactor } from "../services/weather.service";
+import LoaderModel from "../models/loader.model";
+import CashierModel from "../models/cashier.model";
 
 
 
@@ -73,18 +75,6 @@ export const register = catchAsyncError(
         password,
       });
 
-      const pendingUser = new User({
-        firstName,
-        lastName,
-        phone: normalizedPhone,
-        email,
-        passwordHash: password,
-        status: "pending",
-        role: "client",
-      });
-
-      await pendingUser.save();
-
       const activation_url = `http://localhost:3000/activation/${activation_token}`;
 
       const templatePath = path.join(__dirname, "..", "mails", "activate.ejs");
@@ -103,11 +93,6 @@ export const register = catchAsyncError(
           subject: `Activation Code is ${activation_number}`,
           html,
         });
-      } else {
-        await User.deleteOne({ _id: pendingUser._id });
-        return next(
-          new ErrorHandler("Activation email template is missing.", 500),
-        );
       }
 
       res.cookie("activation_token", activation_token, {
@@ -277,56 +262,28 @@ export const activate = catchAsyncError(
  
     const normalizedPhone = User.normalizePhone(phone);
 
-    const existingUser = await User.findOne({
-      $or: [{ email }, { phone: normalizedPhone }],
+    const existingUser = await User.findOne({ 
+      $or: [
+        { email },
+        { phone: normalizedPhone }
+      ]
     });
 
-    if (!existingUser) {
-      const newUser = new User({
-        firstName,
-        lastName,
-        phone,
-        email,
-        passwordHash: password,
-        status: "active",
-        role: "client",
-      });
-
-      await newUser.save();
-
-      res.clearCookie("activation_token", {
-        httpOnly: true,
-        sameSite: "none",
-        secure: true,
-      });
-
-      sendWelcomeNotification(
-        newUser._id.toString(),
-        newUser.firstName,
-        newUser.role
-      ).catch(error => {
-
-        console.error('Welcome notification sending failed:', error);
-
-      });
-
-      await sendToken(newUser, 200, res, "Account activated successfully");
-      return;
-    }
-
-    if (existingUser.status === "active") {
+    if (existingUser) {
       return next(new ErrorHandler("User already exists", 400));
     }
-
-    existingUser.firstName = firstName;
-    existingUser.lastName = lastName;
-    existingUser.phone = phone;
-    existingUser.email = tokenEmail;
-    existingUser.passwordHash = password;
-    existingUser.status = "active";
-    existingUser.role = "client";
-
-    await existingUser.save();
+ 
+    const newUser = new User({
+      firstName,
+      lastName,
+      phone,
+      email,
+      passwordHash: password,
+      status: "active",
+      role: "client",
+    });
+ 
+    await newUser.save();
  
     res.clearCookie("activation_token", {
       httpOnly: true,
@@ -337,16 +294,16 @@ export const activate = catchAsyncError(
     
 
     sendWelcomeNotification(
-      existingUser._id.toString(),
-      existingUser.firstName,
-      existingUser.role
+      newUser._id.toString(),
+      newUser.firstName,
+      newUser.role
     ).catch(error => {
 
       console.error('Welcome notification sending failed:', error);
 
     });
 
-    await sendToken(existingUser, 200, res, "Account activated successfully");
+    await sendToken(newUser, 200, res, "Account activated successfully");
   },
 );
 
@@ -497,7 +454,6 @@ export const updateUser = catchAsyncError(
     try {
       const { firstName, lastName, password, newPassword, email } = req.body;
 
-      // const filename = req.file?.filename;
       const userId = req.user?._id;
       const user = await User.findById(userId).select("+passwordHash");
       if (!user) {
@@ -518,18 +474,10 @@ export const updateUser = catchAsyncError(
       if (firstName) user.firstName = firstName;
       if (lastName) user.lastName = lastName;
 
-      // if (filename) {
-      //   if (user.imageUrl && user.imageUrl.url !== "/uploads/users/user.jpeg")
-      //     deleteImage(user.imageUrl.url);
-      //   const imageUrl = `/uploads/users/${filename}`;
-      //   user.imageUrl = { public_id: "" , url: imageUrl };
-      // }
-
+      // ── Handle email change ──────────────────────────────────────────
       if (email && email !== user.email) {
-        const { email_token, activation_number } = generateChangeEmailToken(
-          user.email,
-          email,
-        );
+        const { email_token, activation_number } =
+          generateChangeEmailToken(user.email, email);
 
         const email_url = `http://localhost:5173/confirm-email/${email_token}`;
 
@@ -562,13 +510,23 @@ export const updateUser = catchAsyncError(
           secure: true,
           maxAge: 30 * 60 * 1000,
         });
+
+        // Don't save the email yet — wait for verification
+        res.status(200).json({
+          success: true,
+          message: "Verification email sent. Please check your new email to confirm the change.",
+          isEmailChange: true,
+          email_token,
+        });
       }
 
+      // ── No email change — save normally ──────────────────────────────
       await user.save();
 
       res.status(200).json({
         success: true,
         message: "User Updated Successfully",
+        isEmailChange: false,
         user: {
           ...user.toObject(),
           password: undefined,
@@ -1008,7 +966,7 @@ export const requestPasswordReset = catchAsyncError(
       if (!ALLOWED_ROLES.includes(user.role)) {
         return next(
           new ErrorHandler(
-            "Password reset via OTP is only available for deliverers ,transporters , chasier and loaders.",
+            "Password reset is only available for deliverers ,transporters , chasier and loaders.",
             403,
           ),
         );
@@ -1304,6 +1262,14 @@ export const meUser = catchAsyncError(
        associated = await freelancerModel.findOne({userId});
        break;
 
+     case "loader":
+       associated = await LoaderModel.findOne({userId});
+       break;
+
+     case "cashier":
+       associated = await CashierModel.findOne({userId});
+       break;
+
       default:
        associated = null;
 
@@ -1311,7 +1277,10 @@ export const meUser = catchAsyncError(
     
     res.status(200).json({
       success:true,
-      user,
+      user:{
+        ...user,
+          password:undefined
+      },
       associated,
       role : user.role
     })
@@ -1475,12 +1444,12 @@ export const createManager = catchAsyncError(
 
       // 4. Create a temporary companyId (you might want to create a default company or make this optional)
       // For testing, we'll create a dummy ObjectId or you can modify the schema to allow null temporarily
-      const dummyCompanyId = new mongoose.Types.ObjectId();
+      // const dummyCompanyId = new mongoose.Types.ObjectId();
       
       // 5. Create the manager record with allBranches access by default
       const manager = await ManagerModel.create({
         userId: user._id,
-        companyId: dummyCompanyId, // You'll need to replace this with a real company ID later
+        // companyId: dummyCompanyId, // You'll need to replace this with a real company ID later
         accessLevel,
         isActive: true,
         branchAccess: {

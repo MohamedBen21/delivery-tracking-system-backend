@@ -95,7 +95,7 @@ async function resolveFreelancer(
     return null;
   }
   
-  const freelancer = await FreelancerModel.findOne({ userId }).lean();
+  const freelancer = await FreelancerModel.findOne({ userId });
   
   if (!freelancer) {
     throw new ErrorHandler("Freelancer profile not found.", 404);
@@ -1058,6 +1058,9 @@ interface ICreatePackageBody {
   recipientState: string;
   recipientPostalCode?: string;
   deliveryNotes?: string;
+
+  deliveryLat?: number;
+  deliveryLon?: number;
  
 
   weight: number;
@@ -1220,6 +1223,8 @@ export const createPackage = catchAsyncError(
         totalPrice,
         paymentMethod,
         estimatedDeliveryTime,
+        deliveryLat,
+        deliveryLon
       } = req.body as ICreatePackageBody;
  
 
@@ -1356,6 +1361,13 @@ export const createPackage = catchAsyncError(
         state: recipientState.trim(),
         postalCode: recipientPostalCode?.trim(),
         notes: deliveryNotes?.trim(),
+
+        ...(deliveryLat !== undefined && deliveryLon !== undefined && {
+          location: {
+            type: "Point" as const,
+            coordinates: [deliveryLon, deliveryLat] as [number, number],
+          },
+        }),
       };
  
 
@@ -1402,6 +1414,13 @@ export const createPackage = catchAsyncError(
             totalPrice,
             paymentStatus: "pending",
             paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
+
+            // ...(deliveryLat !== undefined && deliveryLon !== undefined && {
+            //   location: {
+            //     type: "Point" as const,
+            //     coordinates: [deliveryLon, deliveryLat] as [number, number],
+            //   },
+            // }),
  
             maxAttempts: 3,
             attemptCount: 0,
