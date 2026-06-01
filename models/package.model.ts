@@ -29,7 +29,7 @@ export type PackageStatus =
 
 export type PaymentStatus = 'pending' | 'paid' | 'partially_paid' | 'refunded' | 'failed';
 
-export type PaymentMethod = 'cash' | 'card' | 'cod' | 'wallet' | 'bank_transfer';
+export type PaymentMethod = 'cash' | 'card' | 'cod' | 'wallet' | 'bank_transfer' | 'branch_payment';
 
 export type RefundStatus = 'pending' | 'processed' | 'rejected';
 
@@ -271,26 +271,29 @@ const destinationSchema = new Schema<IDestination>({
   },
 
   location: {
-    type: {
-      type: String,
-      enum: ['Point'],
-      default: 'Point',
-    },
-
-    coordinates: {
-      type: [Number],
-      validate: {
-        validator: function(v: number[]) {
-          return (
-            Array.isArray(v) &&
-            v.length === 2 &&
-            v[0] >= -180 && v[0] <= 180 &&
-            v[1] >= -90 && v[1] <= 90
-          );
-        },
-        message: 'Coordinates must be valid [longitude, latitude] values',
+    type: new Schema({
+      type: {
+        type: String,
+        enum: ['Point'],
       },
-    },
+      coordinates: {
+        type: [Number],
+        validate: {
+          validator: function (v: number[]) {
+            if (!v || v.length === 0) return true;
+            return (
+              Array.isArray(v) &&
+              v.length === 2 &&
+              v[0] >= -180 && v[0] <= 180 &&
+              v[1] >= -90  && v[1] <= 90
+            );
+          },
+          message: 'Coordinates must be valid [longitude, latitude] values',
+        },
+      },
+    }, { _id: false }),
+    required: false,
+    // No default at all — omitting it is what prevents [] from being injected
   },
 
   notes: {
@@ -598,7 +601,7 @@ const packageSchema = new Schema<IPackage>({
   
   paymentMethod: {
     type: String,
-    enum: ['cash', 'card', 'cod', 'wallet', 'bank_transfer'],
+    enum: ['cash', 'card', 'cod', 'wallet', 'bank_transfer', 'branch_payment'],
   },
   
   paidAt: {
@@ -980,6 +983,22 @@ packageSchema.pre('save', function(next) {
   this.returnInfo.isReturn = true;
   this.returnInfo.reason = 'Maximum delivery attempts exceeded';
   
+  }
+
+
+  const isNewHome = this.isNew && this.deliveryType === 'home';
+  const isUpdatedToHome = !this.isNew && this.isModified('deliveryType') && this.deliveryType === 'home';
+
+  if (isNewHome || isUpdatedToHome) {
+    const coords = this.destination?.location?.coordinates;
+    if (
+      !coords ||
+      coords.length !== 2 ||
+      coords[0] == null ||
+      coords[1] == null
+    ) {
+      return next(new Error('GPS coordinates (deliveryLat, deliveryLon) are required for home delivery'));
+    }
   }
   
   next();

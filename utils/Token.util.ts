@@ -12,6 +12,8 @@ import transporterModel from "../models/transporter.model";
 import SupervisorModel from "../models/supervisor.model";
 import freelancerModel from "../models/freelancer.model";
 import ManagerModel from "../models/manager.model";
+import LoaderModel from "../models/loader.model";
+import CashierModel from "../models/cashier.model";
 
 dotenv.config();
 
@@ -188,6 +190,14 @@ export const sendToken = async (
 
      case "freelancer":
        associated = await freelancerModel.findOne({userId});
+       break;
+
+     case "loader":
+       associated = await LoaderModel.findOne({userId});
+       break;
+
+     case "cashier":
+       associated = await CashierModel.findOne({userId});
        break;
 
       default:

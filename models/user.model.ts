@@ -39,22 +39,26 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
       type: String,
       required: [
         function(this: IUser) {
-          // Email is required for all roles EXCEPT client
           return this.role !== "client";
         },
         "Please enter your email",
       ],
       unique: true,
-      sparse:true,
+      sparse: true,
       lowercase: true,
       trim: true,
       validate: {
-        validator: (value: string) => {
-
-          if (!value && (this as any).role === "client") {
+        // ✅ Regular function so `this` refers to the document
+        validator: function(this: IUser, value: string) {
+          // If no value and role is client, skip validation
+          if (!value && this.role === "client") {
             return true;
           }
-          return emailRegex.test(value);
+          // If value exists, it must be a valid email
+          if (value) {
+            return emailRegex.test(value);
+          }
+          return true;
         },
         message: "Please enter a valid email",
       },
@@ -106,7 +110,7 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
     role: {
       type: String,
       enum: {
-        values: ["admin", "manager", "client", "deliverer", "transporter", "supervisor","freelancer"],
+        values: ["admin", "manager", "client", "deliverer", "transporter", "supervisor","freelancer","cashier" , "loader"],
         message: "{VALUE} is not a valid role.", 
       },
       default: "client",
@@ -143,10 +147,15 @@ userSchema.index({ role: 1, status: 1 });
 userSchema.pre<IUser>("save", async function (next) {
   try {
 
+
+    if (this.role === "client" && !this.email) {
+      this.email = undefined as any;
+    }
+
     if (this.isModified("phone")) {
 
       let phone = this.phone.trim().replace(/[^\d+]/g, '').replace(/\s+/g, '');
-      
+
       if (phone.startsWith('0')) {
         phone = '+213' + phone.substring(1);
       }
@@ -154,7 +163,7 @@ userSchema.pre<IUser>("save", async function (next) {
       if (!phone.startsWith('+213')) {
         return next(new Error('Phone number must start with +213 or 0') as any);
       }
-      
+
       this.phone = phone;
     }
 
@@ -166,12 +175,11 @@ userSchema.pre<IUser>("save", async function (next) {
     this.passwordHash = await bcrypt.hash(this.passwordHash, 10);
     
     next();
-    
+
   } catch (error: any) {
     next(error);
   }
 });
-
 
 userSchema.methods.SignAccessToken = function () {
   return jwt.sign(

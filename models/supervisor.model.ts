@@ -4,6 +4,8 @@ export type SupervisorPermission =
   | 'can_manage_deliverers'
   | 'can_manage_packages'
   | 'can_manage_vehicles'
+  | 'can_manage_cashiers'        
+  | 'can_manage_loaders'         
   | 'can_view_reports'
   | 'can_approve_deliverers'
   | 'can_modify_branch_settings'
@@ -19,6 +21,8 @@ const SUPERVISOR_PERMISSIONS: SupervisorPermission[] = [
   'can_manage_deliverers',
   'can_manage_packages',
   'can_manage_vehicles',
+  'can_manage_cashiers',      
+  'can_manage_loaders',
   'can_view_reports',
   'can_approve_deliverers',
   'can_modify_branch_settings',
@@ -56,6 +60,8 @@ export interface IWorkScheduleDay {
 export interface IPerformance {
   packagesManaged: number;
   deliverersSupervised: number;
+  cashiersSupervised: number;    
+  loadersSupervised: number;
   issuesResolved: number;
   averageResponseTime: number; 
   rating?: number; 
@@ -117,6 +123,18 @@ const performanceSchema = new Schema<IPerformance>({
   },
   
   deliverersSupervised: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  cashiersSupervised: {           
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  
+  loadersSupervised: {            
     type: Number,
     default: 0,
     min: 0,
@@ -195,6 +213,8 @@ const supervisorSchema = new Schema<ISupervisor>({
     default: () => ({
       packagesManaged: 0,
       deliverersSupervised: 0,
+      cashiersSupervised: 0,      
+      loadersSupervised: 0, 
       issuesResolved: 0,
       averageResponseTime: 0,
     }),
@@ -212,7 +232,7 @@ const supervisorSchema = new Schema<ISupervisor>({
 
 
 supervisorSchema.virtual('isCurrentlyWorking').get(function() {
-  if (!this.isActive) return false;
+  if (!this.isActive || !this.workSchedule) return false;
   
   const now = new Date();
   const day = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase() as WeekDay;

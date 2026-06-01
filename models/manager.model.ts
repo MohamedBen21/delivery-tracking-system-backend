@@ -14,6 +14,8 @@ export type ManagerPermission =
   | 'can_manage_vehicles'
   | 'can_manage_deliverers'
   | 'can_manage_supervisors'
+  | 'can_manage_cashiers'       
+  | 'can_manage_loaders'
   | 'can_view_analytics'
   | 'can_manage_reports';
 
@@ -26,7 +28,7 @@ export interface IBranchAccess {
 
 export interface IManager extends Document {
   userId: mongoose.Types.ObjectId;
-  companyId: mongoose.Types.ObjectId;
+  companyId?: mongoose.Types.ObjectId;
   
   accessLevel: ManagerAccessLevel;
   permissions: ManagerPermission[];
@@ -56,6 +58,8 @@ const MANAGER_PERMISSIONS: ManagerPermission[] = [
   'can_manage_vehicles',
   'can_manage_deliverers',
   'can_manage_supervisors',
+  'can_manage_cashiers',     
+  'can_manage_loaders',
   'can_view_analytics',
   'can_manage_reports',
 ];
@@ -79,6 +83,8 @@ const getDefaultPermissions = (accessLevel: ManagerAccessLevel): ManagerPermissi
         'can_manage_vehicles',
         'can_manage_deliverers',
         'can_manage_supervisors',
+        'can_manage_cashiers',        
+        'can_manage_loaders', 
         'can_manage_reports',
       ];
     case 'limited':
@@ -88,6 +94,8 @@ const getDefaultPermissions = (accessLevel: ManagerAccessLevel): ManagerPermissi
         'can_manage_vehicles',
         'can_manage_deliverers',
         'can_manage_supervisors',
+        'can_manage_cashiers',        
+        'can_manage_loaders',
         'can_export_data',
         'can_manage_reports',
       ];
@@ -138,7 +146,8 @@ const managerSchema = new Schema<IManager>({
   companyId: {
     type: Schema.Types.ObjectId,
     ref: 'Company',
-    required: [true, 'Company reference is required'],
+    default: null
+    // required: [true, 'Company reference is required'],
   },
 
   accessLevel: {
@@ -274,6 +283,8 @@ managerSchema.pre('save', function(next) {
       'can_manage_vehicles',
       'can_manage_deliverers',
       'can_manage_supervisors',
+      'can_manage_cashiers',        
+      'can_manage_loaders',
       'can_manage_reports',
     ];
     
@@ -283,6 +294,19 @@ managerSchema.pre('save', function(next) {
     
     if (hasManagementPermission) {
     return next(new Error('View-only manager has management permissions'));
+    }
+  }
+
+
+      if (
+    this.isModified("companyId") &&
+    !this.isNew &&
+    this.companyId
+  ) {
+    // companyId was already set and someone is trying to change it
+    const original = (this as any)._original;
+    if (original && original.companyId && original.companyId.toString() !== this.companyId.toString()) {
+      return next(new Error("companyId cannot be changed once set."));
     }
   }
   

@@ -255,17 +255,14 @@ paymentSchema.methods.markAsRefunded = function(
 
 
 paymentSchema.pre('save', function(next) {
-  if (this.isNew) {
-    
-    if (this.collectionMethod === 'home_delivery') {
-      this.settlementDeadline = undefined;
-    } else {
-      this.isSettled = true;
-      this.status = 'settled';
-      this.settledAt = new Date();
-    }
-    
 
+  // ─── NEW DOCUMENT ───────────────────────────────────────────────────────────
+  if (this.isNew) {
+
+    // Both delivery types start as 'pending' — no auto-settling at creation
+    this.settlementDeadline = undefined;
+
+    // Auto-generate receipt number if not provided
     if (!this.receiptNumber) {
       const prefix = 'RCP';
       const timestamp = Date.now().toString().slice(-8);
@@ -273,23 +270,33 @@ paymentSchema.pre('save', function(next) {
       this.receiptNumber = `${prefix}${timestamp}${random}`;
     }
   }
-  
 
-  if (this.isModified('status') && this.status === 'collected' && this.collectionMethod === 'home_delivery' && !this.settlementDeadline) {
+  // ─── SETTLEMENT DEADLINE ────────────────────────────────────────────────────
+  // Set 7-day deadline when a home_delivery payment transitions to 'collected'
+  if (
+    this.isModified('status') &&
+    this.status === 'collected' &&
+    this.collectionMethod === 'home_delivery' &&
+    !this.settlementDeadline
+  ) {
     const deadline = new Date();
     deadline.setDate(deadline.getDate() + 7);
     this.settlementDeadline = deadline;
   }
-  
 
-  if (this.collectionMethod === 'home_delivery' && !this.delivererId) {
-    return next(new Error('Deliverer is required for home delivery payments'));
+  // ─── COLLECTION VALIDATION ──────────────────────────────────────────────────
+  // Only enforce staff/deliverer presence when payment is no longer pending
+  if (this.status !== 'pending') {
+
+    if (this.collectionMethod === 'home_delivery' && !this.delivererId) {
+      return next(new Error('Deliverer is required for home delivery payments'));
+    }
+
+    if (this.collectionMethod === 'branch_pickup' && !this.processedById) {
+      return next(new Error('Staff member who processed the payment is required for branch pickup'));
+    }
   }
-  
-  if (this.collectionMethod === 'branch_pickup' && !this.processedById) {
-    return next(new Error('Staff member who processed the payment is required for branch pickup'));
-  }
-  
+
   next();
 });
 

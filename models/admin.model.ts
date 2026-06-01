@@ -6,6 +6,8 @@ const ADMIN_PERMISSIONS = [
   "manage_branches",
   "manage_drivers",
   "manage_vehicles",
+  "manage_cashiers",        
+  "manage_loaders", 
   "view_packages",
   "update_packages_manually",
   "assign_packages_manually",
