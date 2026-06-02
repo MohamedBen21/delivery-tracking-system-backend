@@ -75,7 +75,8 @@ const packageHistorySchema = new Schema<IPackageHistory>({
       'pending', 'accepted', 'at_origin_branch', 'in_transit_to_branch',
       'at_destination_branch', 'out_for_delivery', 'delivered',
       'failed_delivery', 'rescheduled', 'returned', 'cancelled',
-      'lost', 'damaged', 'on_hold'
+      'lost', 'damaged', 'on_hold','cashier_claimed',   
+      'manifested'
     ],
     message:"Status must be one of the allowed values."
     },
@@ -157,6 +158,7 @@ packageHistorySchema.virtual('readableStatus').get(function() {
     'lost': 'Lost',
     'damaged': 'Damaged',
     'on_hold': 'On Hold',
+    
   };
   
   return statusMap[this.status] || this.status.replace(/_/g, ' ').toUpperCase();

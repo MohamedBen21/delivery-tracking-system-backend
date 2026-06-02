@@ -51,7 +51,9 @@ authRouter.post("/google", googleLogin);
 
 authRouter.post("/logout", isAuthenticated, logout);
 authRouter.put("/update", isAuthenticated, limiters.emailChange, updateUser);
+
 authRouter.post("/change-email", changeEmail);
+
 authRouter.put(
   "/profile-picture",
   isAuthenticated,

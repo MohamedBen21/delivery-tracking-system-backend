@@ -20,7 +20,6 @@ import {
   trackFailedLogin,
 } from "../middleware/redisRateLimiter";
 import { clearTokens, sendToken } from "../utils/Token.util";
-import cloudinary from "cloudinary";
 import userModel from "../models/user.model";
 import { getRedisClient } from "../databases/Redis.database";
 import jwt from "jsonwebtoken";
@@ -42,6 +41,14 @@ import { estimateTrafficFactor } from "../services/traffic.service";
 import { fetchWeatherFactor } from "../services/weather.service";
 import LoaderModel from "../models/loader.model";
 import CashierModel from "../models/cashier.model";
+import { v2  } from 'cloudinary';
+
+// Configure Cloudinary
+v2.config({
+  cloud_name: process.env.CLOUD_NAME,
+  api_key: process.env.CLOUD_API_KEY,
+  api_secret: process.env.CLOUD_SECRET_KEY
+});
 
 
 
@@ -697,7 +704,7 @@ const ALLOWED_FORMATS = ["jpg", "jpeg", "png", "webp"];
 async function uploadToCloudinary(
   source: string,
 ): Promise<{ public_id: string; url: string }> {
-  const result = await cloudinary.v2.uploader.upload(source, {
+  const result = await v2.uploader.upload(source, {
     folder:        UPLOAD_FOLDER,
     width:         300,
     height:        300,
@@ -726,11 +733,9 @@ export const updateProfilePicture = catchAsyncError(
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
 
-
     let uploadSource: string | null = null;
 
     if (req.file) {
-
       if (req.file.size > MAX_FILE_BYTES) {
         return next(
           new ErrorHandler(
@@ -765,33 +770,34 @@ export const updateProfilePicture = catchAsyncError(
       );
     }
 
-
     const user = await userModel.findById(userId).lean();
     if (!user) {
       return next(new ErrorHandler("User not found.", 404));
     }
 
 
-    const oldPublicId = user.imageUrl?.public_id;
-    if (oldPublicId) {
+    const hasOldImage = user.imageUrl && user.imageUrl.public_id && user.imageUrl.public_id !== "";
+    
+    if (hasOldImage) {
       try {
-        await cloudinary.v2.uploader.destroy(oldPublicId);
+        await v2.uploader.destroy(user.imageUrl.public_id);
       } catch (err) {
-
-        console.warn(`[updateProfilePicture] Failed to delete old image ${oldPublicId}:`, err);
+        console.warn(`[updateProfilePicture] Failed to delete old image ${user.imageUrl.public_id}:`, err);
       }
     }
-
 
     const { public_id, url } = await uploadToCloudinary(uploadSource);
 
 
     const updatedUser = await userModel.findByIdAndUpdate(
       userId,
-      { $set: { imageUrl: { public_id, url } } },
+      { 
+        $set: { 
+          imageUrl: { public_id, url }
+        } 
+      },
       { new: true },
     ).select("firstName lastName email phone imageUrl role status");
-
 
     try {
       const redis = getRedisClient();
@@ -806,7 +812,6 @@ export const updateProfilePicture = catchAsyncError(
         );
       }
     } catch (err) {
-
       console.warn("[updateProfilePicture] Redis cache update failed:", err);
     }
 
@@ -815,16 +820,13 @@ export const updateProfilePicture = catchAsyncError(
       message: "Profile picture updated successfully",
       data: {
         imageUrl: { public_id, url },
-        user:     updatedUser,
+        user: updatedUser,
       },
     });
   },
 );
 
 
-//  DELETE PROFILE PICTURE
-//  POST /user/profile-picture/delete
-//  Removes the current profile picture from Cloudinary and sets imageUrl to null.
 
 export const deleteProfilePicture = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -839,23 +841,27 @@ export const deleteProfilePicture = catchAsyncError(
       return next(new ErrorHandler("User not found.", 404));
     }
 
-    if (!user.imageUrl?.public_id) {
+
+    const hasImage = user.imageUrl && user.imageUrl.public_id && user.imageUrl.public_id !== "";
+    
+    if (!hasImage) {
       return next(new ErrorHandler("No profile picture to delete.", 400));
     }
 
 
-    await cloudinary.v2.uploader.destroy(user.imageUrl.public_id);
+    await v2.uploader.destroy(user.imageUrl.public_id);
 
 
-    await userModel.findByIdAndUpdate(userId, { $set: { imageUrl: null } });
-
+    await userModel.findByIdAndUpdate(userId, { 
+      $set: { imageUrl: { public_id: "", url: "" } } 
+    });
 
     try {
       const redis = getRedisClient();
       const cached = await redis.get(`user:${userId.toString()}`);
       if (cached) {
         const parsed = JSON.parse(cached);
-        parsed.imageUrl = null;
+        parsed.imageUrl = { public_id: "", url: "" };
         await redis.setex(
           `user:${userId.toString()}`,
           7 * 24 * 60 * 60,
@@ -872,7 +878,6 @@ export const deleteProfilePicture = catchAsyncError(
     });
   },
 );
-
 
 
 
