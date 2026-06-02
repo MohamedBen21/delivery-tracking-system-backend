@@ -6257,95 +6257,117 @@ export const getPackageHistory = catchAsyncError(
       return next(new ErrorHandler("Invalid package ID", 400));
     }
 
+    const { page, limit, fromDate, toDate } = req.query;
+    const pageNum = parseInt(page as string ?? "1", 10);
+    const limitNum = parseInt(limit as string ?? "20", 10);
 
-    const { page, limit, fromDate, toDate } = req.query as {
-      page?: string;
-      limit?: string;
-      fromDate?: string;
-      toDate?: string;
-    };
-
-    const pageNum  = parseInt(page  ?? "1",  10);
-    const limitNum = parseInt(limit ?? "20", 10);
-
-    if (isNaN(pageNum)  || pageNum  < 1)          return next(new ErrorHandler("page must be a positive integer", 400));
-    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
+    if (isNaN(pageNum) || pageNum < 1) {
+      return next(new ErrorHandler("page must be a positive integer", 400));
+    }
+    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
+      return next(new ErrorHandler("limit must be between 1 and 100", 400));
+    }
 
     let fromDateParsed: Date | undefined;
-    let toDateParsed:   Date | undefined;
+    let toDateParsed: Date | undefined;
 
-    if (fromDate !== undefined) {
-      fromDateParsed = new Date(fromDate);
-      if (isNaN(fromDateParsed.getTime())) return next(new ErrorHandler("fromDate is not a valid date", 400));
+    if (fromDate) {
+      fromDateParsed = new Date(fromDate as string);
+      if (isNaN(fromDateParsed.getTime())) {
+        return next(new ErrorHandler("fromDate is not a valid date", 400));
+      }
     }
-    if (toDate !== undefined) {
-      toDateParsed = new Date(toDate);
-      if (isNaN(toDateParsed.getTime())) return next(new ErrorHandler("toDate is not a valid date", 400));
+    if (toDate) {
+      toDateParsed = new Date(toDate as string);
+      if (isNaN(toDateParsed.getTime())) {
+        return next(new ErrorHandler("toDate is not a valid date", 400));
+      }
     }
     if (fromDateParsed && toDateParsed && fromDateParsed > toDateParsed) {
       return next(new ErrorHandler("fromDate must be before toDate", 400));
     }
 
-
     const packageOid = new mongoose.Types.ObjectId(packageId.toString());
-    const branchOid  = new mongoose.Types.ObjectId(branchId.toString());
+    const branchOid = new mongoose.Types.ObjectId(branchId.toString());
 
-    const [packageDoc, supervisor] = await Promise.all([
-      PackageModel.findOne({
-        _id: packageOid,
-        currentBranchId: branchOid,
-      })
-        .select("trackingNumber status deliveryType destination companyId"),
-      SupervisorModel.findOne({ userId: supervisorUserId,   branchId: new mongoose.Types.ObjectId(branchId.toString())  }).lean(),
-    ]);
+    // Fetch package with .lean()
+    const packageDoc = await PackageModel.findOne({
+      _id: packageOid,
+      currentBranchId: branchOid,
+    }).select("trackingNumber status deliveryType destination companyId")
+      .lean();
 
     if (!packageDoc) {
       return next(new ErrorHandler("Package not found in this branch", 404));
     }
 
-    if (!supervisor  || !supervisor.isActive || supervisor.branchId.toString() !== branchId.toString()) {
-      return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
-    }
-
-
+    // Build history query
     const historyMatch: Record<string, any> = { packageId: packageOid };
-
     if (fromDateParsed || toDateParsed) {
       historyMatch.timestamp = {
         ...(fromDateParsed && { $gte: fromDateParsed }),
-        ...(toDateParsed   && { $lte: toDateParsed   }),
+        ...(toDateParsed && { $lte: toDateParsed }),
       };
     }
 
     const skip = (pageNum - 1) * limitNum;
-
-    const [entries, total] = await Promise.all([
-      PackageHistoryModel.find(historyMatch)
-        .sort({ timestamp: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .populate("handledBy", "firstName lastName role")
-        .populate("branchId",  "name code"),
-      PackageHistoryModel.countDocuments(historyMatch),
-    ]);
+    
+    // CRITICAL: Use .lean() on the find and also ensure populate returns lean objects
+    const entries = await PackageHistoryModel.find(historyMatch)
+      .sort({ timestamp: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .populate({
+        path: "handledBy",
+        select: "firstName lastName role",
+        options: { lean: true } // Force populate to return lean objects
+      })
+      .populate({
+        path: "branchId", 
+        select: "name code",
+        options: { lean: true }
+      })
+      .lean(); // Convert the main documents to plain objects
+    
+    const total = await PackageHistoryModel.countDocuments(historyMatch);
 
     const totalPages = Math.ceil(total / limitNum);
+
+    const READABLE_STATUS_MAP: Record<string, string> = {
+      'pending': 'Created',
+      'accepted': 'Accepted',
+      'at_origin_branch': 'Arrived at Origin Branch',
+      'in_transit_to_branch': 'In Transit',
+      'at_destination_branch': 'Arrived at Destination Branch',
+      'out_for_delivery': 'Out for Delivery',
+      'delivered': 'Delivered',
+      'failed_delivery': 'Delivery Failed',
+      'cashier_claimed': 'Claimed at Counter',
+      'manifested': 'Assigned to Manifest',
+      'failed_delivery_attempt': 'Failed Delivery Attempt',
+      'rescheduled': 'Rescheduled',
+      'returned': 'Returned',
+      'cancelled': 'Cancelled',
+      'lost': 'Lost',
+      'damaged': 'Damaged',
+      'on_hold': 'On Hold',
+    };
 
     return res.status(200).json({
       success: true,
       package: {
-        id:             packageDoc._id,
+        id: packageDoc._id,
         trackingNumber: packageDoc.trackingNumber,
-        status:         packageDoc.status,
-        readableStatus: READABLE_STATUS[packageDoc.status] ?? packageDoc.status,
-        deliveryType:   packageDoc.deliveryType,
-        recipient:      packageDoc.destination.recipientName,
+        status: packageDoc.status,
+        readableStatus: READABLE_STATUS_MAP[packageDoc.status] ?? packageDoc.status,
+        deliveryType: packageDoc.deliveryType,
+        recipient: packageDoc.destination?.recipientName || 'N/A',
       },
       data: entries,
       pagination: {
         total,
-        page:        pageNum,
-        limit:       limitNum,
+        page: pageNum,
+        limit: limitNum,
         totalPages,
         hasNextPage: pageNum < totalPages,
         hasPrevPage: pageNum > 1,
@@ -6353,7 +6375,6 @@ export const getPackageHistory = catchAsyncError(
     });
   },
 );
-
 
 
 

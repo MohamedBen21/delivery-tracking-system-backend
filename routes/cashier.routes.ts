@@ -11,6 +11,7 @@ import {
   getPendingPackages,
   printSingleBordereau,
   printBulkBordereau,
+  getPackageByTrackingNumber,
 } from "../controllers/cashier.controller";
 
 const cashierRouter = Router();
@@ -35,5 +36,7 @@ cashierRouter.post("/reject-package", rejectPackage);
 // Bordereau printing
 cashierRouter.get("/bordereau/:trackingNumber", printSingleBordereau);
 cashierRouter.post("/bordereau/bulk", printBulkBordereau);
+
+cashierRouter.get("/scan/:trackingNumber/branch/:branchId", getPackageByTrackingNumber);
 
 export default cashierRouter;

@@ -3,6 +3,7 @@ import {
   activate,
   calculateETA,
   changeEmail,
+  confirmContactChange,
   confirmPasswordReset,
   createManager,
   deleteProfilePicture,
@@ -13,6 +14,7 @@ import {
   passwordRecovery,
   refreshTokens,
   register,
+  requestContactChange,
   requestPasswordReset,
   resendActivation,
   resetPassword,
@@ -85,6 +87,19 @@ authRouter.post(
   isAuthenticated,
   authorizeRoles("deliverer", "transporter"),
   calculateETA,
+);
+
+
+authRouter.post(
+  "/change-contact/request",
+  isAuthenticated,
+  requestContactChange,
+);
+ 
+authRouter.post(
+  "/change-contact/confirm",
+  isAuthenticated,
+  confirmContactChange,
 );
 
 export default authRouter;
