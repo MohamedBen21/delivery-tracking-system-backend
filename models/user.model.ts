@@ -127,10 +127,12 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
     
     imageUrl: {
       type: {
-        public_id: { type: String, default: "" },
-        url: { type: String, default: "" },
+        // public_id: { type: String, default: "" },
+        // url: { type: String, default: "" },
+        public_id: { type: String, default: null },
+        url: { type: String, default: null },
       },
-      default: { public_id: "", url: "" },
+      // default: { public_id: "", url: "" },
       _id: false,
     },
   },

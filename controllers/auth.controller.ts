@@ -775,8 +775,8 @@ export const updateProfilePicture = catchAsyncError(
       return next(new ErrorHandler("User not found.", 404));
     }
 
-
-    const hasOldImage = user.imageUrl && user.imageUrl.public_id && user.imageUrl.public_id !== "";
+    // Check if there's an existing image (public_id exists and is not null)
+    const hasOldImage = user.imageUrl && user.imageUrl.public_id !== null;
     
     if (hasOldImage) {
       try {
@@ -788,7 +788,7 @@ export const updateProfilePicture = catchAsyncError(
 
     const { public_id, url } = await uploadToCloudinary(uploadSource);
 
-
+    // Update the entire imageUrl object
     const updatedUser = await userModel.findByIdAndUpdate(
       userId,
       { 
@@ -841,19 +841,22 @@ export const deleteProfilePicture = catchAsyncError(
       return next(new ErrorHandler("User not found.", 404));
     }
 
-
-    const hasImage = user.imageUrl && user.imageUrl.public_id && user.imageUrl.public_id !== "";
+    // Check if there's an existing image (public_id exists and is not null)
+    const hasOldImage = user.imageUrl && user.imageUrl.public_id !== null;
     
-    if (!hasImage) {
+    if (!hasOldImage) {
       return next(new ErrorHandler("No profile picture to delete.", 400));
     }
 
+    try {
+      await v2.uploader.destroy(user.imageUrl.public_id);
+    } catch (err) {
+      console.warn(`[deleteProfilePicture] Failed to delete image ${user.imageUrl.public_id}:`, err);
+    }
 
-    await v2.uploader.destroy(user.imageUrl.public_id);
-
-
+    // Reset to null (not empty strings)
     await userModel.findByIdAndUpdate(userId, { 
-      $set: { imageUrl: { public_id: "", url: "" } } 
+      $set: { imageUrl: null } 
     });
 
     try {
@@ -861,7 +864,7 @@ export const deleteProfilePicture = catchAsyncError(
       const cached = await redis.get(`user:${userId.toString()}`);
       if (cached) {
         const parsed = JSON.parse(cached);
-        parsed.imageUrl = { public_id: "", url: "" };
+        parsed.imageUrl = null;
         await redis.setex(
           `user:${userId.toString()}`,
           7 * 24 * 60 * 60,
