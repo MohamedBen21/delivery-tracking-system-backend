@@ -1912,3 +1912,322 @@ export const calculateETA = catchAsyncError(
     });
   }
 );
+
+
+const createContactChangeOTPToken = (payload: {
+  otp: string;
+  newEmail?: string;
+  newPhone?: string;
+}): string => {
+  const expireMinutes = parseInt(process.env.OTP_EXPIRE ?? "10", 10);
+  return jwt.sign(payload, process.env.OTP_SECRET as string, {
+    expiresIn: expireMinutes * 60,
+  });
+};
+
+
+ 
+export const requestContactChange = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = req.user?._id;
+      if (!userId) {
+        return next(new ErrorHandler("Unauthorized.", 401));
+        
+      }
+
+      const { newEmail, newPhone } = req.body as {
+        newEmail?: string;
+        newPhone?: string;
+      };
+
+
+      if (!newEmail && !newPhone) {
+        return next(
+          new ErrorHandler(
+            "Provide at least one field to change: newEmail or newPhone.",
+            400,
+          ),
+        );
+        
+      }
+
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const phoneRegex = /^(\+213|0)(5|6|7)[0-9]{8}$/;
+
+      if (newEmail && !emailRegex.test(newEmail.trim())) {
+        return next(new ErrorHandler("Invalid email address format.", 400));
+        
+      }
+
+      if (newPhone && !phoneRegex.test(newPhone.trim())) {
+        return next(
+          new ErrorHandler(
+            "Invalid phone number. Must be a valid Algerian number (+213 or 0).",
+            400,
+          ),
+        );
+        
+      }
+
+
+      const user = await userModel.findById(userId);
+      if (!user) {
+        return next(new ErrorHandler("User not found.", 404));
+        
+      }
+
+
+      if (newEmail && newEmail.trim().toLowerCase() === user.email?.toLowerCase()) {
+        return next(
+          new ErrorHandler("New email must be different from your current email.", 400),
+        );
+        
+      }
+
+      if (newPhone) {
+        const normalizedNew = User.normalizePhone(newPhone.trim());
+        const normalizedCurrent = User.normalizePhone(user.phone ?? "");
+        if (normalizedNew === normalizedCurrent) {
+          return next(
+            new ErrorHandler(
+              "New phone number must be different from your current one.",
+              400,
+            ),
+          );
+          
+        }
+      }
+
+
+      if (newEmail) {
+        const taken = await userModel.findOne({
+          email: newEmail.trim().toLowerCase(),
+          _id: { $ne: userId },
+        });
+        if (taken) {
+          return  next(new ErrorHandler("This email is already in use.", 409));
+          
+        }
+      }
+
+      if (newPhone) {
+        const normalizedNew = User.normalizePhone(newPhone.trim());
+        const taken = await userModel.findOne({
+          phone: normalizedNew,
+          _id: { $ne: userId },
+        });
+        if (taken) {
+          return  next(new ErrorHandler("This phone number is already in use.", 409));
+          
+        }
+      }
+
+
+      const otp = generateOTP();
+
+      const tokenPayload: { otp: string; newEmail?: string; newPhone?: string } = { otp };
+      if (newEmail) tokenPayload.newEmail = newEmail.trim().toLowerCase();
+      if (newPhone) tokenPayload.newPhone = User.normalizePhone(newPhone.trim());
+
+      const otp_token = createContactChangeOTPToken(tokenPayload);
+      const expireMinutes = process.env.OTP_EXPIRE ?? "10";
+      const expiresInSeconds = parseInt(expireMinutes) * 60;
+
+
+      if (newEmail) {
+
+        const targetEmail = newEmail.trim().toLowerCase();
+
+        const templatePath = path.join(
+          __dirname,
+          "..",
+          "mails",
+          "change_contact_otp.ejs",
+        );
+
+        let html: string;
+        if (fs.existsSync(templatePath)) {
+          const template = fs.readFileSync(templatePath, "utf8");
+          html = ejs.render(template, {
+            firstName: user.firstName,
+            otp,
+            expireMinutes,
+            changeType: newPhone ? "email and phone" : "email",
+          });
+        } else {
+          // Fallback inline template
+          html = `
+            <p>Hi ${user.firstName},</p>
+            <p>Your verification code for the contact update is: <strong>${otp}</strong></p>
+            <p>It expires in ${expireMinutes} minutes.</p>
+            ${newPhone ? '<p>Your email and phone number will be updated after verification.</p>' : ''}
+            <p>If you did not request this change, please ignore this email.</p>
+          `;
+        }
+
+        await Mail.sendMail({
+          from: `Delivery Tracking Dz <${process.env.SMTP_MAIL}>`,
+          to: targetEmail,
+          subject: `Your contact change code: ${otp}`,
+          html,
+        });
+
+        res.status(200).json({
+          success: true,
+          message: `OTP sent to your new email address: ${targetEmail}`,
+          otp_token,
+          method: "email",
+          expiresIn: expiresInSeconds,
+        });
+        return;
+      }
+
+      // Phone-only path
+      const smsSent = await sendSMS({
+        to: newPhone!.trim(),
+        message: `Your contact change OTP is: ${otp}. Valid for ${expireMinutes} minutes.`,
+      });
+
+      if (!smsSent) {
+        next(new ErrorHandler("Failed to send OTP via SMS. Please try again.", 500));
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        message: `OTP sent to your new phone number: ${newPhone!.trim()}`,
+        otp_token,
+        method: "sms",
+        expiresIn: expiresInSeconds,
+      });
+    } catch (error: any) {
+      return next(
+        new ErrorHandler(error.message || "Error sending contact change OTP.", 500),
+      );
+    }
+  },
+);
+
+
+
+export const confirmContactChange = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = req.user?._id;
+      if (!userId) {
+        return next(new ErrorHandler("Unauthorized.", 401));
+        
+      }
+
+      const { otp_token, otp } = req.body as {
+        otp_token?: string;
+        otp?: string;
+      };
+
+      if (!otp_token || !otp) {
+        return next(new ErrorHandler("otp_token and otp are required.", 400));
+        
+      }
+
+
+      let decoded: { otp: string; newEmail?: string; newPhone?: string };
+      try {
+        decoded = jwt.verify(
+          otp_token,
+          process.env.OTP_SECRET as string,
+        ) as typeof decoded;
+      } catch (err: any) {
+        if (err.name === "TokenExpiredError") {
+          return next(
+            new ErrorHandler("OTP has expired. Please request a new one.", 400),
+          );
+          return;
+        }
+        return next(new ErrorHandler("Invalid OTP token.", 400));
+        
+      }
+
+
+      if (decoded.otp !== otp.trim()) {
+        return next(new ErrorHandler("Incorrect OTP. Please try again.", 400));
+      }
+
+
+      if (!decoded.newEmail && !decoded.newPhone) {
+        return next(
+          new ErrorHandler("Token does not contain any contact fields to update.", 400),
+        );
+        
+      }
+
+
+      const user = await userModel.findById(userId);
+      if (!user) {
+        return next(new ErrorHandler("User not found.", 404));
+        
+      }
+
+
+      if (decoded.newEmail) {
+        const taken = await userModel.findOne({
+          email: decoded.newEmail,
+          _id: { $ne: userId },
+        });
+        if (taken) {
+          return next(
+            new ErrorHandler(
+              "This email was taken by another account. Please request a new change.",
+              409,
+            ),
+          );
+          
+        }
+      }
+
+      if (decoded.newPhone) {
+        const taken = await userModel.findOne({
+          phone: decoded.newPhone,
+          _id: { $ne: userId },
+        });
+        if (taken) {
+          return next(
+            new ErrorHandler(
+              "This phone number was taken by another account. Please request a new change.",
+              409,
+            ),
+          );
+          
+        }
+      }
+
+
+      const updated: { email?: string; phone?: string } = {};
+
+      if (decoded.newEmail) {
+        user.email = decoded.newEmail;
+        updated.email = decoded.newEmail;
+      }
+
+      if (decoded.newPhone) {
+        user.phone = decoded.newPhone;
+        updated.phone = decoded.newPhone;
+      }
+
+      await user.save();
+
+
+      const changedFields = Object.keys(updated).join(" and ");
+      res.status(200).json({
+        success: true,
+        message: `Your ${changedFields} ${Object.keys(updated).length > 1 ? "have" : "has"} been updated successfully.`,
+        updated,
+      });
+    } catch (error: any) {
+      return next(
+        new ErrorHandler(error.message || "Error confirming contact change.", 500),
+      );
+    }
+  },
+);

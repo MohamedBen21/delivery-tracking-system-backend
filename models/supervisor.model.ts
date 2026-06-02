@@ -206,6 +206,7 @@ const supervisorSchema = new Schema<ISupervisor>({
     },
     default: defaultWorkSchedule,
     required: true,
+    _id: false
   },
   
   performance: {
@@ -244,18 +245,19 @@ supervisorSchema.virtual('isCurrentlyWorking').get(function() {
   
   const schedule = this.workSchedule[day];
   
-  if (schedule.dayOff) return false;
+  if (!schedule || schedule.dayOff) return false;
   
   return time >= schedule.start && time <= schedule.end;
 });
 
+
 supervisorSchema.virtual('currentWorkHours').get(function() {
-  if (!this.isActive) return null;
+  if (!this.isActive || !this.workSchedule) return null;
   
   const day = new Date().toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase() as WeekDay;
   const schedule = this.workSchedule[day];
   
-  if (schedule.dayOff) return null;
+  if (!schedule || schedule.dayOff) return null;
   
   return {
     start: schedule.start,
@@ -264,17 +266,24 @@ supervisorSchema.virtual('currentWorkHours').get(function() {
   };
 });
 
+
 supervisorSchema.virtual('formattedSchedule').get(function() {
-  const formatted: Record<WeekDay, string> = {} as Record<WeekDay, string>;
+  if (!this.workSchedule) {
+    return {} as Record<WeekDay, string>;
+  }
   
-  Object.entries(this.workSchedule).forEach(([day, schedule]: [string, IWorkScheduleDay]) => {
-    const typedDay = day as WeekDay;
-    if (schedule.dayOff) {
-      formatted[typedDay] = 'Day Off';
+  const formatted: Record<WeekDay, string> = {} as Record<WeekDay, string>;
+  const days: WeekDay[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  
+  // Explicitly iterate over the days array instead of Object.entries
+  for (const day of days) {
+    const schedule = this.workSchedule[day];
+    if (!schedule || schedule.dayOff) {
+      formatted[day] = 'Day Off';
     } else {
-      formatted[typedDay] = `${schedule.start} - ${schedule.end}`;
+      formatted[day] = `${schedule.start} - ${schedule.end}`;
     }
-  });
+  }
   
   return formatted;
 });
@@ -288,9 +297,14 @@ supervisorSchema.methods.hasPermissions = function(permissions: SupervisorPermis
 };
 
 supervisorSchema.methods.isDayOff = function(day?: WeekDay): boolean {
-
+  if (!this.workSchedule) return true;
+  
   const targetDay = day || new Date().toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase() as WeekDay;
-  return this.workSchedule[targetDay].dayOff;
+  const schedule = this.workSchedule[targetDay];
+  
+  if (!schedule) return true;
+  
+  return schedule.dayOff === true;
 };
 
 supervisorSchema.methods.addPermission = function(permission: SupervisorPermission) {
@@ -321,13 +335,21 @@ supervisorSchema.methods.updatePerformance = function(updates: Partial<IPerforma
 
 
 supervisorSchema.pre('save', function(next) {
-  Object.entries(this.workSchedule).forEach(([day, schedule]: [string, IWorkScheduleDay]) => {
-    if (!schedule.dayOff) {
-      if (schedule.start >= schedule.end) {
+  // Skip if workSchedule doesn't exist
+  if (!this.workSchedule) {
+    return next();
+  }
+  
+  const days: WeekDay[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  
+  for (const day of days) {
+    const schedule = this.workSchedule[day];
+    if (schedule && !schedule.dayOff) {
+      if (schedule.start && schedule.end && schedule.start >= schedule.end) {
         return next(new Error(`${day}: Start time must be before end time`));
       }
     }
-  });
+  }
   
   this.permissions = [...new Set(this.permissions)];
   
