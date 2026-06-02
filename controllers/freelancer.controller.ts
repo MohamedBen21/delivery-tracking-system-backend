@@ -1303,7 +1303,6 @@ export const createPackage = catchAsyncError(
  
       if (!originBranchId) {
         throw new ErrorHandler(
-
           "Your freelancer profile has no default origin branch set. Contact support.",
           400,
         );
@@ -1343,13 +1342,26 @@ export const createPackage = catchAsyncError(
       }
  
 
-      if (
+      // ── Same-branch intelligence ────────────────────────────────────────
+      // When origin and destination are the same branch:
+      //   • branch_pickup → skip transport, package is already at destination
+      //   • home delivery → allowed (stays at origin, deliverer picks up from here)
+      const isSameBranch =
         destinationBranchId &&
-        originBranchId.toString() === destinationBranchId.toString()
-      ) {
-        
-        throw new ErrorHandler("Origin and destination branches cannot be the same.", 400);
+        originBranchId.toString() === destinationBranchId.toString();
+
+      if (isSameBranch && deliveryType === "home") {
+        throw new ErrorHandler(
+          "For home delivery, you don't need to specify the same branch as destination. " +
+          "Leave destinationBranchId empty.",
+          400,
+        );
       }
+
+      // Determine initial status based on same-branch logic
+      const initialStatus: PackageStatus = isSameBranch
+        ? "at_destination_branch"
+        : "pending";
  
    
       const destination = {
@@ -1407,20 +1419,13 @@ export const createPackage = catchAsyncError(
  
             destination,
  
-            status: "pending",
+            status: initialStatus,
             deliveryType,
             deliveryPriority: deliveryPriority ?? "standard",
  
             totalPrice,
             paymentStatus: "pending",
             paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
-
-            // ...(deliveryLat !== undefined && deliveryLon !== undefined && {
-            //   location: {
-            //     type: "Point" as const,
-            //     coordinates: [deliveryLon, deliveryLat] as [number, number],
-            //   },
-            // }),
  
             maxAttempts: 3,
             attemptCount: 0,
@@ -1433,10 +1438,12 @@ export const createPackage = catchAsyncError(
  
             trackingHistory: [
               {
-                status: "pending",
+                status: initialStatus,
                 branchId: originBranchId,
                 userId: freelancerUserId,
-                notes: "Package registered by freelancer. Awaiting counter drop-off.",
+                notes: isSameBranch
+                  ? "Package is at destination branch (same as origin). Ready for pickup."
+                  : "Package registered by freelancer. Awaiting counter drop-off.",
                 timestamp: new Date(),
               },
             ],
@@ -1450,11 +1457,13 @@ export const createPackage = catchAsyncError(
         [
           {
             packageId: packageDoc._id,
-            status: "pending" as PackageStatus,
+            status: initialStatus as PackageStatus,
             branchId: originBranchId,
             handledBy: freelancerUserId,
             handlerRole: "freelancer",
-            notes: "Package registered by freelancer via mobile app.",
+            notes: isSameBranch
+              ? "Package created at destination branch (same as origin). Ready for pickup."
+              : "Package registered by freelancer via mobile app.",
             timestamp: new Date(),
           },
         ],
@@ -1496,28 +1505,23 @@ export const createPackage = catchAsyncError(
 
 
       sendPackageCreatedNotification(
-
         freelancerUserId.toString(),
         "freelancer",
         packageDoc._id.toString(),
         trackingNumber
-
       ).catch(error => {
-
         console.error('Package created notification failed:', error);
-        // Will implement proper logging later
-        
       });
  
 
       return res.status(201).json({
         success: true,
-        message:
-          "Package registered successfully. Please print the bordereau and bring " +
-          "the package to your branch counter.",
+        message: isSameBranch
+          ? "Package registered successfully. It is already at the destination branch — ready for pickup."
+          : "Package registered successfully. Please print the bordereau and bring the package to your branch counter.",
         data: {
           packageId: packageDoc._id,
- 
+          status: initialStatus,
 
           bordereau: {
             trackingNumber,
@@ -1567,7 +1571,6 @@ export const createPackage = catchAsyncError(
             paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
           },
  
-          status: "pending",
           createdAt: packageDoc.createdAt,
         },
       });

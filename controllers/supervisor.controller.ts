@@ -202,7 +202,8 @@ export const createDeliverer = catchAsyncError(
             lastName,
             // imageUrl,
             role: "deliverer",
-            status: "pending",
+            // status: "pending",
+            status: "active",
           },
         ],
         // { session }

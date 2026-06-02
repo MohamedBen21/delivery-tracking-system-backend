@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { isAuthenticated, authorizeRoles } from "../middleware/auth";
 import {
+  assignTransporterBranches,
+  assignTransporterHubLine,
   createBranch,
   createCompany,
   createSupervisor,
@@ -97,6 +99,18 @@ managerRouter.post(
   "/companies/:companyId/branch/:branchId/promoted-branch/:promotedBranchId"
   , ...managerOrAdmin,
   switchBranchHub);
+
+managerRouter.post(
+  "/transporters/:id/assign-hub-line",
+  ...managerOrAdmin,
+  assignTransporterHubLine,
+);
+
+managerRouter.post(
+  "/transporters/:id/assign-branches",
+  ...managerOrAdmin,
+  assignTransporterBranches,
+);
 
 export default managerRouter;
 

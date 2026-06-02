@@ -1786,6 +1786,7 @@ export const createSupervisor = catchAsyncError(
             phone,
             passwordHash: password, 
             role: "supervisor",
+            status:"active"
           },
         ],
         { session },

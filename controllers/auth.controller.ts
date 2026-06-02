@@ -856,7 +856,7 @@ export const deleteProfilePicture = catchAsyncError(
 
     // Reset to null (not empty strings)
     await userModel.findByIdAndUpdate(userId, { 
-      $set: { imageUrl: null } 
+      $set: { imageUrl: {public_id:null , url:null} } 
     });
 
     try {
