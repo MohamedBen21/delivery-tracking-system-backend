@@ -780,9 +780,9 @@ export const updateProfilePicture = catchAsyncError(
     
     if (hasOldImage) {
       try {
-        await v2.uploader.destroy(user.imageUrl.public_id);
+        await v2.uploader.destroy(user.imageUrl!.public_id);
       } catch (err) {
-        console.warn(`[updateProfilePicture] Failed to delete old image ${user.imageUrl.public_id}:`, err);
+        console.warn(`[updateProfilePicture] Failed to delete old image ${user.imageUrl!.public_id}:`, err);
       }
     }
 
@@ -849,9 +849,9 @@ export const deleteProfilePicture = catchAsyncError(
     }
 
     try {
-      await v2.uploader.destroy(user.imageUrl.public_id);
+      await v2.uploader.destroy(user.imageUrl!.public_id);
     } catch (err) {
-      console.warn(`[deleteProfilePicture] Failed to delete image ${user.imageUrl.public_id}:`, err);
+      console.warn(`[deleteProfilePicture] Failed to delete image ${user.imageUrl!.public_id}:`, err);
     }
 
     // Reset to null (not empty strings)

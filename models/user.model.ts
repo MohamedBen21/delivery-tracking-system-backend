@@ -14,7 +14,7 @@ export interface IUser extends Document {
   passwordHash?: string;
   firstName: string;
   lastName: string;
-  imageUrl: {
+  imageUrl?: {
     public_id: string;
     url:string;
   };
@@ -133,6 +133,7 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
         url: { type: String, default: null },
       },
       // default: { public_id: "", url: "" },
+      default: { public_id: null, url: null },
       _id: false,
     },
   },
