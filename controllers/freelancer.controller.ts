@@ -11,6 +11,7 @@ import { buildUserFieldUpdates } from "./manager.controller";
 import PaymentModel from "../models/payment.model";
 import clientModel from "../models/client.model";
 import { sendPackageCreatedNotification } from "../services/notification.service";
+import { findNearestBranch } from "../utils/branch.util";
 
 
 
@@ -1194,7 +1195,7 @@ export const createPackage = catchAsyncError(
     try {
       const freelancerUserId = req.user?._id;
  
-      if(!freelancerUserId){
+      if (!freelancerUserId) {
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
@@ -1219,7 +1220,7 @@ export const createPackage = catchAsyncError(
         declaredValue,
         deliveryType,
         deliveryPriority,
-        destinationBranchId,
+        destinationBranchId: providedDestinationBranchId,
         totalPrice,
         paymentMethod,
         estimatedDeliveryTime,
@@ -1228,12 +1229,12 @@ export const createPackage = catchAsyncError(
       } = req.body as ICreatePackageBody;
  
 
+      // ── Required fields validation ──────────────────────────────────────────
       if (
         !recipientName || !recipientPhone || !recipientAddress ||
         !recipientCity || !recipientState || !weight || !type ||
         !deliveryType || !totalPrice
       ) {
-
         throw new ErrorHandler(
           "recipientName, recipientPhone, recipientAddress, recipientCity, " +
           "recipientState, weight, type, deliveryType, and totalPrice are required.",
@@ -1243,48 +1244,24 @@ export const createPackage = catchAsyncError(
  
 
       if (typeof weight !== "number" || weight <= 0) {
-
         throw new ErrorHandler("weight must be a positive number.", 400);
       }
  
       if (typeof totalPrice !== "number" || totalPrice <= 0) {
-
         throw new ErrorHandler("totalPrice must be a positive number.", 400);
       }
  
       const VALID_TYPES = ["document", "parcel", "fragile", "heavy", "perishable", "electronic", "clothing"];
       if (!VALID_TYPES.includes(type)) {
-
         throw new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400);
       }
  
       if (!["home", "branch_pickup"].includes(deliveryType)) {
-
         throw new ErrorHandler("deliveryType must be 'home' or 'branch_pickup'.", 400);
       }
  
-      if (deliveryType === "branch_pickup" && !destinationBranchId) {
 
-        throw new ErrorHandler("destinationBranchId is required for branch_pickup deliveries.", 400);
-      }
- 
-      if (
-        destinationBranchId &&
-        !mongoose.Types.ObjectId.isValid(destinationBranchId)
-      ) {
-
-        throw new ErrorHandler("Invalid destinationBranchId.", 400);
-      }
- 
-      if (
-        deliveryPriority &&
-        !["standard", "express", "same_day"].includes(deliveryPriority)
-      ) {
-
-        throw new ErrorHandler("deliveryPriority must be standard, express, or same_day.", 400);
-      }
- 
-
+      // ── Phone number normalization ──────────────────────────────────────────
       let normalizedRecipientPhone: string;
       let normalizedAlternativePhone: string | undefined;
       
@@ -1294,11 +1271,11 @@ export const createPackage = catchAsyncError(
           normalizedAlternativePhone = normalizePhone(alternativePhone);
         }
       } catch (error: any) {
-
         throw new ErrorHandler(error.message || "Invalid phone number format.", 400);
       }
  
 
+      // ── Origin branch validation ────────────────────────────────────────────
       const originBranchId = freelancer.defaultOriginBranchId;
  
       if (!originBranchId) {
@@ -1309,61 +1286,91 @@ export const createPackage = catchAsyncError(
       }
  
 
-      const branchQueries: Promise<any>[] = [
-        BranchModel.findById(originBranchId).session(session).lean(),
-      ];
- 
-      if (destinationBranchId) {
-        branchQueries.push(
-          BranchModel.findById(destinationBranchId).session(session).lean(),
+      // ── Determine destinationBranchId ───────────────────────────────────────
+      let finalDestinationBranchId: mongoose.Types.ObjectId | undefined;
+      let destinationBranchDoc: any = null;
+
+      if (deliveryType === "branch_pickup") {
+        // branch_pickup: must be provided by the freelancer
+        if (!providedDestinationBranchId) {
+          throw new ErrorHandler("destinationBranchId is required for branch_pickup deliveries.", 400);
+        }
+        if (!mongoose.Types.ObjectId.isValid(providedDestinationBranchId)) {
+          throw new ErrorHandler("Invalid destinationBranchId.", 400);
+        }
+        finalDestinationBranchId = new mongoose.Types.ObjectId(providedDestinationBranchId);
+        
+        // Fetch destination branch for response
+        destinationBranchDoc = await BranchModel.findById(finalDestinationBranchId).session(session).lean();
+        if (!destinationBranchDoc || destinationBranchDoc.status !== "active") {
+          throw new ErrorHandler("Destination branch not found or not active.", 404);
+        }
+        
+      } else if (deliveryType === "home") {
+        // home delivery: find nearest branch to customer coordinates
+        if (deliveryLat === undefined || deliveryLon === undefined) {
+          throw new ErrorHandler(
+            "GPS coordinates (deliveryLat, deliveryLon) are required for home delivery. " +
+            "Please provide the customer's location for route optimization.",
+            400
+          );
+        }
+
+        // Validate coordinates are within range
+        if (deliveryLat < -90 || deliveryLat > 90 || deliveryLon < -180 || deliveryLon > 180) {
+          throw new ErrorHandler("Invalid GPS coordinates. Latitude must be between -90 and 90, longitude between -180 and 180.", 400);
+        }
+
+        // Find the nearest branch to the customer's address
+        const nearestBranchId = await findNearestBranch(
+          [deliveryLon, deliveryLat],
+          freelancer.companyId
         );
+
+        if (!nearestBranchId) {
+          throw new ErrorHandler(
+            "No active branch found near the delivery address. " +
+            "Please contact support to add coverage for this area.",
+            400
+          );
+        }
+
+        finalDestinationBranchId = nearestBranchId;
+        
+        // Fetch destination branch for response
+        destinationBranchDoc = await BranchModel.findById(finalDestinationBranchId).session(session).lean();
       }
  
-      const [originBranch, destinationBranch] = await Promise.all(branchQueries);
+
+      // ── Validate origin branch ──────────────────────────────────────────────
+      const originBranch = await BranchModel.findById(originBranchId).session(session).lean();
  
       if (!originBranch) {
-
         throw new ErrorHandler("Origin branch not found.", 404);
       }
  
       if (originBranch.status !== "active") {
-
         throw new ErrorHandler("Your origin branch is not currently active.", 400);
       }
  
-      if (destinationBranchId && !destinationBranch) {
 
-        throw new ErrorHandler("Destination branch not found.", 404);
-      }
- 
-      if (destinationBranch && destinationBranch.status !== "active") {
-
-        throw new ErrorHandler("The selected destination branch is not currently active.", 400);
-      }
- 
-
-      // ── Same-branch intelligence ────────────────────────────────────────
-      // When origin and destination are the same branch:
-      //   • branch_pickup → skip transport, package is already at destination
-      //   • home delivery → allowed (stays at origin, deliverer picks up from here)
-      const isSameBranch =
-        destinationBranchId &&
-        originBranchId.toString() === destinationBranchId.toString();
+      // ── Prevent same-branch home delivery (doesn't make sense) ──────────────
+      const isSameBranch = finalDestinationBranchId && 
+        originBranchId.toString() === finalDestinationBranchId.toString();
 
       if (isSameBranch && deliveryType === "home") {
         throw new ErrorHandler(
-          "For home delivery, you don't need to specify the same branch as destination. " +
-          "Leave destinationBranchId empty.",
+          "The nearest branch to the customer is your origin branch. " +
+          "For home delivery, the package will stay at this branch and be assigned to a local deliverer.",
           400,
         );
       }
 
-      // Determine initial status based on same-branch logic
-      const initialStatus: PackageStatus = isSameBranch
-        ? "at_destination_branch"
-        : "pending";
+      // Always start as pending — cashier claim/accept handles the rest
+      const initialStatus: PackageStatus = "pending";
  
    
+      // ── Build destination object ────────────────────────────────────────────
       const destination = {
         recipientName: recipientName.trim(),
         recipientPhone: normalizedRecipientPhone,
@@ -1373,7 +1380,6 @@ export const createPackage = catchAsyncError(
         state: recipientState.trim(),
         postalCode: recipientPostalCode?.trim(),
         notes: deliveryNotes?.trim(),
-
         ...(deliveryLat !== undefined && deliveryLon !== undefined && {
           location: {
             type: "Point" as const,
@@ -1397,6 +1403,7 @@ export const createPackage = catchAsyncError(
       );
  
 
+      // ── Create package document ─────────────────────────────────────────────
       const [packageDoc] = await PackageModel.create(
         [
           {
@@ -1404,7 +1411,7 @@ export const createPackage = catchAsyncError(
             companyId: freelancer.companyId,
             senderId: freelancerUserId,
             senderType: "freelancer",
-            clientId, 
+            clientId,
  
             weight,
             dimensions,
@@ -1414,8 +1421,8 @@ export const createPackage = catchAsyncError(
             declaredValue,
  
             originBranchId,
-            currentBranchId: originBranchId,   
-            destinationBranchId: destinationBranchId ?? undefined,
+            currentBranchId: originBranchId,
+            destinationBranchId: finalDestinationBranchId,
  
             destination,
  
@@ -1438,12 +1445,10 @@ export const createPackage = catchAsyncError(
  
             trackingHistory: [
               {
-                status: initialStatus,
+                status: "pending",
                 branchId: originBranchId,
                 userId: freelancerUserId,
-                notes: isSameBranch
-                  ? "Package is at destination branch (same as origin). Ready for pickup."
-                  : "Package registered by freelancer. Awaiting counter drop-off.",
+                notes: `Package registered by freelancer. ${deliveryType === "home" ? `Nearest branch: ${destinationBranchDoc?.name || "unknown"}` : ""}`,
                 timestamp: new Date(),
               },
             ],
@@ -1457,12 +1462,12 @@ export const createPackage = catchAsyncError(
         [
           {
             packageId: packageDoc._id,
-            status: initialStatus as PackageStatus,
+            status: "pending" as PackageStatus,
             branchId: originBranchId,
             handledBy: freelancerUserId,
             handlerRole: "freelancer",
-            notes: isSameBranch
-              ? "Package created at destination branch (same as origin). Ready for pickup."
+            notes: deliveryType === "home" 
+              ? `Package registered for home delivery. Will be routed to nearest branch: ${destinationBranchDoc?.name || "unknown"}`
               : "Package registered by freelancer via mobile app.",
             timestamp: new Date(),
           },
@@ -1471,6 +1476,7 @@ export const createPackage = catchAsyncError(
       );
  
 
+      // ── Create payment record ───────────────────────────────────────────────
       await PaymentModel.create(
         [
           {
@@ -1478,10 +1484,9 @@ export const createPackage = catchAsyncError(
             packageId: packageDoc._id,
             trackingNumber,
             branchId: originBranchId,
-            clientId,                   
+            clientId,
             senderId: freelancerUserId,
-            collectionMethod:
-              deliveryType === "home" ? "home_delivery" : "branch_pickup",
+            collectionMethod: deliveryType === "home" ? "home_delivery" : "branch_pickup",
             amount: totalPrice,
             paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
             status: "pending",
@@ -1491,6 +1496,7 @@ export const createPackage = catchAsyncError(
       );
  
 
+      // ── Update freelancer stats ─────────────────────────────────────────────
       await FreelancerModel.findByIdAndUpdate(
         freelancer._id,
         {
@@ -1514,14 +1520,25 @@ export const createPackage = catchAsyncError(
       });
  
 
+      // ── Build response message ──────────────────────────────────────────────
+      let responseMessage: string;
+      if (deliveryType === "branch_pickup") {
+        responseMessage = "Package registered successfully. Please print the bordereau and bring the package to your branch counter.";
+      } else {
+        responseMessage = `Package registered successfully. It will be routed to ${destinationBranchDoc?.name || "the nearest branch"} for delivery to the customer.`;
+      }
+
       return res.status(201).json({
         success: true,
-        message: isSameBranch
-          ? "Package registered successfully. It is already at the destination branch — ready for pickup."
-          : "Package registered successfully. Please print the bordereau and bring the package to your branch counter.",
+        message: responseMessage,
         data: {
           packageId: packageDoc._id,
-          status: initialStatus,
+          status: "pending",
+          destinationBranch: destinationBranchDoc ? {
+            id: destinationBranchDoc._id,
+            name: destinationBranchDoc.name,
+            code: destinationBranchDoc.code,
+          } : null,
 
           bordereau: {
             trackingNumber,
@@ -1558,12 +1575,12 @@ export const createPackage = catchAsyncError(
               address: originBranch.address,
             },
  
-            destinationBranch: destinationBranch
+            destinationBranch: destinationBranchDoc
               ? {
-                  id: destinationBranch._id,
-                  name: destinationBranch.name,
-                  code: destinationBranch.code,
-                  address: destinationBranch.address,
+                  id: destinationBranchDoc._id,
+                  name: destinationBranchDoc.name,
+                  code: destinationBranchDoc.code,
+                  address: destinationBranchDoc.address,
                 }
               : null,
  
@@ -1576,7 +1593,7 @@ export const createPackage = catchAsyncError(
       });
  
     } catch (error: any) {
- 
+
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -1587,9 +1604,9 @@ export const createPackage = catchAsyncError(
           ),
         );
       }
- 
+      
       return next(error);
- 
+
     } finally {
       if (!transactionCommitted) {
         await session.abortTransaction().catch(() => {});

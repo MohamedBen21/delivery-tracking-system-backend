@@ -825,17 +825,22 @@ manifestSchema.methods._cascadeArrivedToPackages = async function (
   const now = new Date();
 
   // Fetch packages to determine final vs intermediate
+  // Also fetch deliveryType to handle home delivery packages correctly
   const packages = await PackageModel.find(
     { _id: { $in: packageIds } },
-    { _id: 1, destinationBranchId: 1 }
+    { _id: 1, destinationBranchId: 1, deliveryType: 1 }
   ).session(session || null).lean();
 
   const finalDestinationIds: mongoose.Types.ObjectId[] = [];
   const intermediateIds: mongoose.Types.ObjectId[] = [];
 
   for (const pkg of packages) {
+    // For branch_pickup: check if destinationBranchId matches
+    // For home delivery: destinationBranchId may be null initially,
+    // but after we find nearest branch, it should be set
     const isFinal = pkg.destinationBranchId &&
       pkg.destinationBranchId.toString() === destBranchId.toString();
+    
     if (isFinal) {
       finalDestinationIds.push(pkg._id);
     } else {
@@ -851,6 +856,9 @@ manifestSchema.methods._cascadeArrivedToPackages = async function (
         $set: {
           status: 'at_destination_branch',
           currentBranchId: destBranchId,
+          // CRITICAL FIX: Ensure destinationBranchId is set for home delivery packages
+          // that might have reached their final branch but destinationBranchId is null
+          ...(destBranchId && { destinationBranchId: destBranchId }),
         },
         $push: {
           trackingHistory: {
