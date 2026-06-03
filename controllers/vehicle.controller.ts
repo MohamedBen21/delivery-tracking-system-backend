@@ -1432,9 +1432,9 @@ export const assignVehicle = catchAsyncError(
         deliverer.lastActiveAt = new Date();
         
         // If deliverer is available, set to on_route (or keep as is)
-        if (deliverer.availabilityStatus === "available") {
-          deliverer.availabilityStatus = "on_route";
-        }
+        // if (deliverer.availabilityStatus === "available") {
+        //   deliverer.availabilityStatus = "on_route";
+        // }
         
         await deliverer.save({ session });
         
@@ -1454,9 +1454,9 @@ export const assignVehicle = catchAsyncError(
         transporter.lastActiveAt = new Date();
         
         // If transporter is available, set to on_route
-        if (transporter.availabilityStatus === "available") {
-          transporter.availabilityStatus = "on_route";
-        }
+        // if (transporter.availabilityStatus === "available") {
+        //   transporter.availabilityStatus = "on_route";
+        // }
         
         await transporter.save({ session });
         

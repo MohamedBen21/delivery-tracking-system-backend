@@ -426,176 +426,187 @@ try {
 
 
 export const acceptPackage = catchAsyncError(
-async (req: Request, res: Response, next: NextFunction) => {
+  async (req: Request, res: Response, next: NextFunction) => {
 
-const session = await mongoose.startSession();
-session.startTransaction();
-let transactionCommitted = false;
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
 
-try {
-    const cashierUserId = req.user?._id;
-    const cashier = await resolveCashier(cashierUserId, next, session);
-    if (!cashier) return;
+    try {
+      const cashierUserId = req.user?._id;
+      const cashier = await resolveCashier(cashierUserId, next, session);
+      if (!cashier) return;
 
-    const { trackingNumber, verifiedWeight, notes } = req.body as {
-    trackingNumber: string;
-    verifiedWeight?: number;  
-    notes?: string;
-    };
+      const { trackingNumber, verifiedWeight, notes } = req.body as {
+        trackingNumber: string;
+        verifiedWeight?: number;  
+        notes?: string;
+      };
 
-    if (!trackingNumber?.trim()) {
+      if (!trackingNumber?.trim()) {
+        throw new ErrorHandler("trackingNumber is required.", 400);
+      }
 
-    throw new ErrorHandler("trackingNumber is required.", 400);
-    }
+      const now = new Date();
 
-    const now = new Date();
+      const packageDoc = await PackageModel.findOne({
+        trackingNumber: trackingNumber.trim().toUpperCase(),
+        originBranchId: cashier.assignedBranchId,
+      }).session(session);
 
-    const packageDoc = await PackageModel.findOne({
-    trackingNumber: trackingNumber.trim().toUpperCase(),
-    originBranchId: cashier.assignedBranchId,
-    }).session(session);
+      if (!packageDoc) {
+        throw new ErrorHandler(
+          `Package ${trackingNumber} not found at your branch.`,
+          404,
+        );
+      }
 
-    if (!packageDoc) {
+      if (packageDoc.status !== "cashier_claimed") {
+        throw new ErrorHandler(
+          `Package must be in 'cashier_claimed' status to accept. Current status: '${packageDoc.status}'.`,
+          400,
+        );
+      }
 
-    throw new ErrorHandler(
-        `Package ${trackingNumber} not found at your branch.`,
-        404,
-    );
-    }
+      // ── Same-branch detection ──────────────────────────────────────────
+      const isSameBranch =
+        packageDoc.destinationBranchId &&
+        packageDoc.originBranchId.toString() === packageDoc.destinationBranchId.toString();
 
-    if (packageDoc.status !== "cashier_claimed") {
+      const noteText =
+        notes?.trim() ||
+        `Package inspected and accepted into branch stock.${
+          verifiedWeight ? ` Verified weight: ${verifiedWeight}kg.` : ""
+        }`;
 
-    throw new ErrorHandler(
-        `Package must be in 'cashier_claimed' status to accept. Current status: '${packageDoc.status}'.`,
-        400,
-    );
-    }
+      // Determine final status
+      let finalStatus: PackageStatus;
+      let trackingNote: string;
 
-    const noteText =
-    notes?.trim() ||
-    `Package inspected and accepted into branch stock.${
-        verifiedWeight ? ` Verified weight: ${verifiedWeight}kg.` : ""
-    }`;
+      if (isSameBranch) {
+        finalStatus = "at_destination_branch";
+        trackingNote = "Package is at destination branch (same as origin). Ready for pickup — no transport needed.";
+      } else {
+        finalStatus = "at_origin_branch";
+        trackingNote = noteText;
+      }
 
-    const updateFields: Record<string, any> = {
-    status: "at_origin_branch" as PackageStatus,
-    currentBranchId: cashier.assignedBranchId,
-    };
+      const updateFields: Record<string, any> = {
+        status: finalStatus,
+        currentBranchId: cashier.assignedBranchId,
+      };
 
+      if (verifiedWeight && typeof verifiedWeight === "number" && verifiedWeight > 0) {
+        updateFields.weight = verifiedWeight;
+      }
 
-    if (verifiedWeight && typeof verifiedWeight === "number" && verifiedWeight > 0) {
-    updateFields.weight = verifiedWeight;
-    }
-
-    await PackageModel.findByIdAndUpdate(
-    packageDoc._id,
-    {
-        $set: updateFields,
-        $push: {
-        trackingHistory: {
-            status: "at_origin_branch",
-            branchId: cashier.assignedBranchId,
-            userId: cashierUserId,
-            notes: noteText,
-            timestamp: now,
-        },
-        },
-    },
-    { session },
-    );
-
-    await PackageHistoryModel.create(
-    [
+      await PackageModel.findByIdAndUpdate(
+        packageDoc._id,
         {
-        packageId: packageDoc._id,
-        status: "at_origin_branch" as PackageStatus,
-        branchId: cashier.assignedBranchId,
-        handledBy: cashierUserId,
-        handlerName: `${(req.user as any)?.firstName} ${(req.user as any)?.lastName}`,
-        handlerRole: "cashier",
-        notes: noteText,
-        timestamp: now,
-        },
-    ],
-    { session },
-    );
-
-  
-    await CashierModel.findByIdAndUpdate(
-    cashier._id,
-    {
-        $inc: { "stats.totalLabelsIssued": 1 },
-        $set: { "stats.lastActiveAt": now },
-        $push: {
-        recentScans: {
-            $each: [
-            {
-                action: "print_label",
-                packageId: packageDoc._id,
-                trackingNumber: packageDoc.trackingNumber,
-                branchId: cashier.assignedBranchId,
-                timestamp: now,
-                notes: noteText,
-                success: true,
+          $set: updateFields,
+          $push: {
+            trackingHistory: {
+              status: finalStatus,
+              branchId: cashier.assignedBranchId,
+              userId: cashierUserId,
+              notes: trackingNote,
+              timestamp: now,
             },
-            ],
-            $slice: -200,
-            $position: 0,
+          },
         },
+        { session },
+      );
+
+      await PackageHistoryModel.create(
+        [
+          {
+            packageId: packageDoc._id,
+            status: finalStatus as PackageStatus,
+            branchId: cashier.assignedBranchId,
+            handledBy: cashierUserId,
+            handlerName: `${(req.user as any)?.firstName} ${(req.user as any)?.lastName}`,
+            handlerRole: "cashier",
+            notes: isSameBranch
+              ? "Package accepted at destination branch (same as origin). Ready for pickup."
+              : noteText,
+            timestamp: now,
+          },
+        ],
+        { session },
+      );
+
+      await CashierModel.findByIdAndUpdate(
+        cashier._id,
+        {
+          $inc: { "stats.totalLabelsIssued": 1 },
+          $set: { "stats.lastActiveAt": now },
+          $push: {
+            recentScans: {
+              $each: [
+                {
+                  action: "print_label",
+                  packageId: packageDoc._id,
+                  trackingNumber: packageDoc.trackingNumber,
+                  branchId: cashier.assignedBranchId,
+                  timestamp: now,
+                  notes: trackingNote,
+                  success: true,
+                },
+              ],
+              $slice: -200,
+              $position: 0,
+            },
+          },
         },
-    },
-    { session },
-    );
+        { session },
+      );
 
-    await session.commitTransaction();
-    transactionCommitted = true;
+      await session.commitTransaction();
+      transactionCommitted = true;
 
+      sendPackageAcceptedIntoBranchNotification(
+        packageDoc.senderId.toString(),
+        packageDoc.senderType,
+        packageDoc._id.toString(),
+        packageDoc.trackingNumber,
+        (cashier as any).branchName || "Branch"
+      ).catch(error => {
+        console.error('Package accepted notification sending failed:', error);
+      });
 
-    sendPackageAcceptedIntoBranchNotification(
+      return res.status(200).json({
+        success: true,
+        message: isSameBranch
+          ? "Package accepted. It is already at the destination branch — ready for pickup."
+          : "Package accepted into branch stock.",
+        data: {
+          packageId: packageDoc._id,
+          trackingNumber: packageDoc.trackingNumber,
+          previousStatus: "cashier_claimed",
+          currentStatus: finalStatus,
+          acceptedAt: now,
+          verifiedWeight: verifiedWeight ?? null,
+          sameBranchPickup: isSameBranch,
+        },
+      });
 
-    packageDoc.senderId.toString(),
-    packageDoc.senderType,
-    packageDoc._id.toString(),
-    packageDoc.trackingNumber,
-    (cashier as any).branchName || "Branch" 
-    
-    ).catch(error => {
-
-    console.error('Package accepted notification sending failed:', error);
-    // Will implement proper logging later
-    });
-
-    return res.status(200).json({
-    success: true,
-    message: "Package accepted into branch stock.",
-    data: {
-        packageId: packageDoc._id,
-        trackingNumber: packageDoc.trackingNumber,
-        previousStatus: "cashier_claimed",
-        currentStatus: "at_origin_branch",
-        acceptedAt: now,
-        verifiedWeight: verifiedWeight ?? null,
-    },
-    });
-
-} catch (error: any) {
-    if (error.name === "ValidationError") {
-    return next(
-        new ErrorHandler(
-        Object.values(error.errors).map((e: any) => e.message).join(", "),
-        400,
-        ),
-    );
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400,
+          ),
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
     }
-    return next(error);
-} finally {
-
-    if (!transactionCommitted) {
-    await session.abortTransaction().catch(() => {});
-    }
-    await session.endSession();
-}
-},
+  },
 );
 
 
