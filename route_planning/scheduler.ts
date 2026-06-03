@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  scheduler.ts
-//  Cron job that fires the nightly route planning run.
+//  Cron job that fires the route planning run.
 //  Also exposes a manual trigger for admin use and re-planning.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -12,49 +12,75 @@ import { DailyPlanResult, BranchPlanResult } from "./types.util";
 //  SCHEDULE
 //
 //  Algeria is UTC+1 (no DST).
-//  We want to run at midnight Algeria time = 23:00 UTC the previous day.
-//  Routes are built for "tomorrow" so workers have them ready at 06:00.
+//  TEMPORARY: Running at 12:40 Algeria time for TODAY's testing.
+//  Routes are built for TODAY so testing happens immediately.
 //
-//  Cron expression: "0 23 * * *"
+//  Cron expression: "40 11 * * *"
 //    ┬ ┬  ┬ ┬ ┬
 //    │ │  │ │ └─ day of week (any)
 //    │ │  │ └─── month (any)
 //    │ │  └───── day of month (any)
-//    │ └──────── hour (23 UTC = midnight Algeria)
-//    └────────── minute (0)
+//    │ └──────── hour (11 UTC = 12:40 Algeria)
+//    └────────── minute (40)
 // ─────────────────────────────────────────────────────────────────────────────
 
 let isRunning = false; // Guard against overlapping runs
 
 export function startScheduler(): void {
-  cron.schedule("0 23 * * *", async () => {
+  // ─────────────────────────────────────────────────────────────────────────
+  // DEBUG: Check server timezone and current time
+  // ─────────────────────────────────────────────────────────────────────────
+  const now = new Date();
+  console.log("═══════════════════════════════════════════════════════════════");
+  console.log("📍 SERVER TIME DEBUG");
+  console.log("═══════════════════════════════════════════════════════════════");
+  console.log(`Current UTC time:     ${now.toUTCString()}`);
+  console.log(`Current local time:   ${now.toString()}`);
+  console.log(`Timezone offset:      ${-now.getTimezoneOffset() / 60} hours from UTC`);
+  console.log(`ISO string:           ${now.toISOString()}`);
+  console.log(`Hours (UTC):          ${now.getUTCHours()}:${now.getUTCMinutes()}:${now.getUTCSeconds()}`);
+  console.log(`Hours (local):        ${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`);
+  console.log("═══════════════════════════════════════════════════════════════");
+
+  // Test cron that runs every minute to verify node-cron is working
+  cron.schedule("* * * * *", () => {
+    const cronNow = new Date();
+    console.log(`[CRON TEST] Cron is alive! Time: ${cronNow.toLocaleString()} (${cronNow.getHours()}:${cronNow.getMinutes()}:${cronNow.getSeconds()})`);
+  });
+
+  // Your actual schedule
+  cron.schedule("31 13 * * *", async () => {
+    console.log("═══════════════════════════════════════════════════════════════");
+    console.log("🎯 CRON TRIGGERED AT:", new Date().toLocaleString());
+    console.log("═══════════════════════════════════════════════════════════════");
+    
     if (isRunning) {
       console.warn("[scheduler] Previous run still in progress — skipping");
       return;
     }
 
     isRunning = true;
-    console.log("[scheduler] Starting nightly route planning...");
+    console.log("[scheduler] Starting route planning for TODAY (test run)...");
 
     try {
-      // Plan for tomorrow (the day routes will actually run)
-      const tomorrow = nextDay(new Date());
-      const result   = await runDailyRoutePlanning(tomorrow);
+      const today = new Date();
+      const result = await runDailyRoutePlanning(today);
       logSummary(result);
     } catch (err) {
-      console.error("[scheduler] Nightly run failed:", err);
+      console.error("[scheduler] Test run failed:", err);
     } finally {
       isRunning = false;
     }
   });
 
-  console.log("[scheduler] Nightly route planning scheduled (23:00 UTC)");
+  console.log("[scheduler] Route planning scheduled for 12:50 Algeria time (TEST MODE - planning for TODAY)");
+  console.log("[scheduler] ⚠️  Expect cron to run when local time matches: 12:50");
+  console.log("═══════════════════════════════════════════════════════════════");
 }
-
 // ─────────────────────────────────────────────────────────────────────────────
 //  MANUAL TRIGGER
 //  Called by the admin endpoint: POST /admin/routes/plan-now
-//  Accepts an optional date string (YYYY-MM-DD); defaults to tomorrow.
+//  Accepts an optional date string (YYYY-MM-DD); defaults to TODAY for testing.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function triggerManualPlan(
@@ -75,7 +101,8 @@ export async function triggerManualPlan(
         throw new Error(`Invalid date: ${dateStr}. Expected format: YYYY-MM-DD`);
       }
     } else {
-      targetDate = nextDay(new Date());
+      // Default to TODAY for testing
+      targetDate = new Date();
     }
 
     console.log(

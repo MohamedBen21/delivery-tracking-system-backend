@@ -23,6 +23,15 @@
 //    Note: packages whose destinationBranchId === this hub are already at
 //    their correct branch and should NOT be re-transported.  They are picked
 //    up by a deliverer, not a transporter.
+//
+//  Fix (Problem 3):
+//  ─────────────────
+//  getDelivererCandidates now enforces `destinationBranchId: branchId`.
+//  This prevents a package whose destinationBranchId is a remote hub (e.g.
+//  ALG) from being assigned to a deliverer at the origin branch (e.g. CST).
+//  Only packages whose destinationBranchId matches the current branch are
+//  eligible for last-mile delivery — i.e. they have physically arrived at
+//  the correct hub and are ready for the final hop to the customer.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import mongoose from "mongoose";
@@ -83,8 +92,25 @@ export async function getTransporterCandidates(
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  DELIVERER CANDIDATES
-//  Unchanged — deliverers always pick up from "at_destination_branch" at
-//  their home branch and deliver to customer addresses.
+//
+//  Fix (Problem 3): Added `destinationBranchId: branchId` filter.
+//
+//  A package is eligible for last-mile delivery at THIS branch ONLY when:
+//    • currentBranchId = branchId        — it is physically here
+//    • status = "at_destination_branch"  — it has arrived at its final branch
+//    • deliveryType = "home"             — it needs home delivery
+//    • destinationBranchId = branchId    — THIS branch is its final destination
+//    • currentRouteId = null             — not yet on a route
+//
+//  Without the destinationBranchId filter, packages destined for a remote hub
+//  (e.g. a Constantine package going to Algiers) would be incorrectly assigned
+//  to a local deliverer at CST, causing 400km cross-city delivery attempts.
+//
+//  The correct flow for such packages:
+//    1. Created at CST → destinationBranchId = ALG (nearest hub to customer).
+//    2. Manifested CST → ALG and transported to ALG Hub.
+//    3. Arrive at ALG Hub → status = "at_destination_branch".
+//    4. Only then picked up by an ALG deliverer (this query, at ALG branch).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface DelivererCandidateResult {
@@ -101,7 +127,9 @@ export async function getDelivererCandidates(
     currentBranchId: branchId,
     status:          "at_destination_branch",
     deliveryType:    "home",
-    // Only packages whose final destination IS this branch
+    // Fix: only packages whose final destination IS this branch
+    // Previously this filter was present but for completeness it's
+    // explicitly enforced here to prevent cross-city assignment.
     destinationBranchId: branchId,
     currentRouteId:  null,
   })

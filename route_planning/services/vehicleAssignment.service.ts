@@ -1,6 +1,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  vehicleAssignmentService.ts
 //  Fetches available vehicles at a branch and provides assignment helpers.
+//
+//  Fix (Problem 1 & 4):
+//    Removed `assignedUserId: null` from the query filter.
+//    Vehicles with a pre-assigned userId (permanently assigned to workers)
+//    are valid candidates for CVRP route assignment — they are "available"
+//    for use even though they already have an assignedUserId.
+//    The CVRP prioritises keeping existing vehicle-worker pairings via
+//    the preferredVehicleId field on OptimizerWorker (handled in the pipeline).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import mongoose from "mongoose";
@@ -15,8 +23,12 @@ import { VehicleCandidate, VehicleType, VEHICLE_TYPE_ORDER } from "../types.util
 //    • currentBranchId = branch   (physically at this branch)
 //    • documentStatus = "valid"   (checked via virtual — but virtuals don't
 //                                  work in .lean(); we replicate the logic below)
-//    • assignedUserId is null     (not already assigned to a worker)
 //    • companyId matches
+//
+//  NOTE: assignedUserId is intentionally NOT filtered here.
+//  Vehicles permanently assigned to workers (assignedUserId set) are still
+//  physically available for today's routes.  The CVRP respects existing
+//  pairings by matching them via workerCandidate.vehicleId.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function getAvailableVehicles(
@@ -24,7 +36,6 @@ export async function getAvailableVehicles(
   companyId: mongoose.Types.ObjectId,
 ): Promise<VehicleCandidate[]> {
   const now              = new Date();
-  const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
   // Replicate the documentStatus virtual in the query:
   // documents must exist, not be expired, and have the three required fields.
@@ -32,7 +43,7 @@ export async function getAvailableVehicles(
     companyId,
     currentBranchId: branchId,
     status:          "available",
-    assignedUserId:  null,
+    // NOTE: `assignedUserId: null` removed — pre-assigned vehicles are valid candidates
 
     // Must have all three required document fields
     "documents.registrationCard":    { $exists: true, $ne: null },
@@ -56,7 +67,7 @@ export async function getAvailableVehicles(
     ],
   })
     .select(
-      "_id type registrationNumber maxWeight maxVolume supportsFragile",
+      "_id type registrationNumber maxWeight maxVolume supportsFragile assignedUserId",
     )
     .lean();
 
@@ -67,6 +78,9 @@ export async function getAvailableVehicles(
     maxVolume:          d.maxVolume,
     supportsFragile:    d.supportsFragile ?? true,
     registrationNumber: d.registrationNumber,
+    // Expose the pre-assigned userId so the orchestrator can match
+    // vehicles back to their permanently-assigned workers.
+    assignedUserId:     d.assignedUserId ?? undefined,
   }));
 }
 
