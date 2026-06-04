@@ -11,7 +11,7 @@ import { buildUserFieldUpdates } from "./manager.controller";
 import PaymentModel from "../models/payment.model";
 import clientModel from "../models/client.model";
 import { sendPackageCreatedNotification } from "../services/notification.service";
-import { findNearestBranch } from "../utils/branch.util";
+import { findNearestHub } from "../utils/branch.util";
 
 
 
@@ -1307,7 +1307,8 @@ export const createPackage = catchAsyncError(
         }
         
       } else if (deliveryType === "home") {
-        // home delivery: find nearest branch to customer coordinates
+        // home delivery: route to the nearest REGIONAL MAIN HUB
+        // (not the nearest any-branch — only hubs run the CVRP deliverer pass)
         if (deliveryLat === undefined || deliveryLon === undefined) {
           throw new ErrorHandler(
             "GPS coordinates (deliveryLat, deliveryLon) are required for home delivery. " +
@@ -1318,27 +1319,35 @@ export const createPackage = catchAsyncError(
 
         // Validate coordinates are within range
         if (deliveryLat < -90 || deliveryLat > 90 || deliveryLon < -180 || deliveryLon > 180) {
-          throw new ErrorHandler("Invalid GPS coordinates. Latitude must be between -90 and 90, longitude between -180 and 180.", 400);
-        }
-
-        // Find the nearest branch to the customer's address
-        const nearestBranchId = await findNearestBranch(
-          [deliveryLon, deliveryLat],
-          freelancer.companyId
-        );
-
-        if (!nearestBranchId) {
           throw new ErrorHandler(
-            "No active branch found near the delivery address. " +
-            "Please contact support to add coverage for this area.",
+            "Invalid GPS coordinates. Latitude must be between -90 and 90, longitude between -180 and 180.",
             400
           );
         }
 
-        finalDestinationBranchId = nearestBranchId;
+        // ── Find the nearest HUB (regional_main_hub) to the customer ─────────────
+        // This is the critical fix: home-delivery packages must be routed to a hub,
+        // not to any branch. Deliverers operate out of hubs.
+        const nearestHubId = await findNearestHub(
+          [deliveryLon, deliveryLat],
+          freelancer.companyId
+        );
+
+        if (!nearestHubId) {
+          throw new ErrorHandler(
+            "No active hub found near the delivery address. " +
+            "Please contact support to add hub coverage for this area.",
+            400
+          );
+        }
+
+        finalDestinationBranchId = nearestHubId;
         
-        // Fetch destination branch for response
-        destinationBranchDoc = await BranchModel.findById(finalDestinationBranchId).session(session).lean();
+        // Fetch hub doc for response (name, code, address used in bordereau)
+        destinationBranchDoc = await BranchModel
+          .findById(finalDestinationBranchId)
+          .session(session)
+          .lean();
       }
  
 
@@ -1354,17 +1363,13 @@ export const createPackage = catchAsyncError(
       }
  
 
-      // ── Prevent same-branch home delivery (doesn't make sense) ──────────────
-      const isSameBranch = finalDestinationBranchId && 
-        originBranchId.toString() === finalDestinationBranchId.toString();
-
-      if (isSameBranch && deliveryType === "home") {
-        throw new ErrorHandler(
-          "The nearest branch to the customer is your origin branch. " +
-          "For home delivery, the package will stay at this branch and be assigned to a local deliverer.",
-          400,
-        );
-      }
+      // ── REMOVED: same-branch home delivery guard ──────────────────────────────
+      // The old guard that blocked packages when origin branch was the same as
+      // destination branch is removed. If the origin branch IS the nearest hub
+      // (e.g., a freelancer working out of the Algiers hub submitting a package
+      // for Algiers delivery), this is a completely valid scenario. The package
+      // stays at the hub and a local deliverer picks it up — no inter-hub transport
+      // needed. The CVRP deliverer pass handles this correctly.
 
       // Always start as pending — cashier claim/accept handles the rest
       const initialStatus: PackageStatus = "pending";
@@ -1448,7 +1453,7 @@ export const createPackage = catchAsyncError(
                 status: "pending",
                 branchId: originBranchId,
                 userId: freelancerUserId,
-                notes: `Package registered by freelancer. ${deliveryType === "home" ? `Nearest branch: ${destinationBranchDoc?.name || "unknown"}` : ""}`,
+                notes: `Package registered by freelancer. ${deliveryType === "home" ? `Routed to hub: ${destinationBranchDoc?.name || "unknown"}` : ""}`,
                 timestamp: new Date(),
               },
             ],
@@ -1467,7 +1472,7 @@ export const createPackage = catchAsyncError(
             handledBy: freelancerUserId,
             handlerRole: "freelancer",
             notes: deliveryType === "home" 
-              ? `Package registered for home delivery. Will be routed to nearest branch: ${destinationBranchDoc?.name || "unknown"}`
+              ? `Package registered for home delivery. Will be routed to hub: ${destinationBranchDoc?.name || "unknown"}`
               : "Package registered by freelancer via mobile app.",
             timestamp: new Date(),
           },
@@ -1525,7 +1530,7 @@ export const createPackage = catchAsyncError(
       if (deliveryType === "branch_pickup") {
         responseMessage = "Package registered successfully. Please print the bordereau and bring the package to your branch counter.";
       } else {
-        responseMessage = `Package registered successfully. It will be routed to ${destinationBranchDoc?.name || "the nearest branch"} for delivery to the customer.`;
+        responseMessage = `Package registered successfully. It will be routed to ${destinationBranchDoc?.name || "the nearest hub"} for delivery to the customer.`;
       }
 
       return res.status(201).json({
