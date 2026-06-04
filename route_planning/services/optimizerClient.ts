@@ -96,6 +96,26 @@ export interface OptimizerWorker {
    * Python will only build stops for branches present in this list.
    */
   assignedBranches?: string[];
+
+  /**
+   * Fix (Problem 1 & 4): pre-assigned vehicle pairing.
+   *
+   * Set this to worker.vehicleId (the worker's currentVehicleId from the DB)
+   * when the worker already has a permanently-assigned vehicle.
+   *
+   * The Python pipeline reads this in _lock_preferred_pairings() and locks the
+   * worker to their vehicle before the GA runs.  The vehicle is excluded from
+   * the free pool entirely, guaranteeing the worker always drives their own
+   * vehicle.
+   *
+   * If the preferred vehicle cannot carry the assigned cluster (capacity
+   * exceeded), the pipeline gracefully falls back to the next compatible
+   * available vehicle — no hard crash.
+   *
+   * Populated in the orchestrator when building OptimizerWorker from
+   * WorkerCandidate: set preferredVehicleId = worker.vehicleId?.toString()
+   */
+  preferredVehicleId?: string;
 }
 
 export interface OptimizerRequest {
@@ -210,8 +230,9 @@ export async function pingOptimizer(): Promise<boolean> {
 //  Node.js responsibilities (ONLY):
 //    1. Fetch packages, manifests, vehicles, workers from MongoDB
 //    2. Resolve branch coordinates for manifests before the call
-//    3. Call this client with the assembled data
-//    4. Persist the result (routes, manifest transport legs, worker/vehicle status)
+//    3. Set preferredVehicleId on each worker whose currentVehicleId is set
+//    4. Call this client with the assembled data
+//    5. Persist the result (routes, manifest transport legs, worker/vehicle status)
 //
 //  Python handles everything in between (assignment + route ordering).
 // ─────────────────────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ import {
   getDelivererCandidates,
 } from "./services/packageCandidate.service";
 import {
-  getAvailableVehicles,
+  getVehiclesByIds,
   markVehicleInUse,
 } from "./services/vehicleAssignment.service";
 import {
@@ -128,17 +128,15 @@ async function planBranch(
   const t0     = Date.now();
   const errors: string[] = [];
 
-  // ── 1. Fetch workers ──────────────────────────────────────────────────────
+  // ── 1. Fetch workers and packages ─────────────────────────────────────────
   const [
     transporterPkgs,
     delivererResult,
-    vehicles,
     transporters,
     deliverers,
   ] = await Promise.all([
     getTransporterCandidates(branch._id, branch.companyId, isHub),
     getDelivererCandidates(branch._id, branch.companyId),
-    getAvailableVehicles(branch._id, branch.companyId),
     getAvailableTransporters(branch._id, branch.companyId, scheduledDate),
     getAvailableDeliverers(branch._id, branch.companyId, scheduledDate),
   ]);
@@ -150,7 +148,23 @@ async function planBranch(
   const delivererPkgs = delivererResult.candidates;
   const allPackages   = [...transporterPkgs, ...delivererPkgs];
 
-  // ── 2. Fetch manifests for hub transporters at this branch ────────────────
+  // ── 2. Build vehicles list from worker pre-assigned vehicles ──────────────
+  //    Fix (Problem 1 & 4): Workers already have vehicles assigned by manager.
+  //    We collect vehicle IDs from workers and fetch them.
+  const allWorkers = [...transporters, ...deliverers];
+  
+  // Collect unique vehicle IDs from workers who have a vehicle assigned
+  const vehicleIds = allWorkers
+    .map((w) => w.vehicleId)
+    .filter((id): id is mongoose.Types.ObjectId => id !== undefined && id !== null);
+  
+  // Remove duplicates
+  const uniqueVehicleIds = [...new Set(vehicleIds.map(id => id.toString()))].map(id => new mongoose.Types.ObjectId(id));
+  
+  // Fetch vehicles by their IDs (no status filtering - they can be "in_use")
+  const vehicles = await getVehiclesByIds(uniqueVehicleIds, branch.companyId);
+
+  // ── 3. Fetch manifests for hub transporters at this branch ────────────────
   //
   //  A hub transporter's manifests are those that are:
   //    • status: "sealed" or "loaded"  (ready to travel)
@@ -294,7 +308,7 @@ async function planBranch(
     });
   }
 
-  // ── 3. Early-exit if nothing to do ────────────────────────────────────────
+  // ── 4. Early-exit if nothing to do ────────────────────────────────────────
   if (allPackages.length === 0 && optimizerManifests.length === 0) {
     return {
       branchId: branch._id, branchName: branch.name,
@@ -305,15 +319,17 @@ async function planBranch(
     };
   }
 
-  // ── 4. Build optimizer request ────────────────────────────────────────────
-  const allWorkers = [...transporters, ...deliverers];
-
+  // ── 5. Build optimizer request ────────────────────────────────────────────
   // Hub fields come directly from WorkerCandidate (projected by workerAssignment.service)
   const workerPayload: OptimizerWorker[] = allWorkers.map((w) => {
     const base: OptimizerWorker = {
       _id:    w._id.toString(),
       userId: w.userId.toString(),
       role:   w.role as "transporter" | "deliverer",
+      // ✅ FIX (Problem 1 & 4): Pass the worker's pre-assigned vehicle to Python
+      // This tells the Python optimizer that this worker already has a vehicle
+      // and should be locked to it (no vehicle selection in GA)
+      preferredVehicleId: w.vehicleId?.toString(),
     };
     if (w.transporterType === "hub_to_hub" && w.assignedLine?.length === 2) {
       base.transporterType = "hub_to_hub";
@@ -374,7 +390,7 @@ async function planBranch(
     ],
   };
 
-  // ── 5. Call Python optimizer ──────────────────────────────────────────────
+  // ── 6. Call Python optimizer ──────────────────────────────────────────────
   let optimizerResult;
   try {
     optimizerResult = await callOptimizer(payload);
@@ -403,7 +419,7 @@ async function planBranch(
     errors.push(`Manifest ${u.manifestId} unscheduled: ${u.reason}`);
   }
 
-  // ── 6. Persist routes ─────────────────────────────────────────────────────
+  // ── 7. Persist routes ─────────────────────────────────────────────────────
   const scheduledStart = buildScheduledStart(scheduledDate);
 
   let transporterRoutes  = 0;

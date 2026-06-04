@@ -2,72 +2,53 @@
 //  vehicleAssignmentService.ts
 //  Fetches available vehicles at a branch and provides assignment helpers.
 //
-//  Fix (Problem 1 & 4):
-//    Removed `assignedUserId: null` from the query filter.
-//    Vehicles with a pre-assigned userId (permanently assigned to workers)
-//    are valid candidates for CVRP route assignment — they are "available"
-//    for use even though they already have an assignedUserId.
-//    The CVRP prioritises keeping existing vehicle-worker pairings via
-//    the preferredVehicleId field on OptimizerWorker (handled in the pipeline).
+//  Fix (Problems 1 & 4):
+//  ──────────────────────
+//  The CVRP flow no longer uses getAvailableVehicles() to build a pool of
+//  vehicles and then match workers to them.  Instead:
+//
+//    • Workers are fetched with currentVehicleId already set (by the manager).
+//    • The orchestrator resolves each worker's vehicle directly from
+//      worker.vehicleId via getVehiclesByIds().
+//    • Python receives each worker paired with their specific vehicle —
+//      it only assigns packages/manifests, not vehicles.
+//
+//  getAvailableVehicles() is kept for other use-cases (e.g. admin dashboards,
+//  manual assignment UIs) but is no longer called by the CVRP orchestrator.
+//
+//  getVehiclesByIds() is the new function used by the orchestrator to resolve
+//  the pre-assigned vehicles from a list of IDs collected from workers.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import mongoose from "mongoose";
 import VehicleModel from "../../models/vehicle.model";
-import { VehicleCandidate, VehicleType, VEHICLE_TYPE_ORDER } from "../types.util";
+import { VehicleCandidate, VehicleType } from "../types.util";
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  FETCH
+//  FETCH BY IDs  (used by orchestrator — replaces getAvailableVehicles for CVRP)
 //
-//  A vehicle is available for route assignment when:
-//    • status = "available"       (not in_use, maintenance, etc.)
-//    • currentBranchId = branch   (physically at this branch)
-//    • documentStatus = "valid"   (checked via virtual — but virtuals don't
-//                                  work in .lean(); we replicate the logic below)
-//    • companyId matches
+//  Resolves the actual vehicle documents for a list of vehicle IDs collected
+//  from workers' currentVehicleId fields.  The manager has already assigned
+//  these vehicles; we just need their specs (maxWeight, maxVolume, etc.)
+//  so Python can check capacity when assigning packages/manifests.
 //
-//  NOTE: assignedUserId is intentionally NOT filtered here.
-//  Vehicles permanently assigned to workers (assignedUserId set) are still
-//  physically available for today's routes.  The CVRP respects existing
-//  pairings by matching them via workerCandidate.vehicleId.
+//  No status filter — the vehicle is legitimately "in_use" because it is
+//  permanently assigned to a worker.  What matters is the worker's
+//  availabilityStatus = "available" (checked in workerAssignment.service.ts).
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function getAvailableVehicles(
-  branchId:  mongoose.Types.ObjectId,
-  companyId: mongoose.Types.ObjectId,
+export async function getVehiclesByIds(
+  vehicleIds: mongoose.Types.ObjectId[],
+  companyId:  mongoose.Types.ObjectId,
 ): Promise<VehicleCandidate[]> {
-  const now              = new Date();
+  if (vehicleIds.length === 0) return [];
 
-  // Replicate the documentStatus virtual in the query:
-  // documents must exist, not be expired, and have the three required fields.
   const docs = await VehicleModel.find({
+    _id:       { $in: vehicleIds },
     companyId,
-    currentBranchId: branchId,
-    status:          "available",
-    // NOTE: `assignedUserId: null` removed — pre-assigned vehicles are valid candidates
-
-    // Must have all three required document fields
-    "documents.registrationCard":    { $exists: true, $ne: null },
-    "documents.insurance":           { $exists: true, $ne: null },
-    "documents.technicalInspection": { $exists: true, $ne: null },
-
-    // Insurance must not be expired
-    $or: [
-      { "documents.insuranceExpiry":   { $exists: false } },
-      { "documents.insuranceExpiry":   { $gt: now } },
-    ],
-
-    // Technical inspection must not be expired
-    $and: [
-      {
-        $or: [
-          { "documents.inspectionExpiry": { $exists: false } },
-          { "documents.inspectionExpiry": { $gt: now } },
-        ],
-      },
-    ],
   })
     .select(
-      "_id type registrationNumber maxWeight maxVolume supportsFragile assignedUserId",
+      "_id type registrationNumber maxWeight maxVolume supportsFragile",
     )
     .lean();
 
@@ -78,14 +59,60 @@ export async function getAvailableVehicles(
     maxVolume:          d.maxVolume,
     supportsFragile:    d.supportsFragile ?? true,
     registrationNumber: d.registrationNumber,
-    // Expose the pre-assigned userId so the orchestrator can match
-    // vehicles back to their permanently-assigned workers.
-    assignedUserId:     d.assignedUserId ?? undefined,
   }));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  MARK IN USE  (called by orchestrator after a route is saved)
+//  FETCH AVAILABLE  (kept for admin / dashboard use — NOT used by CVRP)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getAvailableVehicles(
+  branchId:  mongoose.Types.ObjectId,
+  companyId: mongoose.Types.ObjectId,
+): Promise<VehicleCandidate[]> {
+  const now = new Date();
+
+  const docs = await VehicleModel.find({
+    companyId,
+    currentBranchId: branchId,
+    status:          "available",
+    assignedUserId:  null,
+
+    "documents.registrationCard":    { $exists: true, $ne: null },
+    "documents.insurance":           { $exists: true, $ne: null },
+    "documents.technicalInspection": { $exists: true, $ne: null },
+
+    $or: [
+      { "documents.insuranceExpiry":  { $exists: false } },
+      { "documents.insuranceExpiry":  { $gt: now } },
+    ],
+
+    $and: [
+      {
+        $or: [
+          { "documents.inspectionExpiry": { $exists: false } },
+          { "documents.inspectionExpiry": { $gt: now } },
+        ],
+      },
+    ],
+  })
+    .select(
+      "_id type registrationNumber maxWeight maxVolume supportsFragile",
+    )
+    .lean();
+
+  return (docs as any[]).map((d) => ({
+    _id:                d._id,
+    type:               d.type as VehicleType,
+    maxWeight:          d.maxWeight,
+    maxVolume:          d.maxVolume,
+    supportsFragile:    d.supportsFragile ?? true,
+    registrationNumber: d.registrationNumber,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  MARK IN USE  (called by orchestrator when route actually starts)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function markVehicleInUse(

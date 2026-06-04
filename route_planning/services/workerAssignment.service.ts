@@ -5,20 +5,23 @@
 //
 //  Hub model change
 //  ────────────────
-//  getAvailableTransporters now includes transporterType, assignedLine,
+//  getAvailableTransporters includes transporterType, assignedLine,
 //  and assignedBranches in its projection so the orchestrator can build the
 //  full OptimizerWorker payload without a second TransporterModel query.
 //
-//  Fix (Problem 2 & 4):
-//  ─────────────────────
-//  Removed `currentVehicleId: null` filter from BOTH getAvailableTransporters
-//  and getAvailableDeliverers.  Workers with a pre-assigned vehicle
-//  (currentVehicleId set) are still available for route assignment today —
-//  the pre-assigned vehicle IS their vehicle for the day.
+//  Fix (Problems 1 & 4):
+//  ──────────────────────
+//  Workers are only valid CVRP candidates when they HAVE a vehicle assigned
+//  to them (currentVehicleId is set).  A worker without a vehicle cannot
+//  be sent on a route.
 //
-//  Workers are matched to their pre-assigned vehicle by vehicleId in the CVRP.
-//  If a worker has vehicleId set, the Python optimizer will prefer to assign
-//  that vehicle to them (passed as preferredVehicleId in OptimizerWorker).
+//  Correct flow:
+//    1. Manager assigns vehicle to worker → vehicle.status = "in_use",
+//       worker.currentVehicleId = vehicleId.  Worker stays "available".
+//    2. CVRP fetches workers with availabilityStatus="available" AND
+//       currentVehicleId set → ready to receive packages/manifests.
+//    3. Orchestrator sends each worker + their pre-assigned vehicle to Python.
+//    4. Python assigns packages/manifests to that fixed worker-vehicle pair.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import mongoose from "mongoose";
@@ -31,7 +34,6 @@ import { WorkerCandidate, TransporterType } from "../types.util";
 //  HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Start and end of a calendar day in UTC */
 function dayBounds(date: Date): { start: Date; end: Date } {
   const start = new Date(date);
   start.setUTCHours(0, 0, 0, 0);
@@ -40,10 +42,6 @@ function dayBounds(date: Date): { start: Date; end: Date } {
   return { start, end };
 }
 
-/**
- * Returns the set of worker doc _ids (Transporter or Deliverer) that already
- * have a non-cancelled/non-completed route scheduled on `date`.
- */
 async function getAlreadyAssignedWorkerIds(
   date:      Date,
   field:     "assignedTransporterId" | "assignedDelivererId",
@@ -68,22 +66,13 @@ async function getAlreadyAssignedWorkerIds(
 // ─────────────────────────────────────────────────────────────────────────────
 //  TRANSPORTERS
 //
-//  Available when:
-//    • availabilityStatus = "available"
+//  Valid CVRP candidate when:
+//    • availabilityStatus = "available"  — no active route right now
 //    • verificationStatus = "verified"
 //    • isActive = true, isSuspended = false
-//    • currentBranchId = branch  (physically at this branch today)
-//    • no non-cancelled/completed route already scheduled today
-//
-//  Hub fields included in projection:
-//    • transporterType    — "hub_to_hub" | "hub_to_branch" | null
-//    • assignedLine       — [hubAId, hubBId] for hub_to_hub workers
-//    • assignedBranches   — [...branchIds] for hub_to_branch workers
-//
-//  NOTE: `currentVehicleId: null` filter REMOVED (Fix Problem 4).
-//  Transporters with a pre-assigned vehicle (currentVehicleId set) are
-//  still available.  vehicleId is included in the projection so the
-//  orchestrator passes it to Python as preferredVehicleId.
+//    • currentBranchId = branchId        — physically at this branch
+//    • currentVehicleId IS SET           — manager has assigned a vehicle
+//    • no route already scheduled today
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function getAvailableTransporters(
@@ -104,7 +93,7 @@ export async function getAvailableTransporters(
     verificationStatus: "verified",
     isActive:           true,
     isSuspended:        false,
-    // NOTE: `currentVehicleId: null` removed — workers with pre-assigned vehicles are valid
+    currentVehicleId:   { $exists: true, $ne: null },  // must have a vehicle
   })
     .select(
       "_id userId currentVehicleId " +
@@ -119,12 +108,9 @@ export async function getAvailableTransporters(
         _id:       d._id,
         userId:    d.userId,
         role:      "transporter" as const,
-        // Always include vehicleId if set — CVRP uses this to lock in the pairing
-        vehicleId: d.currentVehicleId ?? undefined,
+        vehicleId: d.currentVehicleId,   // always present — guaranteed by query
       };
 
-      // Attach hub fields when present — the orchestrator forwards these
-      // directly to the Python optimizer without any extra DB lookup.
       if (d.transporterType) {
         candidate.transporterType = d.transporterType as TransporterType;
       }
@@ -150,15 +136,13 @@ export async function getAvailableTransporters(
 // ─────────────────────────────────────────────────────────────────────────────
 //  DELIVERERS
 //
-//  Available when:
-//    • availabilityStatus = "available"
+//  Valid CVRP candidate when:
+//    • availabilityStatus = "available"  — no active route right now
 //    • verificationStatus = "verified"
 //    • isActive = true, isSuspended = false
-//    • branchId = branch  (deliverer uses branchId, not currentBranchId)
-//    • no non-cancelled/completed route today
-//
-//  NOTE: `currentVehicleId: null` filter REMOVED (Fix Problem 4).
-//  Deliverers with a pre-assigned vehicle are still available for today's routes.
+//    • branchId = branchId               — assigned to this branch
+//    • currentVehicleId IS SET           — manager has assigned a vehicle
+//    • no route already scheduled today
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function getAvailableDeliverers(
@@ -179,7 +163,7 @@ export async function getAvailableDeliverers(
     verificationStatus: "verified",
     isActive:           true,
     isSuspended:        false,
-    // NOTE: `currentVehicleId: null` removed — workers with pre-assigned vehicles are valid
+    currentVehicleId:   { $exists: true, $ne: null },  // must have a vehicle
   })
     .select("_id userId currentVehicleId")
     .lean();
@@ -190,8 +174,7 @@ export async function getAvailableDeliverers(
       _id:       d._id,
       userId:    d.userId,
       role:      "deliverer" as const,
-      // Always include vehicleId if set — CVRP uses this to lock in the pairing
-      vehicleId: d.currentVehicleId ?? undefined,
+      vehicleId: d.currentVehicleId,   // always present — guaranteed by query
     }));
 }
 
@@ -209,8 +192,6 @@ export async function markTransporterAssigned(
     transporterId,
     {
       $set: {
-        // availabilityStatus stays "available" until the transporter taps
-        // "Start Trip" — the controller flips it to "on_route" at that point.
         currentRouteId:   routeId,
         currentVehicleId: vehicleId,
         lastActiveAt:     new Date(),
