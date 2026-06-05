@@ -772,16 +772,15 @@ export const createTransporter = catchAsyncError(
     let transactionCommitted = false;
 
     try {
-      const managerId = req.user?._id;
+      const userId = req.user?._id;
+      const userRole = req.user?.role;
       const { companyId } = req.params;
 
-      if (!managerId) {
-
+      if (!userId) {
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
-
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
@@ -796,14 +795,11 @@ export const createTransporter = catchAsyncError(
         documents,
       } = req.body as ICreateTransporter;
 
-
       if (!email || !phone || !username || !password || !firstName || !lastName) {
-
         return next(
           new ErrorHandler("email, phone, username, password, firstName, and lastName are required", 400)
         );
       }
-
 
       if (
         typeof email !== "string" ||
@@ -813,23 +809,41 @@ export const createTransporter = catchAsyncError(
         typeof firstName !== "string" ||
         typeof lastName !== "string"
       ) {
-
         return next(new ErrorHandler("All required fields must be strings", 400));
       }
 
+      // Check authorization based on role
+      let isAuthorized = false;
+      let supervisor = null;
+      let manager = null;
 
-      const [manager, company] = await Promise.all([
-        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
-        CompanyModel.findById(companyId).session(session),
-      ]);
-
-      if (!manager || !manager.isActive) {
-        throw new ErrorHandler("You are not an active manager of this company", 403);
+      if (userRole === "admin") {
+        isAuthorized = true;
+      } else if (userRole === "manager") {
+        manager = await ManagerModel.findOne({ userId, companyId }).session(session);
+        if (!manager || !manager.isActive) {
+          throw new ErrorHandler("You are not an active manager of this company", 403);
+        }
+        if (!manager.hasPermission("can_manage_users")) {
+          throw new ErrorHandler("You don't have permission to manage transporters", 403);
+        }
+        isAuthorized = true;
+      } else if (userRole === "supervisor") {
+        supervisor = await SupervisorModel.findOne({ userId, companyId }).session(session);
+        if (!supervisor || !supervisor.isActive) {
+          throw new ErrorHandler("You are not an active supervisor of this company", 403);
+        }
+        if (!supervisor.hasPermission("can_manage_deliverers")) {
+          throw new ErrorHandler("You don't have permission to manage transporters", 403);
+        }
+        isAuthorized = true;
       }
 
-      if (!manager.hasPermission("can_manage_users")) {
-        throw new ErrorHandler("You don't have permission to manage transporters", 403);
+      if (!isAuthorized) {
+        throw new ErrorHandler("Not authorized to create transporters", 403);
       }
+
+      const company = await CompanyModel.findById(companyId).session(session);
 
       if (!company) {
         throw new ErrorHandler("Company not found", 404);
@@ -839,31 +853,25 @@ export const createTransporter = catchAsyncError(
         throw new ErrorHandler("Cannot create transporter for an inactive company", 400);
       }
 
-
       const normalizedPhone = userModel.normalizePhone(phone);
 
       const [existingEmail, existingPhone, existingUsername] = await Promise.all([
         userModel.findOne({ email }).session(session),
-
         userModel.findOne({ phone: normalizedPhone }).session(session),
         userModel.findOne({ username }).session(session),
       ]);
 
       if (existingEmail) {
-
         throw new ErrorHandler("Email already exists", 400);
       }
 
       if (existingPhone) {
-
         throw new ErrorHandler("Phone number already exists", 400);
       }
 
       if (existingUsername) {
-
         throw new ErrorHandler("Username already exists", 400);
       }
-
 
       const user = await userModel.create(
         [
@@ -887,6 +895,8 @@ export const createTransporter = catchAsyncError(
           {
             userId: user[0]._id,
             companyId,
+            // If created by supervisor, assign to their branch
+            ...(supervisor && { currentBranchId: supervisor.branchId }),
             ...(documents && { documents }),
             availabilityStatus: "off_duty",
             verificationStatus: "verified",
@@ -899,7 +909,6 @@ export const createTransporter = catchAsyncError(
       await session.commitTransaction();
       transactionCommitted = true;
 
-
       Promise.allSettled([
         sendTransporterAccountCreatedNotification(
           user[0]._id.toString(),
@@ -908,17 +917,13 @@ export const createTransporter = catchAsyncError(
           transporter[0]._id.toString(),
           company?.name || "Company"
         ),
-
         notifyAdminsNewEntityPending(
           transporter[0]._id.toString(),
           "Transporter",
           `${firstName} ${lastName}`
         )
-
       ]).catch(error => {
-
         console.error('Transporter creation notifications failed:', error);
-
       });
 
       const populatedTransporter = await TransporterModel.findById(transporter[0]._id)
@@ -932,29 +937,20 @@ export const createTransporter = catchAsyncError(
         data: populatedTransporter,
       });
     } catch (error: any) {
-
       if (error.name === "ValidationError") {
         return next(new ErrorHandler(
           Object.values(error.errors).map((e: any) => e.message).join(", "), 400
         ));
       }
-
       return next(error);
-
     } finally {
-
       if (!transactionCommitted) {
         await session.abortTransaction().catch(() => {});
       }
-
       await session.endSession();
-
     }
   }
 );
-
-
-
 
 //  UPDATE TRANSPORTER
 export const updateTransporter = catchAsyncError(
@@ -965,70 +961,86 @@ export const updateTransporter = catchAsyncError(
     let transactionCommitted = false;
 
     try {
-      const managerId = req.user?._id;
+      const userId = req.user?._id;
+      const userRole = req.user?.role;
       const { companyId, transporterId } = req.params;
 
-      if (!managerId) {
-
+      if (!userId) {
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
-
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!transporterId || !mongoose.Types.ObjectId.isValid(transporterId.toString())) {
-
         return next(new ErrorHandler("Invalid transporter ID", 400));
       }
 
       const body = req.body as IUpdateTransporter;
 
       if (Object.keys(body).length === 0) {
-
         return next(new ErrorHandler("No update data provided", 400));
       }
 
-
       if (body.email !== undefined && typeof body.email !== "string") {
-
         return next(new ErrorHandler("email must be a string", 400));
       }
 
       if (body.phone !== undefined && typeof body.phone !== "string") {
-
         return next(new ErrorHandler("phone must be a string", 400));
       }
 
       if (body.username !== undefined && typeof body.username !== "string") {
-
         return next(new ErrorHandler("username must be a string", 400));
       }
 
       if (body.currentBranchId !== undefined && !mongoose.Types.ObjectId.isValid(body.currentBranchId)) {
-        
         return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
-
-      const [transporter, manager] = await Promise.all([
-        TransporterModel.findOne({ _id: transporterId, companyId }).session(session),
-        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
-      ]);
+      const transporter = await TransporterModel.findOne({ _id: transporterId, companyId }).session(session);
 
       if (!transporter) {
-
         throw new ErrorHandler("Transporter not found", 404);
       }
 
-      if (!manager || !manager.isActive) {
-        throw new ErrorHandler("You are not an active manager of this company", 403);
+      // Check authorization based on role
+      let isAuthorized = false;
+      let supervisor = null;
+
+      if (userRole === "admin") {
+        isAuthorized = true;
+      } else if (userRole === "manager") {
+        const manager = await ManagerModel.findOne({ userId, companyId }).session(session);
+        if (!manager || !manager.isActive) {
+          throw new ErrorHandler("You are not an active manager of this company", 403);
+        }
+        if (!manager.hasPermission("can_manage_users")) {
+          throw new ErrorHandler("You don't have permission to manage transporters", 403);
+        }
+        isAuthorized = true;
+      } else if (userRole === "supervisor") {
+        supervisor = await SupervisorModel.findOne({ userId, companyId }).session(session);
+        if (!supervisor || !supervisor.isActive) {
+          throw new ErrorHandler("You are not an active supervisor of this company", 403);
+        }
+        if (!supervisor.hasPermission("can_manage_deliverers")) {
+          throw new ErrorHandler("You don't have permission to manage transporters", 403);
+        }
+        // Supervisors can only update transporters in their branch
+        if (transporter.currentBranchId?.toString() !== supervisor.branchId.toString()) {
+          throw new ErrorHandler("You can only update transporters in your branch", 403);
+        }
+        // Supervisors cannot change branch assignment
+        if (body.currentBranchId) {
+          throw new ErrorHandler("Supervisors cannot change transporter branch assignment", 403);
+        }
+        isAuthorized = true;
       }
 
-      if (!manager.hasPermission("can_manage_users")) {
-
-        throw new ErrorHandler("You don't have permission to manage transporters", 403);
+      if (!isAuthorized) {
+        throw new ErrorHandler("Not authorized to update this transporter", 403);
       }
 
       const duplicateChecks: Promise<any>[] = [];
@@ -1040,9 +1052,7 @@ export const updateTransporter = catchAsyncError(
       }
 
       if (body.phone) {
-
         const normalizedPhone = userModel.normalizePhone(body.phone);
-
         duplicateChecks.push(
           userModel.findOne({ phone: normalizedPhone, _id: { $ne: transporter.userId } }).session(session)
         );
@@ -1078,12 +1088,13 @@ export const updateTransporter = catchAsyncError(
       }
 
       if (body.availabilityStatus) transporterUpdates.availabilityStatus = body.availabilityStatus;
-      if (body.currentBranchId !== undefined) {
+      
+      // Only managers and admins can change branch assignment
+      if (body.currentBranchId !== undefined && (userRole === "admin" || userRole === "manager")) {
         transporterUpdates.currentBranchId = body.currentBranchId
           ? new mongoose.Types.ObjectId(body.currentBranchId)
           : undefined;
       }
-
 
       if (Object.keys(userUpdates).length > 0) {
         await userModel.findByIdAndUpdate(transporter.userId, { $set: userUpdates }, { session });
@@ -1107,27 +1118,20 @@ export const updateTransporter = catchAsyncError(
         data: populatedTransporter,
       });
     } catch (error: any) {
-
       if (error.name === "ValidationError") {
         return next(new ErrorHandler(
           Object.values(error.errors).map((e: any) => e.message).join(", "), 400
         ));
       }
-
       return next(error);
-
     } finally {
-
       if (!transactionCommitted) {
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
-
     }
   }
 );
-
-
 
 //  TOGGLE BLOCK / ACTIVATE TRANSPORTER
 export const toggleBlockTransporter = catchAsyncError(
@@ -1138,43 +1142,62 @@ export const toggleBlockTransporter = catchAsyncError(
     let transactionCommitted = false;
 
     try {
-      const managerId = req.user?._id;
+      const userId = req.user?._id;
+      const userRole = req.user?.role;
       const { companyId, transporterId } = req.params;
       const { suspensionReason, suspensionEndDate } = req.body as {
         suspensionReason?: string;
         suspensionEndDate?: string;
       };
 
-      if (!managerId) {
+      if (!userId) {
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
-
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!transporterId || !mongoose.Types.ObjectId.isValid(transporterId.toString())) {
-
         return next(new ErrorHandler("Invalid transporter ID", 400));
       }
 
-      const [transporter, manager, requestingUser] = await Promise.all([
-        TransporterModel.findOne({ _id: transporterId, companyId }).session(session),
-        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
-        userModel.findById(managerId).select("role").session(session),
-      ]);
+      const transporter = await TransporterModel.findOne({ _id: transporterId, companyId }).session(session);
 
       if (!transporter) {
-
         throw new ErrorHandler("Transporter not found", 404);
       }
 
-      const isAdmin = requestingUser?.role === "admin";
-      const isAuthorizedManager = manager && manager.isActive && manager.hasPermission("can_manage_users");
+      // Check authorization based on role
+      let isAuthorized = false;
 
-      if (!isAdmin && !isAuthorizedManager) {
+      if (userRole === "admin") {
+        isAuthorized = true;
+      } else if (userRole === "manager") {
+        const manager = await ManagerModel.findOne({ userId, companyId }).session(session);
+        if (!manager || !manager.isActive) {
+          throw new ErrorHandler("You are not an active manager of this company", 403);
+        }
+        if (!manager.hasPermission("can_manage_users")) {
+          throw new ErrorHandler("You don't have permission to manage transporters", 403);
+        }
+        isAuthorized = true;
+      } else if (userRole === "supervisor") {
+        const supervisor = await SupervisorModel.findOne({ userId, companyId }).session(session);
+        if (!supervisor || !supervisor.isActive) {
+          throw new ErrorHandler("You are not an active supervisor of this company", 403);
+        }
+        if (!supervisor.hasPermission("can_manage_deliverers")) {
+          throw new ErrorHandler("You don't have permission to manage transporters", 403);
+        }
+        // Supervisors can only manage transporters in their branch
+        if (transporter.currentBranchId?.toString() !== supervisor.branchId.toString()) {
+          throw new ErrorHandler("You can only manage transporters in your branch", 403);
+        }
+        isAuthorized = true;
+      }
 
+      if (!isAuthorized) {
         throw new ErrorHandler("Not authorized to change this transporter's status", 403);
       }
 
@@ -1191,7 +1214,7 @@ export const toggleBlockTransporter = catchAsyncError(
         transporter.isActive = false;
         transporter.isOnline = false;
         transporter.isSuspended = true;
-        transporter.suspensionReason = suspensionReason || "Suspended by manager";
+        transporter.suspensionReason = suspensionReason || "Suspended by " + userRole;
         transporter.suspensionEndDate = suspensionEndDate
           ? new Date(suspensionEndDate)
           : undefined;
@@ -1213,9 +1236,7 @@ export const toggleBlockTransporter = catchAsyncError(
         transporterId.toString(),
         !newIsActive
       ).catch(error => {
-
         console.error('Transporter block status notification failed:', error);
-
       });
 
       const updatedTransporter = await TransporterModel.findById(transporterId)
@@ -1233,27 +1254,20 @@ export const toggleBlockTransporter = catchAsyncError(
         },
       });
     } catch (error: any) {
-
       if (error.name === "ValidationError") {
         return next(new ErrorHandler(
           Object.values(error.errors).map((e: any) => e.message).join(", "), 400
         ));
       }
       return next(error);
-
     } finally {
-
       if (!transactionCommitted) {
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
-
     }
-    
   }
 );
-
-
 
 //  GET TRANSPORTER BY ID
 export const getTransporter = catchAsyncError(
@@ -1274,32 +1288,31 @@ export const getTransporter = catchAsyncError(
       return next(new ErrorHandler("Invalid transporter ID", 400));
     }
 
-    const [transporter, requestingUser] = await Promise.all([
-      TransporterModel.findOne({ _id: transporterId, companyId })
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
-        .populate("companyId", "name businessType status")
-        .populate("currentBranchId", "name code address status")
-        .populate("currentVehicleId", "type brand model registrationNumber")
-        .lean(),
-      userModel.findById(userId).select("role").lean(),
-    ]);
+    const transporter = await TransporterModel.findOne({ _id: transporterId, companyId })
+      .populate("userId", "firstName lastName email phone username imageUrl role status")
+      .populate("companyId", "name businessType status")
+      .populate("currentBranchId", "name code address status")
+      .populate("currentVehicleId", "type brand model registrationNumber")
+      .lean();
 
     if (!transporter) {
       return next(new ErrorHandler("Transporter not found", 404));
     }
 
-    const isAdmin = requestingUser?.role === "admin";
+    // Check authorization based on role
+    let isAuthorized = false;
 
-    let isAuthorized = isAdmin;
-
-    if (!isAuthorized && requestingUser?.role === "manager") {
-      const manager = await ManagerModel.findOne({ userId, companyId }).lean();
+    if (userRole === "admin") {
+      isAuthorized = true;
+    } else if (userRole === "manager") {
+      const manager = await ManagerModel.findOne({ userId, companyId });
       isAuthorized = !!(manager && manager.isActive);
-    }
-
-    if (!isAuthorized && requestingUser?.role === "supervisor") {
-      const supervisor = await SupervisorModel.findOne({ userId }).lean();
-      isAuthorized = !!(supervisor && supervisor.isActive);
+    } else if (userRole === "supervisor") {
+      const supervisor = await SupervisorModel.findOne({ userId, companyId });
+      if (supervisor && supervisor.isActive) {
+        // Supervisors can only view transporters in their branch
+        isAuthorized = transporter.currentBranchId?.toString() === supervisor.branchId.toString();
+      }
     }
 
     if (!isAuthorized) {
@@ -1312,8 +1325,6 @@ export const getTransporter = catchAsyncError(
     });
   }
 );
-
-
 
 //  GET ALL MY TRANSPORTERS (COMPANY)
 export const getMyTransporters = catchAsyncError(
@@ -1330,31 +1341,27 @@ export const getMyTransporters = catchAsyncError(
       return next(new ErrorHandler("Invalid company ID", 400));
     }
 
-    const [company, requestingUser] = await Promise.all([
-      CompanyModel.findById(companyId).lean(),
-      userModel.findById(userId).select("role").lean(),
-    ]);
+    const company = await CompanyModel.findById(companyId).lean();
 
     if (!company) {
       return next(new ErrorHandler("Company not found", 404));
     }
 
-    const isAdmin = requestingUser?.role === "admin";
+    let isAuthorized = false;
+    let supervisor = null;
 
-    let isAuthorized = isAdmin;
-
-    if (!isAuthorized && requestingUser?.role === "manager") {
-      const manager = await ManagerModel.findOne({ userId, companyId }).lean();
+    if (userRole === "admin") {
+      isAuthorized = true;
+    } else if (userRole === "manager") {
+      const manager = await ManagerModel.findOne({ userId, companyId });
       if (!manager || !manager.isActive) {
         return next(new ErrorHandler("You are not an active manager of this company", 403));
       }
       isAuthorized = true;
-    }
-
-    if (!isAuthorized && requestingUser?.role === "supervisor") {
-      const supervisor = await SupervisorModel.findOne({ userId }).lean();
+    } else if (userRole === "supervisor") {
+      supervisor = await SupervisorModel.findOne({ userId, companyId });
       if (!supervisor || !supervisor.isActive) {
-        return next(new ErrorHandler("You are not an active supervisor", 403));
+        return next(new ErrorHandler("You are not an active supervisor of this company", 403));
       }
       isAuthorized = true;
     }
@@ -1366,6 +1373,11 @@ export const getMyTransporters = catchAsyncError(
     const transporterQuery: mongoose.FilterQuery<typeof TransporterModel> = {
       companyId,
     };
+
+    // If supervisor, only show transporters from their branch
+    if (supervisor) {
+      transporterQuery.currentBranchId = supervisor.branchId;
+    }
 
     const { verificationStatus, availabilityStatus, isActive, currentBranchId, search } = req.query;
 
@@ -1381,7 +1393,8 @@ export const getMyTransporters = catchAsyncError(
       transporterQuery.isActive = isActive === "true";
     }
 
-    if (currentBranchId && typeof currentBranchId === "string") {
+    // Only allow branch filtering for non-supervisors (supervisors are locked to their branch)
+    if (!supervisor && currentBranchId && typeof currentBranchId === "string") {
       if (mongoose.Types.ObjectId.isValid(currentBranchId)) {
         transporterQuery.currentBranchId = new mongoose.Types.ObjectId(currentBranchId);
       }
@@ -1401,7 +1414,6 @@ export const getMyTransporters = catchAsyncError(
       if (matchingUserIds.length > 0) {
         transporterQuery.userId = { $in: matchingUserIds };
       } else {
-
         return res.status(200).json({
           success: true,
           count: 0,

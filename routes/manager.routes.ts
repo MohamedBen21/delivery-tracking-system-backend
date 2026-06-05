@@ -69,14 +69,14 @@ managerRouter.patch(
 );
 
 
-managerRouter.post("/companies/:companyId/transporters", ...managerOrAdmin, createTransporter);
+managerRouter.post("/companies/:companyId/transporters", isAuthenticated, authorizeRoles("admin" , "manager", "supervisor"), createTransporter);
 managerRouter.post(
   "/companies/:companyId/transporters/assign",
   ...managerOrAdmin,
   assignTransporter,
 );
 
-managerRouter.get("/companies/:companyId/transporters", isAuthenticated, authorizeRoles("admin" , "manager" ), getMyTransporters);
+managerRouter.get("/companies/:companyId/transporters", isAuthenticated, authorizeRoles("admin" , "manager", "supervisor" ), getMyTransporters);
 managerRouter.get(
   "/companies/:companyId/transporters/:transporterId",
   isAuthenticated,
@@ -85,12 +85,14 @@ managerRouter.get(
 );
 managerRouter.patch(
   "/companies/:companyId/transporters/:transporterId",
-  ...managerOrAdmin,
+  isAuthenticated,
+  authorizeRoles("admin" , "manager" , "supervisor"),
   updateTransporter,
 );
 managerRouter.patch(
   "/companies/:companyId/transporters/:transporterId/toggle-block",
-  ...managerOrAdmin,
+  isAuthenticated,
+  authorizeRoles("admin" , "manager" , "supervisor"),
   toggleBlockTransporter,
 );
 
