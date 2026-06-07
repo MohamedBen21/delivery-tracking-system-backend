@@ -668,6 +668,26 @@ export const getMyCompany = catchAsyncError(
   },
 );
 
+export const getAllCompanies = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const companies = await CompanyModel.find()
+        .populate("userId", "firstName lastName email phone username")
+        .sort({ createdAt: -1 })
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        data: companies,
+      });
+    } catch (error: any) {
+      return next(
+        new ErrorHandler(error.message || "Error getting companies.", 500),
+      );
+    }
+  },
+);
+
 // ─────────────────────────────────────────────
 //  BRANCH FUNCTIONS
 // ─────────────────────────────────────────────

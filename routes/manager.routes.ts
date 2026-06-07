@@ -11,6 +11,7 @@ import {
   getCompany,
   getMeManager,
   getMyBranches,
+  getAllCompanies,
   getMyCompany,
   getMySupervisors,
   switchBranchHub,
@@ -40,6 +41,7 @@ managerRouter.patch("/me", ...managerOrAdmin, updateMeManager);
 
 managerRouter.post("/companies", isAuthenticated, authorizeRoles("client"), createCompany);
 managerRouter.get("/companies/my", ...managerOrAdmin, getMyCompany);
+managerRouter.get("/companies", isAuthenticated, authorizeRoles("admin"), getAllCompanies);
 managerRouter.get("/companies/:companyId", ...managerOrAdmin, getCompany);
 managerRouter.patch("/companies/:companyId", ...managerOrAdmin, updateCompany);
 managerRouter.patch("/companies/:companyId/toggle-block", ...managerOrAdmin, toggleBlockCompany);
