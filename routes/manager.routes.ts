@@ -38,7 +38,7 @@ const managerOrAdmin = [isAuthenticated, authorizeRoles("manager", "admin")] as 
 managerRouter.get("/me", ...managerOrAdmin, getMeManager);
 managerRouter.patch("/me", ...managerOrAdmin, updateMeManager);
 
-managerRouter.post("/companies", ...managerOrAdmin, createCompany);
+managerRouter.post("/companies", isAuthenticated, authorizeRoles("client"), createCompany);
 managerRouter.get("/companies/my", ...managerOrAdmin, getMyCompany);
 managerRouter.get("/companies/:companyId", ...managerOrAdmin, getCompany);
 managerRouter.patch("/companies/:companyId", ...managerOrAdmin, updateCompany);
@@ -69,30 +69,30 @@ managerRouter.patch(
 );
 
 
-managerRouter.post("/companies/:companyId/transporters", isAuthenticated, authorizeRoles("admin" , "manager", "supervisor"), createTransporter);
+managerRouter.post("/companies/:companyId/transporters", isAuthenticated, authorizeRoles("admin", "manager", "supervisor"), createTransporter);
 managerRouter.post(
   "/companies/:companyId/transporters/assign",
   ...managerOrAdmin,
   assignTransporter,
 );
 
-managerRouter.get("/companies/:companyId/transporters", isAuthenticated, authorizeRoles("admin" , "manager", "supervisor" ), getMyTransporters);
+managerRouter.get("/companies/:companyId/transporters", isAuthenticated, authorizeRoles("admin", "manager", "supervisor"), getMyTransporters);
 managerRouter.get(
   "/companies/:companyId/transporters/:transporterId",
   isAuthenticated,
-  authorizeRoles("admin" , "manager" , "supervisor"),
+  authorizeRoles("admin", "manager", "supervisor"),
   getTransporter,
 );
 managerRouter.patch(
   "/companies/:companyId/transporters/:transporterId",
   isAuthenticated,
-  authorizeRoles("admin" , "manager" , "supervisor"),
+  authorizeRoles("admin", "manager", "supervisor"),
   updateTransporter,
 );
 managerRouter.patch(
   "/companies/:companyId/transporters/:transporterId/toggle-block",
   isAuthenticated,
-  authorizeRoles("admin" , "manager" , "supervisor"),
+  authorizeRoles("admin", "manager", "supervisor"),
   toggleBlockTransporter,
 );
 

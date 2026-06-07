@@ -14,6 +14,7 @@ import { notifyAdminsNewEntityPending, sendSupervisorAccountCreatedNotification,
 import TariffModel, { ITariff, ITariffEntry } from "../models/tariff.model";
 import { WILAYAS, isValidWilayaCode, wilayaName } from "../models/wilayas.constant";
 import TransporterModel from "../models/transporter.model";
+import { sendToken } from "../utils/Token.util";
 
 
 type CompanyBusinessType = "solo" | "company";
@@ -21,7 +22,7 @@ type CompanyBusinessType = "solo" | "company";
 interface IHeadquarters {
   street: string;
   city: string;
-  state:string;
+  state: string;
   postalCode?: string;
   location: {
     type: "Point";
@@ -152,7 +153,7 @@ export const createCompany = catchAsyncError(
       if (existingCompany) {
 
         throw new ErrorHandler("Company with this name already exists.", 400)
-        }
+      }
 
       let companyWithSameRegistration = null;
 
@@ -164,39 +165,32 @@ export const createCompany = catchAsyncError(
         if (companyWithSameRegistration) {
 
 
-        throw  new ErrorHandler(
-              "Company with this registration number already exists.",
-              400,
-            )
-        }
-      }
-
-      const [user, manager] = await Promise.all([
-        userModel.findById(userId).session(session),
-        ManagerModel.findOne({ userId }).session(session),
-      ]);
-
-      if (!user) {
-
-      throw new ErrorHandler("User Not found", 400)
-      }
-
-
-      if (!manager) {
-
-      throw new ErrorHandler("Manager Not found", 400)
-      }
-
-
-
-
-      if (companyWithSameRegistration) {
-
-      throw new ErrorHandler(
+          throw new ErrorHandler(
             "Company with this registration number already exists.",
             400,
           )
+        }
       }
+
+      const user = await userModel.findById(userId).session(session);
+
+      if (!user) {
+        throw new ErrorHandler("User Not found", 400)
+      }
+
+      if (user.role !== "client") {
+        throw new ErrorHandler("Only users with client role can create a company", 403)
+      }
+
+      if (companyWithSameRegistration) {
+
+        throw new ErrorHandler(
+          "Company with this registration number already exists.",
+          400,
+        )
+      }
+
+
 
       const company = await CompanyModel.create(
         [
@@ -215,16 +209,28 @@ export const createCompany = catchAsyncError(
         { session },
       );
 
+      const [manager] = await ManagerModel.create(
+        [
+          {
+            userId: user._id,
+            companyId: company[0]._id,
+            accessLevel: "full",
+            isActive: true,
+            branchAccess: {
+              allBranches: true,
+              specificBranches: []
+            }
+          }
+        ],
+        { session }
+      );
 
+      user.role = "manager";
+      await user.save({ session });
 
-      manager.companyId = company[0]._id;
-      await manager.save({ session });
-        
 
       await session.commitTransaction();
       transactionCommitted = true;
-
-
 
       notifyAdminsNewEntityPending(
         company[0]._id.toString(),
@@ -237,33 +243,20 @@ export const createCompany = catchAsyncError(
 
       });
 
-      
-      const populatedCompany = await CompanyModel.findById(company[0]._id)
-        .populate("userId", "firstName lastName email phone username")
-        .lean();
-
-      return res.status(201).json({
-        success: true,
-        message: "Company created successfully",
-        data: {
-          company: populatedCompany,
-          user,
-          manager,
-        },
-      });
+      await sendToken(user, 201, res);
     } catch (error: any) {
 
-    if (error.name === "ValidationError") {
+      if (error.name === "ValidationError") {
         return next(new ErrorHandler(
           Object.values(error.errors).map((e: any) => e.message).join(", "), 400
         ));
       }
 
       return next(error);
-      
+
     } finally {
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -299,7 +292,7 @@ export const updateCompany = catchAsyncError(
 
       if (!userId) {
 
-        return next( new ErrorHandler("Unauthorized, you are not authenticated", 401));
+        return next(new ErrorHandler("Unauthorized, you are not authenticated", 401));
       }
 
       if (
@@ -314,12 +307,12 @@ export const updateCompany = catchAsyncError(
 
       if (Object.keys(body).length === 0) {
 
-        return next( new ErrorHandler("No update data provided", 400));
+        return next(new ErrorHandler("No update data provided", 400));
       }
 
       if (body.name && typeof body.name !== "string") {
 
-        return next( new ErrorHandler("Company name must be a string", 400));
+        return next(new ErrorHandler("Company name must be a string", 400));
       }
 
       if (
@@ -327,7 +320,7 @@ export const updateCompany = catchAsyncError(
         !["solo", "company"].includes(body.businessType)
       ) {
 
-        return next( new ErrorHandler("Invalid business type", 400));
+        return next(new ErrorHandler("Invalid business type", 400));
       }
 
       if (
@@ -335,17 +328,17 @@ export const updateCompany = catchAsyncError(
         typeof body.registrationNumber !== "string"
       ) {
 
-        return next( new ErrorHandler("Registration number must be a string", 400));
+        return next(new ErrorHandler("Registration number must be a string", 400));
       }
 
       if (body.email && typeof body.email !== "string") {
 
-        return next( new ErrorHandler("Email must be a string", 400));
+        return next(new ErrorHandler("Email must be a string", 400));
       }
 
       if (body.phone && typeof body.phone !== "string") {
 
-        return next( new ErrorHandler("Phone must be a string", 400));
+        return next(new ErrorHandler("Phone must be a string", 400));
       }
 
       if (body.headquarters) {
@@ -353,7 +346,7 @@ export const updateCompany = catchAsyncError(
 
         if (typeof hq.street !== "string" || typeof hq.city !== "string") {
 
-          return next( new ErrorHandler("Invalid headquarters address data", 400));
+          return next(new ErrorHandler("Invalid headquarters address data", 400));
         }
 
         if (
@@ -363,7 +356,7 @@ export const updateCompany = catchAsyncError(
           hq.location.coordinates.length !== 2
         ) {
 
-          return next( new ErrorHandler("Invalid headquarters location format", 400));
+          return next(new ErrorHandler("Invalid headquarters location format", 400));
         }
       }
 
@@ -380,24 +373,24 @@ export const updateCompany = catchAsyncError(
 
       if (!user) {
 
-      throw new ErrorHandler("User not found", 404);
+        throw new ErrorHandler("User not found", 404);
       }
 
       if (!manager) {
 
-      throw  new ErrorHandler(
-            "You are not authorized to update this company",
-            403,
-          )
+        throw new ErrorHandler(
+          "You are not authorized to update this company",
+          403,
+        )
       }
 
       if (!manager.hasPermission("can_manage_settings")) {
 
 
-      throw  new ErrorHandler(
-            "You don't have permission to update company settings",
-            403,
-      )
+        throw new ErrorHandler(
+          "You don't have permission to update company settings",
+          403,
+        )
       }
 
       const finalBusinessType = body.businessType ?? company.businessType;
@@ -406,10 +399,10 @@ export const updateCompany = catchAsyncError(
 
       if (finalBusinessType === "company" && !finalRegistration) {
 
-      throw new ErrorHandler(
-            "Registration number is required for company business type",
-            400,
-          )
+        throw new ErrorHandler(
+          "Registration number is required for company business type",
+          400,
+        )
       }
 
       if (body.name) {
@@ -420,7 +413,7 @@ export const updateCompany = catchAsyncError(
 
         if (nameExists) {
 
-        throw new ErrorHandler("Company name already exists", 400)
+          throw new ErrorHandler("Company name already exists", 400)
         }
       }
 
@@ -433,10 +426,10 @@ export const updateCompany = catchAsyncError(
         if (regExists) {
 
 
-        throw  new ErrorHandler(
-              "Company with this registration number already exists",
-              400,
-            )
+          throw new ErrorHandler(
+            "Company with this registration number already exists",
+            400,
+          )
         }
       }
 
@@ -470,12 +463,12 @@ export const updateCompany = catchAsyncError(
     } finally {
 
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
 
       await session.endSession();
     }
-    
+
   },
 );
 
@@ -525,13 +518,13 @@ export const toggleBlockCompany = catchAsyncError(
 
       if (!isAdmin && !isAuthorizedManager) {
 
-      throw  new ErrorHandler("Not authorized to change company status", 403)
+        throw new ErrorHandler("Not authorized to change company status", 403)
       }
 
       if (!["active", "suspended"].includes(company.status)) {
 
 
-      throw  new ErrorHandler(`Invalid company status: ${company.status}`, 400)
+        throw new ErrorHandler(`Invalid company status: ${company.status}`, 400)
       }
 
       const newStatus: CompanyStatus =
@@ -560,7 +553,7 @@ export const toggleBlockCompany = catchAsyncError(
 
     } catch (error: any) {
 
-    if (error.name === "ValidationError") {
+      if (error.name === "ValidationError") {
         return next(new ErrorHandler(
           Object.values(error.errors).map((e: any) => e.message).join(", "), 400
         ));
@@ -570,7 +563,7 @@ export const toggleBlockCompany = catchAsyncError(
     } finally {
 
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
 
       await session.endSession();
@@ -707,7 +700,7 @@ interface ICreateBranch {
   capacityLimit?: number;
 
   branchType?: 'local_branch' | 'regional_main_hub';
-  parentHubId?: string ;
+  parentHubId?: string;
   servesBranches?: string[];
 }
 
@@ -818,7 +811,7 @@ export const createBranch = catchAsyncError(
         capacityLimit !== undefined &&
         (typeof capacityLimit !== "number" || capacityLimit < 1)
       ) {
-        
+
 
         return next(
           new ErrorHandler("capacityLimit must be a positive number", 400),
@@ -833,7 +826,7 @@ export const createBranch = catchAsyncError(
         return next(
           new ErrorHandler("branchType must be 'local_branch' or 'regional_main_hub'", 400),
         );
-    } 
+      }
 
 
       if (branchType === 'local_branch' && !parentHubId) {
@@ -864,7 +857,7 @@ export const createBranch = catchAsyncError(
         if (!parentHub) {
 
 
-        throw  new ErrorHandler("Parent hub not found or is not a regional main hub", 404)
+          throw new ErrorHandler("Parent hub not found or is not a regional main hub", 404)
         }
       }
 
@@ -872,7 +865,7 @@ export const createBranch = catchAsyncError(
       if (servesBranches && branchType !== 'regional_main_hub') {
 
 
-      throw  new ErrorHandler("Only regional_main_hub can serve other branches", 400)
+        throw new ErrorHandler("Only regional_main_hub can serve other branches", 400)
       }
 
 
@@ -882,7 +875,7 @@ export const createBranch = catchAsyncError(
           if (!mongoose.Types.ObjectId.isValid(servedBranchId)) {
 
 
-          throw new ErrorHandler(`Invalid branch ID in servesBranches: ${servedBranchId}`, 400);
+            throw new ErrorHandler(`Invalid branch ID in servesBranches: ${servedBranchId}`, 400);
           }
         }
       }
@@ -894,33 +887,33 @@ export const createBranch = catchAsyncError(
 
       if (!company) {
 
-      throw new ErrorHandler("Company not found", 404);
+        throw new ErrorHandler("Company not found", 404);
       }
 
       if (!manager || !manager.isActive) {
 
 
-      throw  new ErrorHandler(
-            "You are not an active manager of this company",
-            403,
-          )
+        throw new ErrorHandler(
+          "You are not an active manager of this company",
+          403,
+        )
 
       }
 
       if (!manager.hasPermission("can_manage_branches")) {
 
 
-      throw  new ErrorHandler("You don't have permission to manage branches", 403);
+        throw new ErrorHandler("You don't have permission to manage branches", 403);
 
       }
 
       if (company.status !== "active") {
 
 
-      throw  new ErrorHandler(
-            "Cannot create branch for an inactive or suspended company",
-            400,
-          );
+        throw new ErrorHandler(
+          "Cannot create branch for an inactive or suspended company",
+          400,
+        );
       }
 
       const existingBranch = await BranchModel.findOne({
@@ -930,7 +923,7 @@ export const createBranch = catchAsyncError(
       if (existingBranch) {
 
 
-      throw  new ErrorHandler("A branch with this code already exists", 400);
+        throw new ErrorHandler("A branch with this code already exists", 400);
 
       }
 
@@ -997,9 +990,9 @@ export const createBranch = catchAsyncError(
       return next(error);
 
     } finally {
-      
+
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -1021,7 +1014,7 @@ export const updateBranch = catchAsyncError(
       const { companyId, branchId } = req.params;
 
       if (!userId) {
-        return next( new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (
@@ -1029,24 +1022,24 @@ export const updateBranch = catchAsyncError(
         !mongoose.Types.ObjectId.isValid(companyId.toString())
       ) {
 
-        return next( new ErrorHandler("Invalid company ID", 400));
+        return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
 
-        return next( new ErrorHandler("Invalid branch ID", 400));
+        return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       const body = req.body as IUpdateBranch;
 
       if (Object.keys(body).length === 0) {
 
-        return next( new ErrorHandler("No update data provided", 400));
+        return next(new ErrorHandler("No update data provided", 400));
       }
 
       if (body.name !== undefined && typeof body.name !== "string") {
-        
-        return next( new ErrorHandler("name must be a string", 400));
+
+        return next(new ErrorHandler("name must be a string", 400));
       }
 
       if (body.address) {
@@ -1056,7 +1049,7 @@ export const updateBranch = catchAsyncError(
           (city !== undefined && typeof city !== "string") ||
           (state !== undefined && typeof state !== "string")
         ) {
-          return next( new ErrorHandler("address fields must be strings", 400));
+          return next(new ErrorHandler("address fields must be strings", 400));
         }
       }
 
@@ -1068,7 +1061,7 @@ export const updateBranch = catchAsyncError(
           typeof body.location.coordinates[0] !== "number" ||
           typeof body.location.coordinates[1] !== "number"
         ) {
-          return next( new ErrorHandler(
+          return next(new ErrorHandler(
             "Invalid location format. Expected GeoJSON Point with [lng, lat]",
             400,
           ));
@@ -1079,17 +1072,17 @@ export const updateBranch = catchAsyncError(
         body.capacityLimit !== undefined &&
         (typeof body.capacityLimit !== "number" || body.capacityLimit < 1)
       ) {
-        return next( new ErrorHandler("capacityLimit must be a positive number", 400));
+        return next(new ErrorHandler("capacityLimit must be a positive number", 400));
       }
 
       if (body.branchType && !['local_branch', 'regional_main_hub'].includes(body.branchType)) {
 
-        return next( new ErrorHandler("branchType must be 'local_branch' or 'regional_main_hub'", 400));
+        return next(new ErrorHandler("branchType must be 'local_branch' or 'regional_main_hub'", 400));
       }
 
       if (body.parentHubId && !mongoose.Types.ObjectId.isValid(body.parentHubId)) {
 
-        return next( new ErrorHandler("Invalid parentHubId", 400));
+        return next(new ErrorHandler("Invalid parentHubId", 400));
       }
 
       const [branch, company, manager] = await Promise.all([
@@ -1200,7 +1193,7 @@ export const updateBranch = catchAsyncError(
     } finally {
 
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
 
       await session.endSession();
@@ -1224,18 +1217,18 @@ export const toggleBlockBranch = catchAsyncError(
       const { companyId, branchId } = req.params;
 
       if (!userId) {
-        return next( new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (
         !companyId ||
         !mongoose.Types.ObjectId.isValid(companyId.toString())
       ) {
-        return next( new ErrorHandler("Invalid company ID", 400));
+        return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
-        return next( new ErrorHandler("Invalid branch ID", 400));
+        return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       const [branch, manager, user] = await Promise.all([
@@ -1319,7 +1312,7 @@ export const toggleBlockBranch = catchAsyncError(
     } finally {
 
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
 
       await session.endSession();
@@ -1345,25 +1338,25 @@ export const switchBranchHub = catchAsyncError(
 
       if (!userId || !mongoose.Types.ObjectId.isValid(userId.toString())) {
 
-        return next( new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
 
-        return next( new ErrorHandler("Invalid company ID", 400));
+        return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
 
-        return next( new ErrorHandler("Invalid branch ID", 400));
+        return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (!promotedBranchId || !mongoose.Types.ObjectId.isValid(promotedBranchId.toString())) {
-        return next( new ErrorHandler("Invalid promoted branch ID", 400));
+        return next(new ErrorHandler("Invalid promoted branch ID", 400));
       }
 
       if (branchId === promotedBranchId) {
-        return next( new ErrorHandler("Cannot switch hub with itself", 400));
+        return next(new ErrorHandler("Cannot switch hub with itself", 400));
       }
 
       const [user, manager, company] = await Promise.all([
@@ -1503,7 +1496,7 @@ export const switchBranchHub = catchAsyncError(
     } finally {
 
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
 
       await session.endSession();
@@ -1676,14 +1669,14 @@ export const createSupervisor = catchAsyncError(
 
       if (!managerId) {
 
-        return next( new ErrorHandler("Unauthorized, user not authenticated.", 401));
+        return next(new ErrorHandler("Unauthorized, user not authenticated.", 401));
       }
 
       if (
         !companyId ||
         !mongoose.Types.ObjectId.isValid(companyId.toString())
       ) {
-        return next( new ErrorHandler("Invalid company ID", 400));
+        return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       const {
@@ -1706,7 +1699,7 @@ export const createSupervisor = catchAsyncError(
         !password
       ) {
 
-        return next( new ErrorHandler("All required fields must be provided", 400));
+        return next(new ErrorHandler("All required fields must be provided", 400));
       }
 
       if (
@@ -1718,24 +1711,24 @@ export const createSupervisor = catchAsyncError(
         typeof password !== "string"
       ) {
 
-        return next( new ErrorHandler(
+        return next(new ErrorHandler(
           "All required fields must be in their proper types.",
           400,
         ));
       }
 
       if (!mongoose.Types.ObjectId.isValid(branchId)) {
-        return next( new ErrorHandler("Invalid branch ID", 400));
+        return next(new ErrorHandler("Invalid branch ID", 400));
       }
 
       if (permissions !== undefined) {
         if (!Array.isArray(permissions)) {
 
-          return next( new ErrorHandler("Permissions must be an array", 400));
+          return next(new ErrorHandler("Permissions must be an array", 400));
         }
 
         if (new Set(permissions).size !== permissions.length) {
-          return next( new ErrorHandler("Duplicate permissions are not allowed", 400));
+          return next(new ErrorHandler("Duplicate permissions are not allowed", 400));
         }
       }
 
@@ -1744,7 +1737,7 @@ export const createSupervisor = catchAsyncError(
       const [manager, branch, existingUser] = await Promise.all([
         ManagerModel.findOne({ userId: managerId, companyId }).session(session),
         BranchModel.findOne({ _id: branchId, companyId }).session(session),
-        userModel.findOne({ 
+        userModel.findOne({
           $or: [
             { email },
             { phone: normalizedPhone }
@@ -1784,9 +1777,9 @@ export const createSupervisor = catchAsyncError(
             lastName,
             email,
             phone,
-            passwordHash: password, 
+            passwordHash: password,
             role: "supervisor",
-            status:"active"
+            status: "active"
           },
         ],
         { session },
@@ -1821,7 +1814,7 @@ export const createSupervisor = catchAsyncError(
         branchName
       ).catch(error => {
         console.error('Supervisor creation notification failed:', error);
-     });
+      });
 
 
       const populatedSupervisor = await SupervisorModel.findById(
@@ -1850,7 +1843,7 @@ export const createSupervisor = catchAsyncError(
     } finally {
 
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
 
       await session.endSession();
@@ -1872,14 +1865,14 @@ export const updateSupervisor = catchAsyncError(
       const { supervisorId } = req.params;
 
       if (!managerId) {
-        return next( new ErrorHandler("Unauthorized, user is not authenticated", 401));
+        return next(new ErrorHandler("Unauthorized, user is not authenticated", 401));
       }
 
       if (
         !supervisorId ||
         !mongoose.Types.ObjectId.isValid(supervisorId.toString())
       ) {
-        return next( new ErrorHandler("Invalid supervisor ID", 400));
+        return next(new ErrorHandler("Invalid supervisor ID", 400));
       }
 
       const { permissions, workSchedule, isActive, userData } =
@@ -1891,7 +1884,7 @@ export const updateSupervisor = catchAsyncError(
         isActive === undefined &&
         userData === undefined
       ) {
-        return next( new ErrorHandler("No update data provided", 400));
+        return next(new ErrorHandler("No update data provided", 400));
       }
 
       const supervisor =
@@ -1966,18 +1959,18 @@ export const updateSupervisor = catchAsyncError(
           if (typeof userData.phone !== "string") {
             throw new ErrorHandler("phone must be string", 400);
           }
-          
+
 
           const normalizedPhone = userModel.normalizePhone(userData.phone);
-          const phoneExists = await userModel.findOne({ 
+          const phoneExists = await userModel.findOne({
             phone: normalizedPhone,
             _id: { $ne: user._id }
           }).session(session);
-          
+
           if (phoneExists) {
             throw new ErrorHandler("This phone number is already in use", 400);
           }
-          
+
           user.phone = normalizedPhone;
         }
 
@@ -2012,7 +2005,7 @@ export const updateSupervisor = catchAsyncError(
     } finally {
 
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
 
       await session.endSession();
@@ -2036,21 +2029,21 @@ export const toggleBlockSupervisor = catchAsyncError(
 
       if (!managerId) {
 
-        return next( new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       if (
         !companyId ||
         !mongoose.Types.ObjectId.isValid(companyId.toString())
       ) {
-        return next( new ErrorHandler("Invalid company ID", 400));
+        return next(new ErrorHandler("Invalid company ID", 400));
       }
 
       if (
         !supervisorId ||
         !mongoose.Types.ObjectId.isValid(supervisorId.toString())
       ) {
-        return next( new ErrorHandler("Invalid supervisor ID", 400));
+        return next(new ErrorHandler("Invalid supervisor ID", 400));
       }
 
       const [supervisor, manager, requestingUser] = await Promise.all([
@@ -2100,10 +2093,10 @@ export const toggleBlockSupervisor = catchAsyncError(
 
         supervisor.userId.toString(),
         supervisorId.toString(),
-        !newIsActive 
+        !newIsActive
 
       ).catch(error => {
-        
+
         console.error('Supervisor block status notification failed:', error);
 
       });
@@ -2134,11 +2127,11 @@ export const toggleBlockSupervisor = catchAsyncError(
     } finally {
 
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
 
       await session.endSession();
-      
+
     }
   },
 );
@@ -2246,14 +2239,14 @@ export const getMySupervisors = catchAsyncError(
         select: "firstName lastName email phone username imageUrl",
         ...(search && typeof search === "string"
           ? {
-              match: {
-                $or: [
-                  { firstName: { $regex: search, $options: "i" } },
-                  { lastName: { $regex: search, $options: "i" } },
-                  { email: { $regex: search, $options: "i" } },
-                ],
-              },
-            }
+            match: {
+              $or: [
+                { firstName: { $regex: search, $options: "i" } },
+                { lastName: { $regex: search, $options: "i" } },
+                { email: { $regex: search, $options: "i" } },
+              ],
+            },
+          }
           : {}),
       })
       .populate("branchId", "name code address status")
@@ -2276,11 +2269,11 @@ export const getMySupervisors = catchAsyncError(
 export const getMeManager = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?._id;
- 
+
     if (!userId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
- 
+
     const [user, manager] = await Promise.all([
       userModel.findById(userId)
         .select("firstName lastName email phone imageUrl role status createdAt")
@@ -2289,29 +2282,29 @@ export const getMeManager = catchAsyncError(
         .populate("companyId", "name logo status businessType")
         .lean(),
     ]);
- 
+
     if (!user) {
       return next(new ErrorHandler("User not found.", 404));
     }
     if (!manager || !manager.isActive) {
       return next(new ErrorHandler("Manager profile not found or inactive.", 404));
     }
- 
+
     return res.status(200).json({
       success: true,
       data: {
 
-        firstName:   user.firstName,
-        lastName:    user.lastName,
-        email:       user.email,
-        phone:       user.phone,
-        imageUrl:    user.imageUrl,
-        role:        user.role,
-        status:      user.status,
-        accessLevel:  manager.accessLevel,
-        permissions:  manager.permissions,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone,
+        imageUrl: user.imageUrl,
+        role: user.role,
+        status: user.status,
+        accessLevel: manager.accessLevel,
+        permissions: manager.permissions,
         branchAccess: manager.branchAccess,
-        company:      manager.companyId, 
+        company: manager.companyId,
       },
     });
   },
@@ -2359,15 +2352,15 @@ export function buildUserFieldUpdates(
 //  Updatable: firstName, lastName
 //  Everything on ManagerModel is blocked — only an admin can change that.
 
- 
+
 export const updateMeManager = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?._id;
- 
+
     if (!userId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
- 
+
     // Block any attempt to touch manager-level fields
     const blocked = ["accessLevel", "permissions", "branchAccess", "companyId", "isActive"];
     const blockedFound = blocked.filter((f) => f in req.body);
@@ -2379,24 +2372,24 @@ export const updateMeManager = catchAsyncError(
         ),
       );
     }
- 
+
     const user = await userModel.findById(userId).lean();
     if (!user) return next(new ErrorHandler("User not found.", 404));
- 
+
     const userUpdates = buildUserFieldUpdates(req.body, next);
 
-    if (!userUpdates) return; 
- 
+    if (!userUpdates) return;
+
     if (Object.keys(userUpdates).length === 0) {
       return next(new ErrorHandler("No valid fields to update.", 400));
     }
- 
+
     const updatedUser = await userModel.findByIdAndUpdate(
       userId,
       { $set: userUpdates },
       { new: true, runValidators: true },
     ).select("firstName lastName email phone imageUrl role status");
- 
+
     return res.status(200).json({
       success: true,
       message: "Profile updated successfully",
@@ -2664,10 +2657,10 @@ export const upsertTariff = catchAsyncError(
         message: `Tariff for ${wilayaName(a)} ↔ ${wilayaName(b)} saved successfully.`,
         data: entry
           ? {
-              ...(entry as any).toObject?.() ?? entry,
-              wilayaAName: wilayaName(entry.wilayaA),
-              wilayaBName: wilayaName(entry.wilayaB),
-            }
+            ...(entry as any).toObject?.() ?? entry,
+            wilayaAName: wilayaName(entry.wilayaA),
+            wilayaBName: wilayaName(entry.wilayaB),
+          }
           : null,
       });
     } catch (error: any) {
@@ -2682,7 +2675,7 @@ export const upsertTariff = catchAsyncError(
       return next(error);
     } finally {
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -2804,7 +2797,7 @@ export const bulkUpsertTariffs = catchAsyncError(
       return next(error);
     } finally {
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -2891,7 +2884,7 @@ export const deleteTariff = catchAsyncError(
       return next(error);
     } finally {
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -2926,7 +2919,7 @@ export const assignTransporterHubLine = catchAsyncError(
       }
 
       const { id: transporterDocId } = req.params;
-      const { hubAId, hubBId }        = req.body as { hubAId?: string; hubBId?: string };
+      const { hubAId, hubBId } = req.body as { hubAId?: string; hubBId?: string };
 
       // ── Basic input validation ──────────────────────────────────────────────
       if (!transporterDocId || !mongoose.Types.ObjectId.isValid(transporterDocId.toString())) {
@@ -2944,7 +2937,7 @@ export const assignTransporterHubLine = catchAsyncError(
 
       // ── Manager resolution ─────────────────────────────────────────────────
       const manager = await ManagerModel.findOne({
-        userId:   managerId,
+        userId: managerId,
         isActive: true,
       }).lean();
 
@@ -2956,7 +2949,7 @@ export const assignTransporterHubLine = catchAsyncError(
 
 
       const transporter = await TransporterModel.findOne({
-        _id:       transporterDocId,
+        _id: transporterDocId,
         companyId,
       });
 
@@ -2999,7 +2992,7 @@ export const assignTransporterHubLine = catchAsyncError(
         success: true,
         message: `Transporter assigned to hub line: ${(hubA as any).name} ↔ ${(hubB as any).name}.`,
         data: {
-          transporterId:   transporter._id,
+          transporterId: transporter._id,
           transporterType: "hub_to_hub",
           assignedLine: [
             { _id: hubAOid, name: (hubA as any).name, code: (hubA as any).code },
@@ -3051,7 +3044,7 @@ export const assignTransporterBranches = catchAsyncError(
       }
 
       const { id: transporterDocId } = req.params;
-      const { branchIds }             = req.body as { branchIds?: string[] };
+      const { branchIds } = req.body as { branchIds?: string[] };
 
       // ── Basic input validation ──────────────────────────────────────────────
       if (!transporterDocId || !mongoose.Types.ObjectId.isValid(transporterDocId.toString())) {
@@ -3078,7 +3071,7 @@ export const assignTransporterBranches = catchAsyncError(
 
       // ── Manager resolution ─────────────────────────────────────────────────
       const manager = await ManagerModel.findOne({
-        userId:   managerId,
+        userId: managerId,
         isActive: true,
       }).lean();
 
@@ -3090,7 +3083,7 @@ export const assignTransporterBranches = catchAsyncError(
 
       // ── Validate transporter belongs to this company ────────────────────────
       const transporter = await TransporterModel.findOne({
-        _id:       transporterDocId,
+        _id: transporterDocId,
         companyId,
       });
 
@@ -3104,14 +3097,14 @@ export const assignTransporterBranches = catchAsyncError(
       const branchOids = uniqueBranchIds.map((id) => new mongoose.Types.ObjectId(id));
 
       const foundBranches = await BranchModel.find({
-        _id:       { $in: branchOids },
+        _id: { $in: branchOids },
         companyId,
       })
         .select("_id name code branchType")
         .lean();
 
       if (foundBranches.length !== branchOids.length) {
-        const foundIds  = new Set(foundBranches.map((b) => b._id.toString()));
+        const foundIds = new Set(foundBranches.map((b) => b._id.toString()));
         const missingIds = uniqueBranchIds.filter((id) => !foundIds.has(id));
         return next(
           new ErrorHandler(
@@ -3141,10 +3134,10 @@ export const assignTransporterBranches = catchAsyncError(
         success: true,
         message: `Transporter assigned to ${branchOids.length} local branch(es).`,
         data: {
-          transporterId:   transporter._id,
+          transporterId: transporter._id,
           transporterType: "hub_to_branch",
           assignedBranches: foundBranches.map((b) => ({
-            _id:  b._id,
+            _id: b._id,
             name: (b as any).name,
             code: (b as any).code,
           })),

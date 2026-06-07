@@ -41,7 +41,7 @@ import { estimateTrafficFactor } from "../services/traffic.service";
 import { fetchWeatherFactor } from "../services/weather.service";
 import LoaderModel from "../models/loader.model";
 import CashierModel from "../models/cashier.model";
-import { v2  } from 'cloudinary';
+import { v2 } from 'cloudinary';
 
 // Configure Cloudinary
 v2.config({
@@ -63,7 +63,7 @@ export const register = catchAsyncError(
 
       const normalizedPhone = User.normalizePhone(phone);
 
-      const existingUser = await User.findOne({ 
+      const existingUser = await User.findOne({
         $or: [
           { email },
           { phone: normalizedPhone }
@@ -245,31 +245,31 @@ export const activate = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const { activation_token: ac_token, activation_number: ac_number } = req.body;
     const activation_token = ac_token || req.cookies.activation_token;
- 
+
     if (!activation_token) {
       return next(new ErrorHandler("Activation token not found", 404));
     }
     if (!ac_number) {
       return next(new ErrorHandler("Activation number is required", 400));
     }
- 
+
     const secret = process.env.JWT_SECRET || "default_secret_key";
     const decoded = verifyToken(activation_token, secret) as { iv: string; data: string };
- 
+
     if (typeof decoded === "string") {
       return next(new ErrorHandler("Invalid or expired activation token", 400));
     }
- 
+
     const { firstName, lastName, phone, email, password, activation_number } =
       decrypt(decoded.data, decoded.iv);
- 
+
     if (ac_number !== activation_number) {
       return next(new ErrorHandler("Invalid activation code", 400));
     }
- 
+
     const normalizedPhone = User.normalizePhone(phone);
 
-    const existingUser = await User.findOne({ 
+    const existingUser = await User.findOne({
       $or: [
         { email },
         { phone: normalizedPhone }
@@ -279,7 +279,7 @@ export const activate = catchAsyncError(
     if (existingUser) {
       return next(new ErrorHandler("User already exists", 400));
     }
- 
+
     const newUser = new User({
       firstName,
       lastName,
@@ -289,16 +289,16 @@ export const activate = catchAsyncError(
       status: "active",
       role: "client",
     });
- 
+
     await newUser.save();
- 
+
     res.clearCookie("activation_token", {
       httpOnly: true,
       sameSite: "none",
       secure: true,
     });
- 
-    
+
+
 
     sendWelcomeNotification(
       newUser._id.toString(),
@@ -695,8 +695,8 @@ export const resetPassword = catchAsyncError(
 
 
 
-const UPLOAD_FOLDER   = "profile_pictures";
-const MAX_FILE_BYTES  = 5 * 1024 * 1024; // 5 MB
+const UPLOAD_FOLDER = "profile_pictures";
+const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
 const ALLOWED_FORMATS = ["jpg", "jpeg", "png", "webp"];
 
 
@@ -705,20 +705,20 @@ async function uploadToCloudinary(
   source: string,
 ): Promise<{ public_id: string; url: string }> {
   const result = await v2.uploader.upload(source, {
-    folder:        UPLOAD_FOLDER,
-    width:         300,
-    height:        300,
-    crop:          "fill",
-    gravity:       "face",          
-    quality:       "auto:good",
-    fetch_format:  "auto",
+    folder: UPLOAD_FOLDER,
+    width: 300,
+    height: 300,
+    crop: "fill",
+    gravity: "face",
+    quality: "auto:good",
+    fetch_format: "auto",
     resource_type: "image",
     allowed_formats: ALLOWED_FORMATS,
   });
 
   return {
     public_id: result.public_id,
-    url:       result.secure_url,
+    url: result.secure_url,
   };
 }
 
@@ -726,7 +726,7 @@ async function uploadToCloudinary(
 
 export const updateProfilePicture = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-    
+
     const userId = req.user?._id;
 
     if (!userId) {
@@ -746,7 +746,7 @@ export const updateProfilePicture = catchAsyncError(
       }
 
       const ext = req.file.mimetype.split("/")[1]?.toLowerCase();
-      
+
       if (!ALLOWED_FORMATS.includes(ext ?? "")) {
         return next(
           new ErrorHandler(
@@ -777,7 +777,7 @@ export const updateProfilePicture = catchAsyncError(
 
     // Check if there's an existing image (public_id exists and is not null)
     const hasOldImage = user.imageUrl && user.imageUrl.public_id !== null;
-    
+
     if (hasOldImage) {
       try {
         await v2.uploader.destroy(user.imageUrl!.public_id);
@@ -791,10 +791,10 @@ export const updateProfilePicture = catchAsyncError(
     // Update the entire imageUrl object
     const updatedUser = await userModel.findByIdAndUpdate(
       userId,
-      { 
-        $set: { 
+      {
+        $set: {
           imageUrl: { public_id, url }
-        } 
+        }
       },
       { new: true },
     ).select("firstName lastName email phone imageUrl role status");
@@ -843,7 +843,7 @@ export const deleteProfilePicture = catchAsyncError(
 
     // Check if there's an existing image (public_id exists and is not null)
     const hasOldImage = user.imageUrl && user.imageUrl.public_id !== null;
-    
+
     if (!hasOldImage) {
       return next(new ErrorHandler("No profile picture to delete.", 400));
     }
@@ -855,8 +855,8 @@ export const deleteProfilePicture = catchAsyncError(
     }
 
     // Reset to null (not empty strings)
-    await userModel.findByIdAndUpdate(userId, { 
-      $set: { imageUrl: {public_id:null , url:null} } 
+    await userModel.findByIdAndUpdate(userId, {
+      $set: { imageUrl: { public_id: null, url: null } }
     });
 
     try {
@@ -897,7 +897,7 @@ const createOTPToken = (
   return jwt.sign(
     { otp, ...contact },
     process.env.OTP_SECRET as string,
-    { expiresIn: expireMinutes * 60 }, 
+    { expiresIn: expireMinutes * 60 },
   );
 };
 
@@ -1013,7 +1013,7 @@ export const requestPasswordReset = catchAsyncError(
             expireMinutes: process.env.OTP_EXPIRE ?? 10,
           });
         } else {
-  
+
           html = `<p>Hi ${user.firstName},</p>
                   <p>Your password reset OTP is: <strong>${otp}</strong></p>
                   <p>It expires in ${process.env.OTP_EXPIRE ?? 10} minutes.</p>`;
@@ -1036,9 +1036,9 @@ export const requestPasswordReset = catchAsyncError(
       } else {
 
         const smsSent = await sendSMS({
-            to: identifier.trim(),
-            message: `Your OTP for password reset is: ${otp}. Valid for ${process.env.OTP_EXPIRE} minutes.`,
-          });
+          to: identifier.trim(),
+          message: `Your OTP for password reset is: ${otp}. Valid for ${process.env.OTP_EXPIRE} minutes.`,
+        });
 
         if (!smsSent) {
           return next(
@@ -1222,82 +1222,82 @@ export const confirmPasswordReset = catchAsyncError(
 
 
 export const meUser = catchAsyncError(
-  async(req:Request,res:Response,next:NextFunction)=>{
+  async (req: Request, res: Response, next: NextFunction) => {
 
-  try{
+    try {
 
-    const userId = req.user?._id;
+      const userId = req.user?._id;
 
-    if(!userId || mongoose.Types.ObjectId.isValid(userId) === false){
-      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      if (!userId || mongoose.Types.ObjectId.isValid(userId) === false) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      const user = await userModel.findById(userId).select("-passwordHash").lean();
+
+      if (!user) {
+        return next(new ErrorHandler("User not found.", 404));
+      }
+
+      let associated = null;
+
+      switch (user.role) {
+
+        case "admin":
+          associated = await adminModel.findOne({ user_id: userId });
+          break;
+
+        case "manager":
+          associated = await ManagerModel.findOne({ userId });
+          break;
+
+        case "client":
+          associated = await clientModel.findOne({ userId });
+          break;
+
+        case "deliverer":
+          associated = await delivererModel.findOne({ userId });
+          break;
+
+        case "transporter":
+          associated = await transporterModel.findOne({ userId });
+          break;
+
+        case "supervisor":
+          associated = await SupervisorModel.findOne({ userId });
+          break;
+
+        case "freelancer":
+          associated = await freelancerModel.findOne({ userId });
+          break;
+
+        case "loader":
+          associated = await LoaderModel.findOne({ userId });
+          break;
+
+        case "cashier":
+          associated = await CashierModel.findOne({ userId });
+          break;
+
+        default:
+          associated = null;
+
+      }
+
+      res.status(200).json({
+        success: true,
+        user: {
+          ...user,
+          password: undefined
+        },
+        associated,
+        role: user.role
+      })
+
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error fetching user data.", 500));
     }
 
-    const user = await userModel.findById(userId).select("-passwordHash").lean();
-
-    if(!user){
-      return next(new ErrorHandler("User not found.", 404));
-    }
-
-    let associated = null;
-
-    switch (user.role){
-
-     case "admin":
-       associated = await adminModel.findOne({user_id:userId});
-       break;
-
-     case "manager":
-       associated = await ManagerModel.findOne({userId});
-       break;
-
-     case "client":
-       associated = await clientModel.findOne({userId});
-       break;
-
-     case "deliverer":
-       associated = await delivererModel.findOne({userId});
-       break;
-       
-     case "transporter":
-      associated = await transporterModel.findOne({userId});
-      break;
-
-     case "supervisor":
-      associated = await SupervisorModel.findOne({userId});
-      break;
-
-     case "freelancer":
-       associated = await freelancerModel.findOne({userId});
-       break;
-
-     case "loader":
-       associated = await LoaderModel.findOne({userId});
-       break;
-
-     case "cashier":
-       associated = await CashierModel.findOne({userId});
-       break;
-
-      default:
-       associated = null;
-
-    }
-    
-    res.status(200).json({
-      success:true,
-      user:{
-        ...user,
-          password:undefined
-      },
-      associated,
-      role : user.role
-    })
-
-  }catch(error:any){
-    return next(new ErrorHandler(error.message || "Error fetching user data.", 500));
-  }
-
-});
+  });
 
 
 
@@ -1392,13 +1392,13 @@ export const meUser = catchAsyncError(
 //       if (err.code === 11000) {
 //         return next(new ErrorHandler("Duplicate field value: email or phone already exists", 409));
 //       }
-      
+
 //       // Handle validation errors from mongoose
 //       if (err.name === 'ValidationError') {
 //         const messages = Object.values(err.errors).map((e: any) => e.message).join(', ');
 //         return next(new ErrorHandler(messages, 400));
 //       }
-      
+
 //       return next(new ErrorHandler(err.message || "Error creating manager.", 500));
 //     }
 //   }
@@ -1430,7 +1430,7 @@ export const createManager = catchAsyncError(
       const normalizedPhone = User.normalizePhone(phone);
 
       const existingUser = await userModel.findOne({
-        
+
         $or: [{ email: email.toLowerCase() }, { phone: normalizedPhone }]
       });
 
@@ -1453,7 +1453,7 @@ export const createManager = catchAsyncError(
       // 4. Create a temporary companyId (you might want to create a default company or make this optional)
       // For testing, we'll create a dummy ObjectId or you can modify the schema to allow null temporarily
       // const dummyCompanyId = new mongoose.Types.ObjectId();
-      
+
       // 5. Create the manager record with allBranches access by default
       const manager = await ManagerModel.create({
         userId: user._id,
@@ -1478,7 +1478,7 @@ export const createManager = catchAsyncError(
       });
 
       // Notify admins about new manager
-      
+
       notifyAdminsNewEntityPending(
         manager._id.toString(),
         "Manager",
@@ -1517,13 +1517,13 @@ export const createManager = catchAsyncError(
       if (err.code === 11000) {
         return next(new ErrorHandler("Duplicate field value: email or phone already exists", 409));
       }
-      
+
       // Handle validation errors from mongoose
       if (err.name === 'ValidationError') {
         const messages = Object.values(err.errors).map((e: any) => e.message).join(', ');
         return next(new ErrorHandler(messages, 400));
       }
-      
+
       return next(new ErrorHandler(err.message || "Error creating manager.", 500));
     }
   }
@@ -1540,38 +1540,38 @@ export const createManager = catchAsyncError(
 // Instant — reads from the JSON file in memory, zero network calls.
 // Call this on every keystroke (debounce 150–200ms on the frontend).
 // ─────────────────────────────────────────────────────────────────────────────
- 
+
 export const searchAddress = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const { q, limit } = req.query as Record<string, string | undefined>;
- 
+
     if (!q || !q.trim()) {
       return next(new ErrorHandler("Query parameter 'q' is required.", 400));
     }
- 
+
     if (q.trim().length < 2) {
       return res.status(200).json({ success: true, count: 0, data: [] });
     }
- 
+
     const limitNum = limit ? parseInt(limit, 10) : 10;
     if (isNaN(limitNum) || limitNum < 1 || limitNum > 20) {
       return next(new ErrorHandler("limit must be between 1 and 20.", 400));
     }
- 
+
     const places = searchLocalPlaces(q.trim(), limitNum);
- 
+
     return res.status(200).json({
       success: true,
-      count:   places.length,
-      data:    places,
+      count: places.length,
+      data: places,
       // Each item in data has:
       // { id, communeNameAscii, communeName, dairaNameAscii, dairaName,
       //   wilayaCode, wilayaNameAscii, wilayaName, label }
     });
   },
 );
- 
- 
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ENDPOINT 2 — Resolve coordinates for a confirmed selection
 // POST /api/auth/geocode/resolve
@@ -1581,33 +1581,33 @@ export const searchAddress = catchAsyncError(
 // Hits Nominatim with the full canonical name → returns lat/lon.
 // Frontend stores the result and sends it with the createPackage request.
 // ─────────────────────────────────────────────────────────────────────────────
- 
+
 export const resolvePlace = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const { communeNameAscii, wilayaNameAscii } = req.body as {
       communeNameAscii?: string;
       wilayaNameAscii?: string;
     };
- 
+
     if (!communeNameAscii?.trim() || !wilayaNameAscii?.trim()) {
       return next(
         new ErrorHandler("communeNameAscii and wilayaNameAscii are required.", 400),
       );
     }
- 
+
     try {
       const result = await geocodeConfirmedPlace(
         communeNameAscii.trim(),
         wilayaNameAscii.trim(),
       );
- 
+
       if (!result) {
         return res.status(404).json({
           success: false,
           message: `Could not find or geocode "${communeNameAscii}, ${wilayaNameAscii}".`,
         });
       }
- 
+
       return res.status(200).json({
         success: true,
         data: result,
@@ -1620,60 +1620,60 @@ export const resolvePlace = catchAsyncError(
     }
   },
 );
- 
- 
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ENDPOINT 3 — Reverse geocode (for deliverer GPS confirmation)
 // GET /api/auth/geocode/reverse?lat=36.26&lon=6.69
 // ─────────────────────────────────────────────────────────────────────────────
- 
+
 export const reverseGeocodeAddress = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const { lat, lon } = req.query as Record<string, string | undefined>;
- 
+
     if (!lat || !lon) {
       return next(new ErrorHandler("lat and lon are required.", 400));
     }
- 
+
     const latNum = parseFloat(lat);
     const lonNum = parseFloat(lon);
- 
-    if (isNaN(latNum) || latNum < -90  || latNum > 90)  {
+
+    if (isNaN(latNum) || latNum < -90 || latNum > 90) {
       return next(new ErrorHandler("lat must be between -90 and 90.", 400));
     }
     if (isNaN(lonNum) || lonNum < -180 || lonNum > 180) {
       return next(new ErrorHandler("lon must be between -180 and 180.", 400));
     }
- 
+
     try {
       const result = await reverseGeocode(latNum, lonNum);
- 
+
       if (!result) {
         return res.status(404).json({
           success: false,
           message: "No address found for the given coordinates.",
         });
       }
- 
+
       return res.status(200).json({ success: true, data: result });
     } catch (err: any) {
       return next(new ErrorHandler(err.message ?? "Reverse geocoding failed.", 503));
     }
   },
 );
- 
- 
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ROUTES — add to your router file (auth.routes.ts or freelancer.routes.ts)
 // ─────────────────────────────────────────────────────────────────────────────
- 
+
 // import { searchAddress, resolvePlace, reverseGeocodeAddress } from "../controllers/freelancer.controller";
 //
 // authRouter.get("/geocode/search",   searchAddress);
 // authRouter.post("/geocode/resolve", resolvePlace);
 // authRouter.get("/geocode/reverse",  reverseGeocodeAddress);
- 
- 
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // createPackage — destination block update
 // Replace the destination object in your existing createPackage function.
@@ -1685,7 +1685,7 @@ export const reverseGeocodeAddress = catchAsyncError(
 //   deliveryCommuneAscii?: string;
 //   deliveryWilayaAscii?: string;
 // ─────────────────────────────────────────────────────────────────────────────
- 
+
 /*
   const {
     // ... your existing fields ...
@@ -1890,8 +1890,8 @@ export const calculateETA = catchAsyncError(
     // ── 7. CONFIDENCE SCORE ──────────────────────────────────────────
     const confidence: "high" | "medium" | "low" =
       rawSum < 0.10 ? "high" :
-      rawSum < 0.30 ? "medium" :
-      "low";
+        rawSum < 0.30 ? "medium" :
+          "low";
 
     // ── 8. RESPONSE ──────────────────────────────────────────────────
     return res.status(200).json({
@@ -1934,14 +1934,14 @@ const createContactChangeOTPToken = (payload: {
 };
 
 
- 
+
 export const requestContactChange = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user?._id;
       if (!userId) {
         return next(new ErrorHandler("Unauthorized.", 401));
-        
+
       }
 
       const { newEmail, newPhone } = req.body as {
@@ -1957,7 +1957,7 @@ export const requestContactChange = catchAsyncError(
             400,
           ),
         );
-        
+
       }
 
 
@@ -1966,7 +1966,7 @@ export const requestContactChange = catchAsyncError(
 
       if (newEmail && !emailRegex.test(newEmail.trim())) {
         return next(new ErrorHandler("Invalid email address format.", 400));
-        
+
       }
 
       if (newPhone && !phoneRegex.test(newPhone.trim())) {
@@ -1976,14 +1976,14 @@ export const requestContactChange = catchAsyncError(
             400,
           ),
         );
-        
+
       }
 
 
       const user = await userModel.findById(userId);
       if (!user) {
         return next(new ErrorHandler("User not found.", 404));
-        
+
       }
 
 
@@ -1991,7 +1991,7 @@ export const requestContactChange = catchAsyncError(
         return next(
           new ErrorHandler("New email must be different from your current email.", 400),
         );
-        
+
       }
 
       if (newPhone) {
@@ -2004,7 +2004,7 @@ export const requestContactChange = catchAsyncError(
               400,
             ),
           );
-          
+
         }
       }
 
@@ -2015,8 +2015,8 @@ export const requestContactChange = catchAsyncError(
           _id: { $ne: userId },
         });
         if (taken) {
-          return  next(new ErrorHandler("This email is already in use.", 409));
-          
+          return next(new ErrorHandler("This email is already in use.", 409));
+
         }
       }
 
@@ -2027,8 +2027,8 @@ export const requestContactChange = catchAsyncError(
           _id: { $ne: userId },
         });
         if (taken) {
-          return  next(new ErrorHandler("This phone number is already in use.", 409));
-          
+          return next(new ErrorHandler("This phone number is already in use.", 409));
+
         }
       }
 
@@ -2126,7 +2126,7 @@ export const confirmContactChange = catchAsyncError(
       const userId = req.user?._id;
       if (!userId) {
         return next(new ErrorHandler("Unauthorized.", 401));
-        
+
       }
 
       const { otp_token, otp } = req.body as {
@@ -2136,7 +2136,7 @@ export const confirmContactChange = catchAsyncError(
 
       if (!otp_token || !otp) {
         return next(new ErrorHandler("otp_token and otp are required.", 400));
-        
+
       }
 
 
@@ -2154,7 +2154,7 @@ export const confirmContactChange = catchAsyncError(
           return;
         }
         return next(new ErrorHandler("Invalid OTP token.", 400));
-        
+
       }
 
 
@@ -2167,14 +2167,14 @@ export const confirmContactChange = catchAsyncError(
         return next(
           new ErrorHandler("Token does not contain any contact fields to update.", 400),
         );
-        
+
       }
 
 
       const user = await userModel.findById(userId);
       if (!user) {
         return next(new ErrorHandler("User not found.", 404));
-        
+
       }
 
 
@@ -2190,7 +2190,7 @@ export const confirmContactChange = catchAsyncError(
               409,
             ),
           );
-          
+
         }
       }
 
@@ -2206,7 +2206,7 @@ export const confirmContactChange = catchAsyncError(
               409,
             ),
           );
-          
+
         }
       }
 
