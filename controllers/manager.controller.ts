@@ -698,7 +698,6 @@ interface ICreateBranch {
   email: string;
   operatingHours?: Record<string, IOperatingHoursBody>;
   capacityLimit?: number;
-
   branchType?: 'local_branch' | 'regional_main_hub';
   parentHubId?: string;
   servesBranches?: string[];
