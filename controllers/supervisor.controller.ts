@@ -10587,17 +10587,15 @@ export const getPackagesPaginated = catchAsyncError(
         type: pkg.type,
         isFragile: pkg.isFragile,
 
-
         senderId: pkg.senderId,
         senderType: pkg.senderType,
         clientId: pkg.clientId ?? null,
-
 
         weight: pkg.weight,
         volume: pkg.volume ?? null,
         dimensions: pkg.dimensions ?? null,
 
-
+        // ── Updated destination with coordinates for home delivery ────────────────
         destination: {
           recipientName: pkg.destination.recipientName,
           recipientPhone: pkg.destination.recipientPhone,
@@ -10607,13 +10605,18 @@ export const getPackagesPaginated = catchAsyncError(
           state: pkg.destination.state,
           postalCode: pkg.destination.postalCode ?? null,
           notes: pkg.destination.notes ?? null,
+          // Include coordinates only for home delivery packages
+          coordinates: pkg.deliveryType === "home" && pkg.destination.location?.coordinates
+            ? {
+                type: pkg.destination.location.type || "Point",
+                coordinates: pkg.destination.location.coordinates, // [lng, lat]
+              }
+            : null,
         },
-
 
         deliveryType: pkg.deliveryType,
         deliveryPriority: pkg.deliveryPriority,
         estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
-
 
         estimatedTimeRemaining: pkg.estimatedTimeRemaining ?? null,
         isOverdue: pkg.isOverdue,
@@ -10623,31 +10626,25 @@ export const getPackagesPaginated = catchAsyncError(
         isInTransit: pkg.isInTransit,
         isAtBranch: pkg.isAtBranch,
 
-
         totalPrice: pkg.totalPrice,
         paymentStatus: pkg.paymentStatus,
         paymentMethod: pkg.paymentMethod ?? null,
         paidAt: pkg.paidAt ?? null,
 
-
         assignedDelivererId: pkg.assignedDelivererId ?? null,
         assignedTransporterId: pkg.assignedTransporterId ?? null,
         assignedVehicleId: pkg.assignedVehicleId ?? null,
-
 
         attemptCount: pkg.attemptCount,
         maxAttempts: pkg.maxAttempts,
         lastAttemptDate: pkg.lastAttemptDate ?? null,
         nextAttemptDate: pkg.nextAttemptDate ?? null,
 
-
         returnInfo: pkg.returnInfo,
-
 
         unresolvedIssuesCount: (pkg.issues as IIssue[]).filter(
           (i) => !i.resolved,
         ).length,
-
 
         createdAt: pkg.createdAt,
         updatedAt: pkg.updatedAt,
