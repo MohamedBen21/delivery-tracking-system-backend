@@ -8487,14 +8487,15 @@ export const getRoute = catchAsyncError(
 );
 
 
-//  GET ROUTES (list for this branch)
+//  GET ROUTES (list for this branch — supervisor, deliverer, OR transporter)
 
 export const getRoutes = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-    const supervisorUserId = req.user?._id;
+    const userId = req.user?._id;
+    const userRole = req.user?.role as string;
     const { branchId } = req.params;
 
-    if (!supervisorUserId) {
+    if (!userId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
     if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
@@ -8502,9 +8503,14 @@ export const getRoutes = catchAsyncError(
     }
 
     // Query params validation
-    const VALID_STATUSES:  RouteStatus[] = ["planned", "assigned", "active", "paused", "completed", "cancelled"];
-    const VALID_TYPES:     RouteType[]   = ["inter_branch", "local_delivery", "pickup_route", "return_route"];
-    const VALID_SORT_BY    = ["scheduledStart", "createdAt", "status"];
+    const VALID_STATUSES: RouteStatus[] = [
+      "planned", "assigned", "active", "paused", "completed", "cancelled"
+    ];
+    const VALID_TYPES: RouteType[] = [
+      "inter_branch", "local_delivery", "pickup_route", "return_route",
+      "hub_to_hub", "hub_to_branch"
+    ];
+    const VALID_SORT_BY = ["scheduledStart", "createdAt", "status"];
 
     const {
       status,
@@ -8518,7 +8524,6 @@ export const getRoutes = catchAsyncError(
       page,
       limit,
     } = req.query as Record<string, string | undefined>;
-
 
     let statusFilter: RouteStatus[] | undefined;
     if (status) {
@@ -8539,7 +8544,7 @@ export const getRoutes = catchAsyncError(
     }
 
     let fromDateParsed: Date | undefined;
-    let toDateParsed:   Date | undefined;
+    let toDateParsed: Date | undefined;
     if (fromDate) {
       fromDateParsed = new Date(fromDate);
       if (isNaN(fromDateParsed.getTime()))
@@ -8566,25 +8571,113 @@ export const getRoutes = catchAsyncError(
     if (isNaN(pageNum)  || pageNum  < 1)               return next(new ErrorHandler("page must be a positive integer", 400));
     if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
 
-
-    const supervisor = await SupervisorModel.findOne({
-      userId: supervisorUserId,
-      branchId,
-    }).lean();
-
-    if (!supervisor || !supervisor.isActive) {
-      return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
-    }
-
-
+    // ── Authorize: supervisor / deliverer / transporter ───────────────────────
     const branchOid = new mongoose.Types.ObjectId(branchId.toString());
 
-    const matchStage: Record<string, any> = {
-      $or: [
+    let delivererId: mongoose.Types.ObjectId | null = null;
+    let transporterId: mongoose.Types.ObjectId | null = null;
+    let supervisorId: mongoose.Types.ObjectId | null = null;
+
+    if (userRole === "supervisor" || userRole === "admin" || userRole === "manager") {
+      // Supervisor/Admin/Manager: must be active supervisor of this branch
+      const supervisor = await SupervisorModel.findOne({
+        userId,
+        branchId: branchOid,
+      }).lean();
+
+      if (!supervisor || !supervisor.isActive) {
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
+      }
+      supervisorId = supervisor._id;
+    } else if (userRole === "deliverer") {
+      // Deliverer: must be active deliverer assigned to this branch
+      const deliverer = await DelivererModel.findOne({
+        userId,
+        branchId: branchOid,
+      }).lean();
+
+      if (!deliverer) {
+        return next(new ErrorHandler("You are not assigned to this branch as a deliverer", 403));
+      }
+      if (!deliverer.isActive) {
+        return next(new ErrorHandler("Your deliverer account is not active", 403));
+      }
+      if (deliverer.isSuspended) {
+        return next(new ErrorHandler("Your deliverer account is suspended", 403));
+      }
+      delivererId = deliverer._id;
+    } else if (userRole === "transporter") {
+      // Transporter: find by userId (transporter may not have a fixed branch)
+      const transporter = await TransporterModel.findOne({ userId }).lean();
+
+      if (!transporter) {
+        return next(new ErrorHandler("Transporter profile not found", 404));
+      }
+      if (!transporter.isActive) {
+        return next(new ErrorHandler("Your transporter account is not active", 403));
+      }
+      if (transporter.isSuspended) {
+        return next(new ErrorHandler("Your transporter account is suspended", 403));
+      }
+
+      // ── Branch access logic for transporters ──────────────────────────────
+      // hub_to_hub: can access routes involving EITHER hub in their assignedLine
+      // hub_to_branch: can access routes where originBranchId matches their 
+      //                currentBranchId OR any of their assignedBranches
+      // legacy transporter: can access routes where currentBranchId matches
+
+      const branchOidStr = branchOid.toString();
+      let hasAccess = false;
+
+      if (transporter.transporterType === "hub_to_hub") {
+        // Check if branch is one of the two hubs in assignedLine
+        if (transporter.assignedLine) {
+          hasAccess = transporter.assignedLine.some(
+            (id) => id.toString() === branchOidStr
+          );
+        }
+      } else if (transporter.transporterType === "hub_to_branch") {
+        // Check if branch is in assignedBranches OR is currentBranchId
+        if (transporter.assignedBranches) {
+          hasAccess = transporter.assignedBranches.some(
+            (id) => id.toString() === branchOidStr
+          );
+        }
+        if (!hasAccess && transporter.currentBranchId) {
+          hasAccess = transporter.currentBranchId.toString() === branchOidStr;
+        }
+      } else {
+        // Legacy transporter: check currentBranchId
+        if (transporter.currentBranchId) {
+          hasAccess = transporter.currentBranchId.toString() === branchOidStr;
+        }
+      }
+
+      if (!hasAccess) {
+        return next(new ErrorHandler("You are not authorized to view routes for this branch", 403));
+      }
+
+      transporterId = transporter._id;
+    } else {
+      return next(new ErrorHandler("You are not authorized to view routes for this branch", 403));
+    }
+
+    // ── Build match stage ─────────────────────────────────────────────────────
+    const matchStage: Record<string, any> = {};
+
+    // For supervisors/admins/managers: show all routes involving this branch
+    // For deliverers: ONLY show routes assigned to THIS deliverer
+    // For transporters: ONLY show routes assigned to THIS transporter
+    if (delivererId) {
+      matchStage.assignedDelivererId = delivererId;
+    } else if (transporterId) {
+      matchStage.assignedTransporterId = transporterId;
+    } else {
+      matchStage.$or = [
         { originBranchId:      branchOid },
         { destinationBranchId: branchOid },
-      ],
-    };
+      ];
+    }
 
     if (statusFilter) {
       matchStage.status = statusFilter.length === 1
@@ -8596,6 +8689,7 @@ export const getRoutes = catchAsyncError(
     if (workerId) {
       const workerOid = new mongoose.Types.ObjectId(workerId);
       matchStage.$and = [
+        ...(matchStage.$and ?? []),
         {
           $or: [
             { assignedTransporterId: workerOid },
@@ -8615,7 +8709,6 @@ export const getRoutes = catchAsyncError(
     if (search) {
       const regex = { $regex: search.trim(), $options: "i" };
       const searchOr = [{ routeNumber: regex }, { name: regex }];
-      // Merge with any existing $or without clobbering the branch filter
       matchStage.$and = [
         ...(matchStage.$and ?? []),
         { $or: searchOr },
@@ -8628,7 +8721,6 @@ export const getRoutes = catchAsyncError(
 
     const skip = (pageNum - 1) * limitNum;
 
-
     const [result] = await RouteModel.aggregate([
       { $match: matchStage },
       {
@@ -8638,6 +8730,7 @@ export const getRoutes = catchAsyncError(
             { $skip: skip },
             { $limit: limitNum },
 
+            // ── Branch lookups ────────────────────────────────────────────────
             {
               $lookup: {
                 from:         "branches",
@@ -8658,6 +8751,8 @@ export const getRoutes = catchAsyncError(
               },
             },
             { $unwind: { path: "$destinationBranch", preserveNullAndEmptyArrays: true } },
+
+            // ── Vehicle lookup ────────────────────────────────────────────────
             {
               $lookup: {
                 from:         "vehicles",
@@ -8669,14 +8764,65 @@ export const getRoutes = catchAsyncError(
             },
             { $unwind: { path: "$assignedVehicle", preserveNullAndEmptyArrays: true } },
 
-            { $project: { "stops.completedPackages": 0, "stops.failedPackages": 0, "stops.skippedPackages": 0, "stops.issues": 0, optimizedPath: 0 } },
+            // ── Deliverer info lookup ─────────────────────────────────────────
+            {
+              $lookup: {
+                from:         "deliverers",
+                localField:   "assignedDelivererId",
+                foreignField: "_id",
+                as:           "assignedDeliverer",
+                pipeline:     [{ $project: { userId: 1, rating: 1, availabilityStatus: 1 } }],
+              },
+            },
+            { $unwind: { path: "$assignedDeliverer", preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from:         "users",
+                localField:   "assignedDeliverer.userId",
+                foreignField: "_id",
+                as:           "assignedDelivererUser",
+                pipeline:     [{ $project: { firstName: 1, lastName: 1, phone: 1, avatar: 1 } }],
+              },
+            },
+            { $unwind: { path: "$assignedDelivererUser", preserveNullAndEmptyArrays: true } },
+
+            // ── Transporter info lookup ───────────────────────────────────────
+            {
+              $lookup: {
+                from:         "transporters",
+                localField:   "assignedTransporterId",
+                foreignField: "_id",
+                as:           "assignedTransporter",
+                pipeline:     [{ $project: { userId: 1, rating: 1, availabilityStatus: 1, transporterType: 1 } }],
+              },
+            },
+            { $unwind: { path: "$assignedTransporter", preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from:         "users",
+                localField:   "assignedTransporter.userId",
+                foreignField: "_id",
+                as:           "assignedTransporterUser",
+                pipeline:     [{ $project: { firstName: 1, lastName: 1, phone: 1, avatar: 1 } }],
+              },
+            },
+            { $unwind: { path: "$assignedTransporterUser", preserveNullAndEmptyArrays: true } },
+
+            // ── Projection (remove heavy fields) ──────────────────────────────
+            { 
+              $project: { 
+                "stops.completedPackages": 0, 
+                "stops.failedPackages": 0, 
+                "stops.skippedPackages": 0, 
+                "stops.issues": 0, 
+                optimizedPath: 0 
+              } 
+            },
           ],
           totalCount: [{ $count: "count" }],
-
           statusSummary: [
             { $group: { _id: "$status", count: { $sum: 1 } } },
           ],
-
           typeSummary: [
             { $group: { _id: "$type", count: { $sum: 1 } } },
           ],
