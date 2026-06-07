@@ -10254,10 +10254,14 @@ export const getPackagesPaginated = catchAsyncError(
         filter.currentBranchId = toObjectId(req.query.currentBranchId as string);
       }
 
+      // ── Track if we're filtering by deliverer ──────────────────────────────
+      let assignedDelivererId: mongoose.Types.ObjectId | null = null;
+      
       if (req.query.assignedDelivererId) {
         if (!isValidId(req.query.assignedDelivererId as string))
           return next(new ErrorHandler("Invalid assignedDelivererId.", 400));
-        filter.assignedDelivererId = toObjectId(req.query.assignedDelivererId as string);
+        assignedDelivererId = toObjectId(req.query.assignedDelivererId as string);
+        filter.assignedDelivererId = assignedDelivererId;
       }
 
 
@@ -10361,13 +10365,186 @@ export const getPackagesPaginated = catchAsyncError(
         filter["destination.state"] = new RegExp(req.query.state as string, "i");
       }
 
+      // ── Fetch deliverer stats if filtering by deliverer ────────────────────
+      let delivererStats: any = null;
+      if (assignedDelivererId) {
+        const deliverer = await DelivererModel.findById(assignedDelivererId)
+          .lean({ virtuals: true });
 
+        if (deliverer) {
+          // Aggregate package stats for this deliverer
+          const packageStats = await PackageModel.aggregate([
+            {
+              $match: {
+                assignedDelivererId: assignedDelivererId,
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalPackages: { $sum: 1 },
+                deliveredPackages: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "delivered"] }, 1, 0],
+                  },
+                },
+                failedPackages: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $in: [
+                          "$status",
+                          ["failed_delivery", "failed_delivery_attempt", "cancelled", "returned"],
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                inProgressPackages: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $in: [
+                          "$status",
+                          ["out_for_delivery", "at_destination_branch"],
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                pendingPackages: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $in: [
+                          "$status",
+                          ["pending", "accepted", "at_origin_branch", "in_transit_to_branch"],
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                totalCollected: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$paymentStatus", "paid"] },
+                      "$totalPrice",
+                      0,
+                    ],
+                  },
+                },
+                totalCOD: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $eq: ["$status", "delivered"] },
+                          { $eq: ["$paymentMethod", "cod"] },
+                        ],
+                      },
+                      "$totalPrice",
+                      0,
+                    ],
+                  },
+                },
+              },
+            },
+          ]);
+
+          const stats = packageStats[0] || {
+            totalPackages: 0,
+            deliveredPackages: 0,
+            failedPackages: 0,
+            inProgressPackages: 0,
+            pendingPackages: 0,
+            totalCollected: 0,
+            totalCOD: 0,
+          };
+
+          delivererStats = {
+            // ── Deliverer profile ────────────────────────────────────────────
+            id: deliverer._id,
+            userId: deliverer.userId,
+            branchId: deliverer.branchId,
+            companyId: deliverer.companyId,
+
+            // ── Status & verification ───────────────────────────────────────
+            availabilityStatus: deliverer.availabilityStatus,
+            verificationStatus: deliverer.verificationStatus,
+            isActive: deliverer.isActive,
+            isOnline: deliverer.isOnline,
+            isSuspended: deliverer.isSuspended,
+            isVerified: deliverer.isVerified,
+            isAvailable: deliverer.isAvailable,
+            isOnDuty: deliverer.isOnDuty,
+
+            // ── Performance metrics ─────────────────────────────────────────
+            rating: deliverer.rating,
+            successRate: deliverer.successRate, // virtual: (successfulDeliveries / totalDeliveries) * 100
+
+            // ── Lifetime stats ──────────────────────────────────────────────
+            totalDeliveries: deliverer.totalDeliveries,
+            successfulDeliveries: deliverer.successfulDeliveries,
+            failedDeliveries: deliverer.failedDeliveries,
+
+            // ── Today's stats ───────────────────────────────────────────────
+            todayDeliveriesCount: deliverer.todayDeliveriesCount,
+            todayEarnings: deliverer.todayEarnings,
+            todayCollectedAmount: deliverer.todayCollectedAmount,
+
+            // ── Financials ──────────────────────────────────────────────────
+            commission: deliverer.commission,
+            totalEarnings: deliverer.totalEarnings,
+            pendingBranchReturn: deliverer.pendingBranchReturn,
+
+            // ── Performance object ──────────────────────────────────────────
+            performance: {
+              averageDeliveryTime: deliverer.performance?.averageDeliveryTime ?? 0,
+              onTimeDeliveryRate: deliverer.performance?.onTimeDeliveryRate ?? 0,
+              customerSatisfaction: deliverer.performance?.customerSatisfaction ?? 0,
+              totalDistanceCovered: deliverer.performance?.totalDistanceCovered ?? 0,
+            },
+
+            // ── Package stats (from aggregation) ────────────────────────────
+            packageStats: {
+              totalAssigned: stats.totalPackages,
+              delivered: stats.deliveredPackages,
+              failed: stats.failedPackages,
+              inProgress: stats.inProgressPackages,
+              pending: stats.pendingPackages,
+              totalCollected: stats.totalCollected,
+              totalCOD: stats.totalCOD,
+            },
+
+            // ── Document status ─────────────────────────────────────────────
+            documentStatus: deliverer.documentStatus,
+            hasValidLicense: deliverer.hasValidLicense,
+            canAcceptDeliveries: deliverer.canAcceptDeliveries,
+
+            // ── Current assignment ──────────────────────────────────────────
+            currentVehicleId: deliverer.currentVehicleId ?? null,
+            currentRouteId: deliverer.currentRouteId ?? null,
+
+            // ── Suspension info ─────────────────────────────────────────────
+            suspensionReason: deliverer.suspensionReason ?? null,
+            lastActiveAt: deliverer.lastActiveAt,
+          };
+        }
+      }
+
+      // ── Fetch packages ──────────────────────────────────────────────────────
       const [total, packages] = await Promise.all([
         PackageModel.countDocuments(filter),
         PackageModel.find(filter)
           .skip(skip)
           .limit(limit)
-          .lean({ virtuals: true }), // include virtuals so estimatedTimeRemaining is present
+          .lean({ virtuals: true }),
       ]);
 
 
@@ -10383,7 +10560,6 @@ export const getPackagesPaginated = catchAsyncError(
       const order  = req.query.order === "desc" ? -1 : 1;
 
       if (sortBy === "estimatedTimeRemaining") {
-
         filtered.sort((a, b) => {
           const aVal = a.estimatedTimeRemaining ?? Infinity;
           const bVal = b.estimatedTimeRemaining ?? Infinity;
@@ -10478,48 +10654,56 @@ export const getPackagesPaginated = catchAsyncError(
         deliveredAt: pkg.deliveredAt ?? null,
       }));
 
+      // ── Build response ──────────────────────────────────────────────────────
+      const responseData: any = {
+        packages: formattedPackages,
+        pagination: {
+          total: filtered.length,
+          page,
+          limit,
+          pages: Math.ceil(filtered.length / limit),
+          hasMore: filtered.length > skip + limit,
+        },
+        filters: {
+          status:               req.query.status               ?? null,
+          type:                 req.query.type                 ?? null,
+          paymentStatus:        req.query.paymentStatus        ?? null,
+          deliveryPriority:     req.query.deliveryPriority     ?? null,
+          deliveryType:         req.query.deliveryType         ?? null,
+          isFragile:            req.query.isFragile            ?? null,
+          isOverdue:            req.query.isOverdue            ?? null,
+          isReturn:             req.query.isReturn             ?? null,
+          hasIssues:            req.query.hasIssues            ?? null,
+          minWeight:            req.query.minWeight            ?? null,
+          maxWeight:            req.query.maxWeight            ?? null,
+          minVolume:            req.query.minVolume            ?? null,
+          maxVolume:            req.query.maxVolume            ?? null,
+          minLength:            req.query.minLength            ?? null,
+          maxLength:            req.query.maxLength            ?? null,
+          minWidth:             req.query.minWidth             ?? null,
+          maxWidth:             req.query.maxWidth             ?? null,
+          minHeight:            req.query.minHeight            ?? null,
+          maxHeight:            req.query.maxHeight            ?? null,
+          city:                 req.query.city                 ?? null,
+          state:                req.query.state                ?? null,
+          clientId:             req.query.clientId             ?? null,
+          companyId:            req.query.companyId            ?? null,
+          originBranchId:       req.query.originBranchId       ?? null,
+          currentBranchId:      req.query.currentBranchId      ?? null,
+          assignedDelivererId:  req.query.assignedDelivererId  ?? null,
+          sortBy:               sortBy,
+          order:                req.query.order                ?? "asc",
+        },
+      };
+
+      // ── Attach deliverer stats if available ────────────────────────────────
+      if (delivererStats) {
+        responseData.delivererStats = delivererStats;
+      }
+
       res.status(200).json({
         success: true,
-        data: {
-          packages: formattedPackages,
-          pagination: {
-            total: filtered.length, 
-            page,
-            limit,
-            pages: Math.ceil(filtered.length / limit),
-            hasMore: filtered.length > skip + limit,
-          },
-          filters: {
-            status:               req.query.status               ?? null,
-            type:                 req.query.type                 ?? null,
-            paymentStatus:        req.query.paymentStatus        ?? null,
-            deliveryPriority:     req.query.deliveryPriority     ?? null,
-            deliveryType:         req.query.deliveryType         ?? null,
-            isFragile:            req.query.isFragile            ?? null,
-            isOverdue:            req.query.isOverdue            ?? null,
-            isReturn:             req.query.isReturn             ?? null,
-            hasIssues:            req.query.hasIssues            ?? null,
-            minWeight:            req.query.minWeight            ?? null,
-            maxWeight:            req.query.maxWeight            ?? null,
-            minVolume:            req.query.minVolume            ?? null,
-            maxVolume:            req.query.maxVolume            ?? null,
-            minLength:            req.query.minLength            ?? null,
-            maxLength:            req.query.maxLength            ?? null,
-            minWidth:             req.query.minWidth             ?? null,
-            maxWidth:             req.query.maxWidth             ?? null,
-            minHeight:            req.query.minHeight            ?? null,
-            maxHeight:            req.query.maxHeight            ?? null,
-            city:                 req.query.city                 ?? null,
-            state:                req.query.state                ?? null,
-            clientId:             req.query.clientId             ?? null,
-            companyId:            req.query.companyId            ?? null,
-            originBranchId:       req.query.originBranchId       ?? null,
-            currentBranchId:      req.query.currentBranchId      ?? null,
-            assignedDelivererId:  req.query.assignedDelivererId  ?? null,
-            sortBy:               sortBy,
-            order:                req.query.order                ?? "asc",
-          },
-        },
+        data: responseData,
       });
     } catch (error: any) {
       if (error.name === "ValidationError") {
@@ -11135,10 +11319,14 @@ export const getManifestsPaginated = catchAsyncError(
         filter.createdBy = toObjectId(req.query.createdBy as string);
       }
 
+      // ── Track if we're filtering by transporter ────────────────────────────
+      let transporterId: mongoose.Types.ObjectId | null = null;
+
       if (req.query.transporterId) {
         if (!isValidId(req.query.transporterId as string))
           return next(new ErrorHandler("Invalid transporterId.", 400));
-        filter["transportLeg.transporterId"] = toObjectId(req.query.transporterId as string);
+        transporterId = toObjectId(req.query.transporterId as string);
+        filter["transportLeg.transporterId"] = transporterId;
       }
 
       if (req.query.vehicleId) {
@@ -11272,6 +11460,168 @@ export const getManifestsPaginated = catchAsyncError(
         };
       }
 
+      // ── Fetch transporter stats if filtering by transporter ────────────────
+      let transporterStats: any = null;
+      if (transporterId) {
+        const transporter = await TransporterModel.findById(transporterId)
+          .lean({ virtuals: true });
+
+        if (transporter) {
+          // Aggregate manifest stats for this transporter
+          const manifestStats = await ManifestModel.aggregate([
+            {
+              $match: {
+                "transportLeg.transporterId": transporterId,
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalManifests: { $sum: 1 },
+                inTransitManifests: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "in_transit"] }, 1, 0],
+                  },
+                },
+                arrivedManifests: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "arrived"] }, 1, 0],
+                  },
+                },
+                closedManifests: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "closed"] }, 1, 0],
+                  },
+                },
+                discrepancyManifests: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "discrepancy"] }, 1, 0],
+                  },
+                },
+                loadedManifests: {
+                  $sum: {
+                    $cond: [{ $in: ["$status", ["sealed", "loaded"]] }, 1, 0],
+                  },
+                },
+                totalPackagesTransported: {
+                  $sum: "$packageCount",
+                },
+                totalWeightTransported: {
+                  $sum: "$totalDeclaredWeight",
+                },
+                // Today's manifests (departed today)
+                todayManifests: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gte: ["$departedAt", new Date(new Date().setHours(0, 0, 0, 0))] },
+                          { $lt: ["$departedAt", new Date(new Date().setHours(23, 59, 59, 999))] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+              },
+            },
+          ]);
+
+          const stats = manifestStats[0] || {
+            totalManifests: 0,
+            inTransitManifests: 0,
+            arrivedManifests: 0,
+            closedManifests: 0,
+            discrepancyManifests: 0,
+            loadedManifests: 0,
+            totalPackagesTransported: 0,
+            totalWeightTransported: 0,
+            todayManifests: 0,
+          };
+
+          transporterStats = {
+            // ── Transporter profile ──────────────────────────────────────────
+            id: transporter._id,
+            userId: transporter.userId,
+            companyId: transporter.companyId,
+
+            // ── Transporter type & configuration ────────────────────────────
+            transporterType: transporter.transporterType ?? null,
+            isHubTransporter: transporter.isHubTransporter,
+            isHubToHub: transporter.isHubToHub,
+            isHubToBranch: transporter.isHubToBranch,
+            assignedLine: transporter.assignedLine ?? null,
+            assignedBranches: transporter.assignedBranches ?? null,
+
+            // ── Status & verification ───────────────────────────────────────
+            availabilityStatus: transporter.availabilityStatus,
+            verificationStatus: transporter.verificationStatus,
+            isActive: transporter.isActive,
+            isOnline: transporter.isOnline,
+            isSuspended: transporter.isSuspended,
+            isVerified: transporter.isVerified,
+            isAvailable: transporter.isAvailable,
+            isOnDuty: transporter.isOnDuty,
+
+            // ── Performance metrics ─────────────────────────────────────────
+            rating: transporter.rating,
+            completionRate: transporter.completionRate, // virtual: (completedTrips / totalTrips) * 100
+            todayCompletionRate: transporter.todayCompletionRate,
+            efficiencyScore: transporter.efficiencyScore,
+
+            // ── Lifetime trip stats ─────────────────────────────────────────
+            totalTrips: transporter.totalTrips,
+            completedTrips: transporter.completedTrips,
+            cancelledTrips: transporter.cancelledTrips,
+
+            // ── Manifest stats (from transporter model) ─────────────────────
+            totalManifestsTransported: transporter.totalManifestsTransported,
+            currentActiveManifests: transporter.currentActiveManifests,
+
+            // ── Today's stats ───────────────────────────────────────────────
+            todayTransportedCount: transporter.todayTransportedCount,
+            todayAssignedManifests: transporter.todayAssignedManifests,
+            todayCompletedTrips: transporter.todayCompletedTrips,
+            todayTotalWeight: transporter.todayTotalWeight,
+
+            // ── Distance & time ─────────────────────────────────────────────
+            totalDistance: transporter.totalDistance,
+            totalDeliveryTime: transporter.totalDeliveryTime,
+            averageDeliveryTime: transporter.averageDeliveryTime,
+
+            // ── Manifest stats (from aggregation) ───────────────────────────
+            manifestStats: {
+              totalAssigned: stats.totalManifests,
+              loaded: stats.loadedManifests,
+              inTransit: stats.inTransitManifests,
+              arrived: stats.arrivedManifests,
+              closed: stats.closedManifests,
+              discrepancy: stats.discrepancyManifests,
+              totalPackagesTransported: stats.totalPackagesTransported,
+              totalWeightTransported: stats.totalWeightTransported,
+              todayManifests: stats.todayManifests,
+            },
+
+            // ── Document status ─────────────────────────────────────────────
+            documentStatus: transporter.documentStatus,
+            hasValidLicense: transporter.hasValidLicense,
+            canAcceptJobs: transporter.canAcceptJobs,
+
+            // ── Current assignment ──────────────────────────────────────────
+            currentBranchId: transporter.currentBranchId ?? null,
+            currentVehicleId: transporter.currentVehicleId ?? null,
+            currentRouteId: transporter.currentRouteId ?? null,
+
+            // ── Suspension info ─────────────────────────────────────────────
+            suspensionReason: transporter.suspensionReason ?? null,
+            suspensionEndDate: transporter.suspensionEndDate ?? null,
+            lastActiveAt: transporter.lastActiveAt,
+            createdAt: transporter.createdAt,
+            updatedAt: transporter.updatedAt,
+          };
+        }
+      }
 
       const sortBy = (req.query.sortBy as string) || "createdAt";
       const order  = req.query.order === "asc" ? 1 : -1;
@@ -11410,48 +11760,56 @@ export const getManifestsPaginated = catchAsyncError(
         estimatedArrival: m.estimatedArrival ?? null,
       }));
 
+      // ── Build response ──────────────────────────────────────────────────────
+      const responseData: any = {
+        manifests: formattedManifests,
+        pagination: {
+          total,
+          page,
+          limit,
+          pages: Math.ceil(total / limit),
+          hasMore: page * limit < total,
+        },
+        filters: {
+          status:             req.query.status             ?? null,
+          statuses:           req.query.statuses           ?? null,
+          priority:           req.query.priority           ?? null,
+          isSealed:           req.query.isSealed           ?? null,
+          isInTransit:        req.query.isInTransit        ?? null,
+          hasDiscrepancy:     req.query.hasDiscrepancy     ?? null,
+          minWeight:          req.query.minWeight          ?? null,
+          maxWeight:          req.query.maxWeight          ?? null,
+          minPackageCount:    req.query.minPackageCount    ?? null,
+          maxPackageCount:    req.query.maxPackageCount    ?? null,
+          manifestCode:       req.query.manifestCode       ?? null,
+          search:             req.query.search             ?? null,
+          containsPackageId:  req.query.containsPackageId  ?? null,
+          companyId:          req.query.companyId          ?? null,
+          originBranchId:     req.query.originBranchId     ?? null,
+          destinationBranchId: req.query.destinationBranchId ?? null,
+          branchId:           req.query.branchId           ?? null,
+          createdBy:          req.query.createdBy          ?? null,
+          transporterId:      req.query.transporterId      ?? null,
+          vehicleId:          req.query.vehicleId          ?? null,
+          createdFrom:        req.query.createdFrom        ?? null,
+          createdTo:          req.query.createdTo          ?? null,
+          departedFrom:       req.query.departedFrom       ?? null,
+          departedTo:         req.query.departedTo         ?? null,
+          arrivedFrom:        req.query.arrivedFrom        ?? null,
+          arrivedTo:          req.query.arrivedTo          ?? null,
+          sortBy,
+          order:              req.query.order              ?? "desc",
+        },
+      };
+
+      // ── Attach transporter stats if available ────────────────────────────────
+      if (transporterStats) {
+        responseData.transporterStats = transporterStats;
+      }
+
       res.status(200).json({
         success: true,
-        data: {
-          manifests: formattedManifests,
-          pagination: {
-            total,
-            page,
-            limit,
-            pages: Math.ceil(total / limit),
-            hasMore: page * limit < total,
-          },
-          filters: {
-            status:             req.query.status             ?? null,
-            statuses:           req.query.statuses           ?? null,
-            priority:           req.query.priority           ?? null,
-            isSealed:           req.query.isSealed           ?? null,
-            isInTransit:        req.query.isInTransit        ?? null,
-            hasDiscrepancy:     req.query.hasDiscrepancy     ?? null,
-            minWeight:          req.query.minWeight          ?? null,
-            maxWeight:          req.query.maxWeight          ?? null,
-            minPackageCount:    req.query.minPackageCount    ?? null,
-            maxPackageCount:    req.query.maxPackageCount    ?? null,
-            manifestCode:       req.query.manifestCode       ?? null,
-            search:             req.query.search             ?? null,
-            containsPackageId:  req.query.containsPackageId  ?? null,
-            companyId:          req.query.companyId          ?? null,
-            originBranchId:     req.query.originBranchId     ?? null,
-            destinationBranchId: req.query.destinationBranchId ?? null,
-            branchId:           req.query.branchId           ?? null,
-            createdBy:          req.query.createdBy          ?? null,
-            transporterId:      req.query.transporterId      ?? null,
-            vehicleId:          req.query.vehicleId          ?? null,
-            createdFrom:        req.query.createdFrom        ?? null,
-            createdTo:          req.query.createdTo          ?? null,
-            departedFrom:       req.query.departedFrom       ?? null,
-            departedTo:         req.query.departedTo         ?? null,
-            arrivedFrom:        req.query.arrivedFrom        ?? null,
-            arrivedTo:          req.query.arrivedTo          ?? null,
-            sortBy,
-            order:              req.query.order              ?? "desc",
-          },
-        },
+        data: responseData,
       });
     } catch (error: any) {
       if (error.name === "ValidationError") {
