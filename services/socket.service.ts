@@ -2636,6 +2636,354 @@ export class SocketService {
           },
         );
 
+
+        // ── cancel_package ───────────────────────────────────────────────────────
+        //
+        // Permanently cancels a package delivery at a specific stop.
+        // Unlike fail_delivery_attempt, this does NOT re-queue the package.
+        // It records the cancellation reason, route ID, stop index, and marks
+        // the package as cancelled, then advances to the next stop.
+
+        socket.on(
+          "cancel_package",
+          async (data: {
+            routeId: string;
+            stopIndex: number;
+            coordinates: [number, number];
+            reason: string;
+            notes?: string;
+          }) => {
+            try {
+              // ── Validate required fields ──────────────────────────────────────────
+              if (!data?.routeId || !data?.reason) {
+                socket.emit("route_error", {
+                  code: "MISSING_DATA",
+                  message: "routeId and reason are required.",
+                });
+                return;
+              }
+              if (
+                !data?.routeId ||
+                !mongoose.Types.ObjectId.isValid(data.routeId)
+              ) {
+                socket.emit("route_error", {
+                  code: "INVALID_ROUTE_ID",
+                  message: "Invalid routeId.",
+                });
+                return;
+              }
+              if (data.stopIndex === undefined || data.stopIndex < 0) {
+                socket.emit("route_error", {
+                  code: "INVALID_STOP",
+                  message: "Invalid stopIndex.",
+                });
+                return;
+              }
+              if (!data?.coordinates || data.coordinates.length !== 2) {
+                socket.emit("route_error", {
+                  code: "NO_COORDINATES",
+                  message: "Coordinates are required.",
+                });
+                return;
+              }
+
+              // ── Fetch deliverer ──────────────────────────────────────────────────
+              const deliverer = await DelivererModel.findOne({ userId }).lean();
+              if (!deliverer) {
+                socket.emit("route_error", {
+                  code: "NOT_FOUND",
+                  message: "Deliverer not found.",
+                });
+                return;
+              }
+
+              // ── Fetch active route ───────────────────────────────────────────────
+              const route = await RouteModel.findOne({
+                _id: data.routeId,
+                assignedDelivererId: deliverer._id,
+                status: "active",
+              });
+              if (!route) {
+                socket.emit("route_error", {
+                  code: "ROUTE_NOT_FOUND",
+                  message: "Active route not found.",
+                });
+                return;
+              }
+
+              // ── Validate stop index ──────────────────────────────────────────────
+              if (data.stopIndex !== route.currentStopIndex) {
+                socket.emit("route_error", {
+                  code: "WRONG_STOP",
+                  message: `Expected stop ${route.currentStopIndex}, got ${data.stopIndex}.`,
+                  expectedStopIndex: route.currentStopIndex,
+                });
+                return;
+              }
+
+              const stop = route.stops[data.stopIndex];
+              if (!stop || !stop.packageIds[0]) {
+                socket.emit("route_error", {
+                  code: "STOP_NOT_FOUND",
+                  message: "Stop or package not found.",
+                });
+                return;
+              }
+
+              // ── Proximity check (50m) ────────────────────────────────────────────
+              const distanceMeters =
+                this.calculateDistance(
+                  data.coordinates,
+                  stop.location.coordinates,
+                ) * 1000;
+              if (distanceMeters > 50) {
+                socket.emit("route_error", {
+                  code: "TOO_FAR",
+                  message: `Must be within 50m to cancel. Current: ${Math.round(distanceMeters)}m.`,
+                  distanceMeters: Math.round(distanceMeters),
+                  requiredMeters: 50,
+                  stopLocation: stop.location.coordinates,
+                });
+                return;
+              }
+
+              const packageId = stop.packageIds[0].toString();
+
+              // ── Fetch package ────────────────────────────────────────────────────
+              const pkg = await PackageModel.findById(packageId);
+              if (!pkg) {
+                socket.emit("route_error", {
+                  code: "PACKAGE_NOT_FOUND",
+                  message: "Package not found.",
+                });
+                return;
+              }
+
+              // ── Build detailed cancellation notes with route/stop context ────────
+              const cancellationDetails = {
+                cancelledBy: deliverer.userId,
+                cancelledAt: new Date().toISOString(),
+                routeId: data.routeId,
+                routeNumber: route.routeNumber,
+                stopIndex: data.stopIndex,
+                stopId: stop._id?.toString(),
+                coordinates: data.coordinates,
+                reason: data.reason,
+                additionalNotes: data.notes || "",
+              };
+
+              const trackingNotes = JSON.stringify(cancellationDetails);
+
+              // ── Update package status to cancelled ───────────────────────────────
+              // Use the existing updateStatus method which adds to trackingHistory
+              await pkg.updateStatus(
+                "cancelled",
+                deliverer.userId,
+                pkg.currentBranchId || deliverer.branchId,
+                `Cancelled by deliverer at stop ${data.stopIndex + 1} of route ${route.routeNumber}. Details: ${trackingNotes}`,
+                stop.address
+              );
+
+              // ── Update payment status ────────────────────────────────────────────
+              await PaymentModel.findOneAndUpdate(
+                { packageId: pkg._id },
+                {
+                  $set: {
+                    status: "cancelled",
+                  },
+                },
+              );
+
+              // ── Remove OTP from memory ───────────────────────────────────────────
+              this.deliveryOTPs.delete(`delivery_otp_${packageId}`);
+
+              // ── Mark stop as failed (permanently, no requeue) ────────────────────
+              await route.failStop(data.stopIndex, data.reason, [
+                new mongoose.Types.ObjectId(packageId),
+              ]);
+
+              // ── Update deliverer stats ───────────────────────────────────────────
+              await DelivererModel.findByIdAndUpdate(deliverer._id, {
+                $inc: { totalDeliveries: 1, failedDeliveries: 1 },
+                lastActiveAt: new Date(),
+              });
+
+              const updatedPkg = await PackageModel.findById(packageId).lean();
+              const isLastStop = data.stopIndex === route.stops.length - 1;
+              const routeRoom = this.getRouteRoom(data.routeId);
+
+              // ── Notify package room ──────────────────────────────────────────────
+              this.io
+                .to(this.getPackageRoom(packageId))
+                .emit("package_cancelled", {
+                  packageId,
+                  trackingNumber: updatedPkg?.trackingNumber,
+                  cancelledBy: deliverer.userId,
+                  cancellationDetails: {
+                    routeId: data.routeId,
+                    routeNumber: route.routeNumber,
+                    stopIndex: data.stopIndex,
+                    coordinates: data.coordinates,
+                    reason: data.reason,
+                    notes: data.notes,
+                  },
+                  message: "This package has been permanently cancelled by the deliverer.",
+                  timestamp: new Date(),
+                });
+
+              // ── Also emit a general status update ────────────────────────────────
+              this.io
+                .to(this.getPackageRoom(packageId))
+                .emit("package_status_update", {
+                  packageId,
+                  status: "cancelled",
+                  trackingNumber: updatedPkg?.trackingNumber,
+                  message: "Package cancelled by deliverer",
+                  timestamp: new Date(),
+                });
+
+              // ── Notify branch ────────────────────────────────────────────────────
+              this.io
+                .to(this.getBranchRoom(deliverer.branchId.toString()))
+                .emit("deliverer_package_cancelled", {
+                  routeId: data.routeId,
+                  routeNumber: route.routeNumber,
+                  delivererId: deliverer._id,
+                  userId,
+                  stopIndex: data.stopIndex,
+                  stopId: stop._id,
+                  packageId,
+                  trackingNumber: updatedPkg?.trackingNumber,
+                  cancellationDetails: {
+                    routeId: data.routeId,
+                    stopIndex: data.stopIndex,
+                    coordinates: data.coordinates,
+                    reason: data.reason,
+                    notes: data.notes,
+                  },
+                  message: `Package ${updatedPkg?.trackingNumber} has been permanently cancelled.`,
+                  timestamp: new Date(),
+                });
+
+              // ── Handle route progression ─────────────────────────────────────────
+              if (isLastStop) {
+                // Complete the route if this was the last stop
+                await route.completeRoute(
+                  `Last stop cancelled: ${data.reason}${data.notes ? ` - ${data.notes}` : ""}`,
+                );
+                
+                await DelivererModel.findByIdAndUpdate(deliverer._id, {
+                  availabilityStatus: "available",
+                  currentRouteId: null,
+                  lastActiveAt: new Date(),
+                });
+
+                socket.emit("delivery_route_completed", {
+                  routeId: data.routeId,
+                  routeNumber: route.routeNumber,
+                  status: "completed",
+                  totalStops: route.stops.length,
+                  completedStops: route.completedStops,
+                  failedStops: route.failedStops,
+                  actualStart: route.actualStart,
+                  actualEnd: route.actualEnd,
+                  actualTime: route.actualTime,
+                  onTimePerformance: route.onTimePerformance,
+                  hasCancelledPackage: true,
+                  message: "Route completed. Package was permanently cancelled.",
+                  timestamp: new Date(),
+                });
+
+                this.io
+                  .to(this.getBranchRoom(deliverer.branchId.toString()))
+                  .emit("deliverer_route_completed", {
+                    routeId: data.routeId,
+                    routeNumber: route.routeNumber,
+                    delivererId: deliverer._id,
+                    userId,
+                    onTimePerformance: route.onTimePerformance,
+                    hasCancelledPackage: true,
+                    timestamp: new Date(),
+                  });
+
+                this.io.to(routeRoom).emit("delivery_route_completed", {
+                  routeId: data.routeId,
+                  routeNumber: route.routeNumber,
+                  timestamp: new Date(),
+                });
+
+                console.log(
+                  `[Socket] Deliverer ${userId} cancelled package ${packageId} ` +
+                  `and COMPLETED route ${data.routeId}`,
+                );
+              } else {
+                // Advance to next stop
+                const nextStop = route.stops[data.stopIndex + 1];
+                
+                if (nextStop) {
+                  await this.generateAndSendDeliveryOTP(
+                    route,
+                    data.stopIndex + 1,
+                    data.routeId,
+                  );
+                }
+
+                socket.emit("package_cancelled", {
+                  routeId: data.routeId,
+                  routeNumber: route.routeNumber,
+                  cancelledStopIndex: data.stopIndex,
+                  cancelledStopId: stop._id,
+                  packageId,
+                  trackingNumber: updatedPkg?.trackingNumber,
+                  cancellationDetails: {
+                    routeId: data.routeId,
+                    stopIndex: data.stopIndex,
+                    coordinates: data.coordinates,
+                    reason: data.reason,
+                    notes: data.notes,
+                  },
+                  distanceMeters: Math.round(distanceMeters),
+                  nextStop: nextStop
+                    ? {
+                        stopIndex: data.stopIndex + 1,
+                        stopId: nextStop._id,
+                        clientId: nextStop.clientId,
+                        packageId: nextStop.packageIds[0],
+                        address: nextStop.address,
+                        location: nextStop.location.coordinates,
+                        otpSent: true,
+                      }
+                    : null,
+                  remainingStops: route.stops.length - (data.stopIndex + 1),
+                  message: `Package permanently cancelled. ${route.stops.length - (data.stopIndex + 1)} stops remaining.`,
+                  timestamp: new Date(),
+                });
+
+                this.io.to(routeRoom).emit("delivery_stop_cancelled", {
+                  routeId: data.routeId,
+                  stopIndex: data.stopIndex,
+                  stopId: stop._id,
+                  packageId,
+                  reason: data.reason,
+                  timestamp: new Date(),
+                });
+
+                console.log(
+                  `[Socket] Deliverer ${userId} cancelled package ${packageId} ` +
+                  `at stop ${data.stopIndex}/${route.stops.length - 1}`,
+                );
+              }
+            } catch (err: any) {
+              console.error("[Socket] cancel_package failed:", err);
+              socket.emit("route_error", {
+                code: "CANCEL_PACKAGE_FAILED",
+                message: err.message || "Failed to cancel package.",
+              });
+            }
+          },
+        );
+
+        
         socket.on(
           "resend_delivery_otp",
           async (data: { routeId: string; stopIndex: number }) => {
