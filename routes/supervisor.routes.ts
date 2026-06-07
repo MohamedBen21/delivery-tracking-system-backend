@@ -54,6 +54,11 @@ const supervisorRouter = Router();
 
 const supOrAdmin = [isAuthenticated, authorizeRoles("supervisor", "admin")] as const;
 
+const supAdminDelTrans = [
+  isAuthenticated, 
+  authorizeRoles("supervisor", "admin", "deliverer", "transporter")
+] as const;
+
 supervisorRouter.get("/me", ...supOrAdmin, getMeSupervisor);
 supervisorRouter.patch("/me", ...supOrAdmin, updateMeSupervisor);
 
@@ -114,7 +119,8 @@ supervisorRouter.get(
 );
 
 supervisorRouter.get("/branches/:branchId/routes/active", ...supOrAdmin, getActiveRoutes);
-supervisorRouter.get("/branches/:branchId/routes", ...supOrAdmin, getRoutes);
+// supervisorRouter.get("/branches/:branchId/routes", ...supOrAdmin, getRoutes);
+supervisorRouter.get("/branches/:branchId/routes", ...supAdminDelTrans, getRoutes);
 supervisorRouter.get("/branches/:branchId/routes/:routeId", ...supOrAdmin, getRoute);
 supervisorRouter.patch("/branches/:branchId/routes/:routeId", ...supOrAdmin, updateRoute);
 supervisorRouter.patch(
