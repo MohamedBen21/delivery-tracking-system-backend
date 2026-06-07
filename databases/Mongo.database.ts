@@ -5,6 +5,17 @@ import { Logger } from "../utils/Logger.util";
 
 let mongoConnection: typeof mongoose | null = null;
 
+const originalStartSession = mongoose.startSession.bind(mongoose);
+mongoose.startSession = async function (options?: mongoose.ClientSessionOptions) {
+  const session = await originalStartSession(options);
+  if (process.env.NODE_ENV === "developement" || process.env.NODE_ENV === "development") {
+    // Override transaction methods to prevent "Transaction numbers are only allowed on a replica set member or mongos"
+    session.startTransaction = () => {};
+    session.commitTransaction = async () => {};
+    session.abortTransaction = async () => {};
+  }
+  return session;
+};
 export async function connectMongo(): Promise<typeof mongoose> {
   if (mongoConnection) return mongoConnection;
   
