@@ -15,6 +15,7 @@ import TariffModel, { ITariff, ITariffEntry } from "../models/tariff.model";
 import { WILAYAS, isValidWilayaCode, wilayaName } from "../models/wilayas.constant";
 import TransporterModel from "../models/transporter.model";
 import { sendToken } from "../utils/Token.util";
+import RouteModel from "../models/route.model";
 
 
 type CompanyBusinessType = "solo" | "company";
@@ -666,6 +667,86 @@ export const getMyCompany = catchAsyncError(
       },
     });
   },
+);
+
+export const getAllCompanies = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const companies = await CompanyModel.find()
+        .populate("userId", "firstName lastName email phone username")
+        .sort({ createdAt: -1 })
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        data: companies,
+      });
+    } catch (error: any) {
+      return next(
+        new ErrorHandler(error.message || "Error getting companies.", 500),
+      );
+    }
+  },
+);
+
+export const getAllRoutes = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user?._id;
+      const userRole = req.user?.role as string;
+
+      if (!userId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      let matchStage: any = {};
+
+      if (userRole === "manager") {
+        const manager = await ManagerModel.findOne({ userId }).lean();
+        if (!manager) {
+          return next(new ErrorHandler("Manager profile not found", 404));
+        }
+        matchStage.companyId = manager.companyId;
+      } else if (userRole !== "admin") {
+         return next(new ErrorHandler("Not authorized to view all routes", 403));
+      }
+
+      const routes = await RouteModel.find(matchStage)
+        .populate("originBranchId", "name code wilaya")
+        .populate("destinationBranchId", "name code wilaya")
+        .populate({
+          path: "assignedTransporterId",
+          select: "userId rating availabilityStatus transporterType",
+          populate: { path: "userId", select: "firstName lastName phone avatar" }
+        })
+        .populate({
+          path: "assignedDelivererId",
+          select: "userId rating availabilityStatus",
+          populate: { path: "userId", select: "firstName lastName phone avatar" }
+        })
+        .populate("stops.branchId", "name")
+        .sort({ createdAt: -1 })
+        .lean();
+
+      const formattedData = routes.map((r: any) => ({
+        ...r,
+        originBranch: r.originBranchId,
+        destinationBranch: r.destinationBranchId,
+        transporterName: r.assignedTransporterId?.userId 
+          ? `${r.assignedTransporterId.userId.firstName} ${r.assignedTransporterId.userId.lastName}` 
+          : undefined,
+        transporterId: r.assignedTransporterId?._id,
+        packageCount: r.stops?.reduce((acc: number, stop: any) => acc + (stop.packageIds?.length || 0), 0) || 0
+      }));
+
+      return res.status(200).json({
+        success: true,
+        data: formattedData,
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message || "Error getting routes.", 500));
+    }
+  }
 );
 
 // ─────────────────────────────────────────────
