@@ -3243,3 +3243,312 @@ export const assignTransporterBranches = catchAsyncError(
 //in the supervisor controller i made the verification status and the status active for the create transproter and deliverer and freelancer
 //we can add later a function to activate them / desactivate    
 //missing stats update (in the supervisor and the other controllers) when creating deliverer / transporter / accepting a package by cashier , creating cashier or a loader ..etc
+
+
+
+
+
+// interface ICreateBranch {
+//   name: string;
+//   code: string;
+//   address: IBranchAddressBody;
+//   location: IBranchLocation;
+//   phone: string;
+//   email: string;
+//   operatingHours?: Record<string, IOperatingHoursBody>;
+//   capacityLimit?: number;
+//   branchType?: 'local_branch' | 'regional_main_hub';
+//   parentHubId?: string;
+//   servesBranches?: string[];
+//   /**
+//    * Optional list of commune IDs (from communes.json) this branch handles
+//    * for branch_pickup deliveries.
+//    * Omitting it is perfectly valid — the branch simply won't be matched by
+//    * the commune auto-resolve logic in createPackage.
+//    * Example: ["42", "43", "44"]
+//    */
+//   servesCommunes?: string[];
+// }
+
+// type BranchStatus = "active" | "inactive" | "maintenance" | "pending";
+
+// export const createBranch = catchAsyncError(
+//   async (req: Request, res: Response, next: NextFunction) => {
+//     const session = await mongoose.startSession();
+//     session.startTransaction();
+
+//     let transactionCommitted = false;
+
+//     try {
+//       const userId = req.user?._id;
+//       const { companyId } = req.params;
+
+//       if (!userId) {
+
+//         return next(
+//           new ErrorHandler("Unauthorized, you are not authenticated.", 401),
+//         );
+//       }
+
+//       if (
+//         !companyId ||
+//         !mongoose.Types.ObjectId.isValid(companyId.toString())
+//       ) {
+
+//         return next(new ErrorHandler("Invalid company ID", 400));
+//       }
+
+//       const {
+//         name,
+//         code,
+//         address,
+//         location,
+//         phone,
+//         email,
+//         operatingHours,
+//         capacityLimit,
+//         branchType,
+//         parentHubId,
+//         servesBranches,
+//         servesCommunes,           // ← new optional field
+//       } = req.body as ICreateBranch;
+
+//       if (!name || !code || !address || !location || !phone || !email) {
+
+//         return next(
+//           new ErrorHandler(
+//             "name, code, address, location, phone and email are required",
+//             400,
+//           ),
+//         );
+//       }
+
+//       if (typeof name !== "string" || typeof code !== "string") {
+
+//         return next(new ErrorHandler("name and code must be strings", 400));
+//       }
+
+//       if (
+//         !address.street ||
+//         typeof address.street !== "string" ||
+//         !address.city ||
+//         typeof address.city !== "string" ||
+//         !address.state ||
+//         typeof address.state !== "string"
+//       ) {
+
+//         return next(
+//           new ErrorHandler("address must include street, city and state", 400),
+//         );
+//       }
+
+//       if (
+//         !location ||
+//         location.type !== "Point" ||
+//         !Array.isArray(location.coordinates) ||
+//         location.coordinates.length !== 2 ||
+//         typeof location.coordinates[0] !== "number" ||
+//         typeof location.coordinates[1] !== "number"
+//       ) {
+
+//         return next(
+//           new ErrorHandler(
+//             "Invalid location format. Expected GeoJSON Point with [lng, lat]",
+//             400,
+//           ),
+//         );
+//       }
+
+//       if (
+//         capacityLimit !== undefined &&
+//         (typeof capacityLimit !== "number" || capacityLimit < 1)
+//       ) {
+
+//         return next(
+//           new ErrorHandler("capacityLimit must be a positive number", 400),
+//         );
+//       }
+
+//       if (branchType && !['local_branch', 'regional_main_hub'].includes(branchType)) {
+
+//         return next(
+//           new ErrorHandler("branchType must be 'local_branch' or 'regional_main_hub'", 400),
+//         );
+//       }
+
+//       if (branchType === 'local_branch' && !parentHubId) {
+
+//         return next(
+//           new ErrorHandler("parentHubId is required for local branches", 400),
+//         );
+//       }
+
+//       if (parentHubId && !mongoose.Types.ObjectId.isValid(parentHubId)) {
+
+//         return next(new ErrorHandler("Invalid parentHubId", 400));
+//       }
+
+//       // ── Validate servesCommunes entries ─────────────────────────────────────
+//       // Each entry must be a non-empty string (commune id from communes.json).
+//       // We do not cross-validate against communes.json here to keep the
+//       // controller fast and avoid an FS read on every branch creation.
+//       // The lookup utility handles mismatches gracefully at package creation time.
+//       if (servesCommunes !== undefined) {
+//         if (!Array.isArray(servesCommunes)) {
+//           return next(
+//             new ErrorHandler("servesCommunes must be an array of commune IDs.", 400),
+//           );
+//         }
+//         for (const cid of servesCommunes) {
+//           if (typeof cid !== "string" || cid.trim() === "") {
+//             return next(
+//               new ErrorHandler(
+//                 "Each entry in servesCommunes must be a non-empty string commune ID.",
+//                 400,
+//               ),
+//             );
+//           }
+//         }
+//       }
+
+//       if (parentHubId) {
+
+//         const parentHub = await BranchModel.findOne({
+//           _id: parentHubId,
+//           companyId,
+//           branchType: 'regional_main_hub',
+//         }).session(session);
+
+//         if (!parentHub) {
+
+//           throw new ErrorHandler("Parent hub not found or is not a regional main hub", 404)
+//         }
+//       }
+
+//       if (servesBranches && branchType !== 'regional_main_hub') {
+
+//         throw new ErrorHandler("Only regional_main_hub can serve other branches", 400)
+//       }
+
+//       if (servesBranches) {
+//         for (const servedBranchId of servesBranches) {
+
+//           if (!mongoose.Types.ObjectId.isValid(servedBranchId)) {
+
+//             throw new ErrorHandler(`Invalid branch ID in servesBranches: ${servedBranchId}`, 400);
+//           }
+//         }
+//       }
+
+//       const [company, manager] = await Promise.all([
+//         CompanyModel.findById(companyId).session(session),
+//         ManagerModel.findOne({ userId, companyId }).session(session),
+//       ]);
+
+//       if (!company) {
+
+//         throw new ErrorHandler("Company not found", 404);
+//       }
+
+//       if (!manager || !manager.isActive) {
+
+//         throw new ErrorHandler(
+//           "You are not an active manager of this company",
+//           403,
+//         )
+//       }
+
+//       if (!manager.hasPermission("can_manage_branches")) {
+
+//         throw new ErrorHandler("You don't have permission to manage branches", 403);
+//       }
+
+//       if (company.status !== "active") {
+
+//         throw new ErrorHandler(
+//           "Cannot create branch for an inactive or suspended company",
+//           400,
+//         );
+//       }
+
+//       const existingBranch = await BranchModel.findOne({
+//         code: code.toUpperCase(),
+//       }).session(session);
+
+//       if (existingBranch) {
+
+//         throw new ErrorHandler("A branch with this code already exists", 400);
+//       }
+
+//       const branch = await BranchModel.create(
+//         [
+//           {
+//             companyId,
+//             name,
+//             code,
+//             address,
+//             location,
+//             phone,
+//             email,
+//             ...(operatingHours    && { operatingHours }),
+//             ...(capacityLimit !== undefined && { capacityLimit }),
+//             status: "active",
+//             ...(branchType        && { branchType }),
+//             ...(parentHubId       && { parentHubId }),
+//             ...(servesBranches    && { servesBranches }),
+//             // Persist servesCommunes only when the caller supplied it.
+//             // Existing branches already in the DB are untouched.
+//             ...(servesCommunes    && { servesCommunes: servesCommunes.map(c => c.trim()) }),
+//           },
+//         ],
+//         { session },
+//       );
+
+//       if (branchType === "local_branch" && parentHubId) {
+
+//         await BranchModel.findByIdAndUpdate(
+//           parentHubId,
+//           { $addToSet: { servesBranches: branch[0]._id } },
+//           { session },
+//         );
+//       }
+
+//       if (servesBranches && servesBranches.length > 0) {
+
+//         await BranchModel.updateMany(
+//           { _id: { $in: servesBranches }, companyId },
+//           { parentHubId: branch[0]._id },
+//           { session },
+//         );
+//       }
+
+//       await session.commitTransaction();
+//       transactionCommitted = true;
+
+//       const populatedBranch = await BranchModel.findById(branch[0]._id)
+//         .populate("companyId", "name businessType status")
+//         .lean();
+
+//       return res.status(201).json({
+//         success: true,
+//         message: "Branch created successfully",
+//         data: populatedBranch,
+//       });
+
+//     } catch (error: any) {
+//       if (error.name === "ValidationError") {
+//         return next(new ErrorHandler(
+//           Object.values(error.errors).map((e: any) => e.message).join(", "), 400
+//         ));
+//       }
+//       return next(error);
+
+//     } finally {
+
+//       if (!transactionCommitted) {
+//         await session.abortTransaction().catch(() => { });
+//       }
+//       await session.endSession();
+//     }
+//   },
+// );

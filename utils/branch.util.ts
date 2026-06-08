@@ -119,3 +119,146 @@ function haversineKm(a: [number, number], b: [number, number]): number {
 function toRad(deg: number): number {
   return (deg * Math.PI) / 180;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Commune-based branch lookup
+//  ────────────────────────────
+//  Used by createPackage (branch_pickup flow) to automatically resolve the
+//  destinationBranchId from the commune name the freelancer typed, instead
+//  of requiring them to know and supply the branch ObjectId.
+//
+//  Flow:
+//    1. Match the input string → commune record from communes.json
+//       (case-insensitive, strips diacritics, falls back to post_code match).
+//    2. Query BranchModel for an active branch whose servesCommunes array
+//       contains that commune id, scoped to the company.
+//    3. Return { branchId, communeCoordinates } so the caller can set both
+//       finalDestinationBranchId AND the package's delivery GPS coordinates
+//       in one shot.
+//
+//  Commune data is loaded once per process (module-level cache) from
+//  data/communes.json relative to the project root.  The path can be
+//  overridden via the COMMUNES_JSON_PATH env variable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import path from "path";
+import fs   from "fs";
+
+export interface ICommune {
+  id:        string;
+  post_code: string;
+  name:      string;
+  wilaya_id: string;
+  ar_name:   string;
+  longitude: string;  // string in the JSON — parse before use
+  latitude:  string;
+}
+
+/** Module-level cache so the JSON is only read once per process. */
+let _communesCache: ICommune[] | null = null;
+
+export function loadCommunes(): ICommune[] {
+  if (_communesCache) return _communesCache;
+  const jsonPath =
+    process.env.COMMUNES_JSON_PATH ??
+    path.resolve(process.cwd(), "data", "communes.json");
+  const raw = fs.readFileSync(jsonPath, "utf-8");
+  _communesCache = JSON.parse(raw) as ICommune[];
+  return _communesCache;
+}
+
+/**
+ * Strips common French/Arabic diacritics and lowercases a string so that
+ * "Béjaïa", "bejaia", and "BEJAIA" all normalise to the same key.
+ */
+function normaliseCommune(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // strip combining diacritics
+    .trim();
+}
+
+/**
+ * Finds a commune record that matches the given string.
+ * Matching order (first hit wins):
+ *   1. Exact normalised name match
+ *   2. Post-code exact match (useful for numeric input)
+ *   3. Partial normalised name match (commune name starts with input)
+ *
+ * Returns null if nothing matches.
+ */
+export function lookupCommune(input: string): ICommune | null {
+  const communes  = loadCommunes();
+  const normInput = normaliseCommune(input);
+
+  // 1 — exact name
+  let found = communes.find(c => normaliseCommune(c.name) === normInput);
+  if (found) return found;
+
+  // 2 — post code
+  found = communes.find(c => c.post_code === input.trim());
+  if (found) return found;
+
+  // 3 — starts-with (for partial typing like "Beja" → "Béjaïa")
+  found = communes.find(c => normaliseCommune(c.name).startsWith(normInput));
+  if (found) return found;
+
+  return null;
+}
+
+export interface ICommuneBranchResult {
+  branchId:    mongoose.Types.ObjectId;
+  branchDoc:   any;                        // lean branch document for response building
+  communeId:   string;
+  communeName: string;
+  coordinates: [number, number] | null;    // [lon, lat] from communes.json, null if missing
+}
+
+/**
+ * Given a commune name (as typed by the freelancer) and a companyId, finds
+ * the active branch that has declared it handles that commune.
+ *
+ * Returns null when:
+ *   - The commune name doesn't match any record in communes.json, OR
+ *   - No active branch for this company lists that commune id in servesCommunes.
+ *
+ * The caller decides what to do on null (surface a clear error or fall back
+ * to requiring a manual destinationBranchId).
+ */
+export async function findBranchByCommune(
+  communeInput: string,
+  companyId:    mongoose.Types.ObjectId,
+  session?:     mongoose.ClientSession,
+): Promise<ICommuneBranchResult | null> {
+
+  // Step 1: resolve commune record
+  const commune = lookupCommune(communeInput);
+  if (!commune) return null;
+
+  // Step 2: find branch that serves this commune
+  const branch = await BranchModel.findOne({
+    companyId,
+    status:         "active",
+    servesCommunes: commune.id,
+  })
+    .session(session ?? null)
+    .lean();
+
+  if (!branch) return null;
+
+  // Parse coordinates — longitude/latitude are strings in the JSON
+  const lon = parseFloat(commune.longitude);
+  const lat = parseFloat(commune.latitude);
+  const coordinates: [number, number] | null =
+    !isNaN(lon) && !isNaN(lat) ? [lon, lat] : null;
+
+  return {
+    branchId:    branch._id as mongoose.Types.ObjectId,
+    branchDoc:   branch,
+    communeId:   commune.id,
+    communeName: commune.name,
+    coordinates,
+  };
+}
+

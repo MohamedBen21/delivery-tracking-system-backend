@@ -2,11 +2,13 @@ import { Router } from "express";
 import { isAuthenticated, authorizeRoles } from "../middleware/auth";
 import {
   cancelPackage,
+  // checkCommuneServed,
   createPackage,
   getMeFreelancer,
   getMyActivePackages,
   getMyDeliveredPackages,
   getMyPackages,
+  // searchServedCommunes,
   trackPackage,
   updateMeFreelancer,
 } from "../controllers/freelancer.controller";
@@ -24,6 +26,23 @@ freelancerRouter.get("/packages/delivered", getMyDeliveredPackages);
 freelancerRouter.get("/packages/:packageId/track", trackPackage);
 freelancerRouter.patch("/packages/:packageId/cancel", cancelPackage);
 
-freelancerRouter.post("/packages" , createPackage);
+freelancerRouter.post("/packages" ,isAuthenticated,authorizeRoles("freelancer"), createPackage);
+
+
+// // For autocomplete as they type
+// freelancerRouter.get(
+//   "/communes/search",
+//   isAuthenticated,
+//   authorizeRoles("freelancer"),
+//   searchServedCommunes
+// );
+
+// // For validation before submission
+// freelancerRouter.get(
+//   "/communes/check",
+//   isAuthenticated,
+//   authorizeRoles("freelancer"),
+//   checkCommuneServed
+// );
 
 export default freelancerRouter;
