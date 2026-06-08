@@ -13524,53 +13524,81 @@ export const getStopQrInfo = catchAsyncError(
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  controllers/transporter.controller.ts  (add this export)
+//  GET MY ROUTES (for authenticated user - transporter OR deliverer)
 //
-//  GET /transporter/my-routes
-//  Returns today's routes for the authenticated transporter, ordered by
-//  scheduledStart ASC.  Designed for the "Today's Routes" screen.
+//  GET /my-routes
+//  Returns today's routes for the authenticated user (transporter or deliverer),
+//  ordered by scheduledStart ASC. Designed for the "Today's Routes" screen.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const getMyRoutes = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?._id;
+    const userRole = req.user?.role;
 
-    const transporterUserId = req.user?._id;
-    if (!transporterUserId) {
+    if (!userId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
 
+    // Determine if user is transporter or deliverer
+    let isTransporter = false;
+    let isDeliverer = false;
+    let transporter = null;
+    let deliverer = null;
 
-    const transporter = await TransporterModel
-      .findOne({ userId: transporterUserId })
-      .select("_id companyId currentBranchId transporterType assignedLine assignedBranches availabilityStatus isActive isSuspended")
-      .lean();
+    if (userRole === "transporter") {
+      transporter = await TransporterModel
+        .findOne({ userId })
+        .select("_id companyId currentBranchId transporterType assignedLine assignedBranches availabilityStatus isActive isSuspended")
+        .lean();
 
-    if (!transporter) {
-      return next(new ErrorHandler("Transporter profile not found.", 404));
+      if (!transporter) {
+        return next(new ErrorHandler("Transporter profile not found.", 404));
+      }
+      if (!transporter.isActive || transporter.isSuspended) {
+        return next(new ErrorHandler("Transporter account is not active.", 403));
+      }
+      isTransporter = true;
+    } else if (userRole === "deliverer") {
+      deliverer = await DelivererModel
+        .findOne({ userId })
+        .select("_id companyId branchId availabilityStatus isActive isSuspended")
+        .lean();
+
+      if (!deliverer) {
+        return next(new ErrorHandler("Deliverer profile not found.", 404));
+      }
+      if (!deliverer.isActive || deliverer.isSuspended) {
+        return next(new ErrorHandler("Deliverer account is not active.", 403));
+      }
+      isDeliverer = true;
+    } else {
+      return next(new ErrorHandler("Only transporters and deliverers can access this endpoint.", 403));
     }
-    if (!transporter.isActive || transporter.isSuspended) {
-      return next(new ErrorHandler("Transporter account is not active.", 403));
-    }
 
-
-    const now    = new Date();
+    const now = new Date();
     const dayStart = new Date(now);
     dayStart.setUTCHours(0, 0, 0, 0);
     const dayEnd = new Date(now);
     dayEnd.setUTCHours(23, 59, 59, 999);
 
+    // Build query based on role
+    let query: any = {
+      status: { $in: ["assigned", "active", "paused"] },
+      $or: [
+        { scheduledStart: { $gte: dayStart, $lte: dayEnd } },
+        { actualStart: { $gte: dayStart, $lte: dayEnd } },
+      ],
+    };
+
+    if (isTransporter) {
+      query.assignedTransporterId = transporter!._id;
+    } else if (isDeliverer) {
+      query.assignedDelivererId = deliverer!._id;
+    }
 
     const routes = await RouteModel
-      .find({
-        assignedTransporterId: transporter._id,
-        status: { $in: ["assigned", "active", "paused"] },
-        $or: [
-
-          { scheduledStart: { $gte: dayStart, $lte: dayEnd } },
-
-          { actualStart: { $gte: dayStart, $lte: dayEnd } },
-        ],
-      })
+      .find(query)
       .select(
         "_id routeNumber type status " +
         "originBranchId destinationBranchId " +
@@ -13581,28 +13609,41 @@ export const getMyRoutes = catchAsyncError(
         "scheduledStart scheduledEnd actualStart actualEnd " +
         "currentStopIndex completedStops "
       )
-      .sort({ scheduledStart: 1 })   
+      .sort({ scheduledStart: 1 })
       .lean();
 
     if (routes.length === 0) {
-      return res.status(200).json({
+      const baseResponse: any = {
         success: true,
         message: "No routes assigned for today.",
         data: {
-          transporterId:    transporter._id,
-          transporterType:  transporter.transporterType ?? "legacy",
-          routes:           [],
-          totalRoutes:      0,
-          canStartFirst:    false,
+          role: userRole,
+          routes: [],
+          totalRoutes: 0,
+          canStartFirst: false,
         },
-      });
+      };
+
+      if (isTransporter) {
+        baseResponse.data.transporterId = transporter!._id;
+        baseResponse.data.transporterType = transporter!.transporterType ?? "legacy";
+      } else if (isDeliverer) {
+        baseResponse.data.delivererId = deliverer!._id;
+        baseResponse.data.branchId = deliverer!.branchId;
+      }
+
+      return res.status(200).json(baseResponse);
     }
 
-
+    // Collect branch IDs for population
     const branchIds = new Set<string>();
     for (const r of routes) {
-      if (r.originBranchId)      branchIds.add(r.originBranchId.toString());
+      if (r.originBranchId) branchIds.add(r.originBranchId.toString());
       if (r.destinationBranchId) branchIds.add(r.destinationBranchId.toString());
+      // Also collect stop branch IDs
+      for (const stop of (r.stops as any[])) {
+        if (stop.branchId) branchIds.add(stop.branchId.toString());
+      }
     }
 
     const branches = await BranchModel
@@ -13617,20 +13658,13 @@ export const getMyRoutes = catchAsyncError(
       ])
     );
 
-    // ── Determine which route can be started ─────────────────────────────────
-    //  The first route in ascending scheduledStart order that is "assigned"
-    //  is the one the transporter should tap.  All subsequent routes are
-    //  locked until the previous one completes.
-    //
-    //  Special case: if a route is already "active" or "paused", that one
-    //  is the current route — the transporter is mid-trip.
+    // Determine which route can be started
     const activeOrPausedIdx = routes.findIndex(
       (r) => r.status === "active" || r.status === "paused"
     );
     const currentRouteIndex = activeOrPausedIdx !== -1
       ? activeOrPausedIdx
       : routes.findIndex((r) => r.status === "assigned");
-
 
     const shapedRoutes = routes.map((r, idx) => {
       const origin = r.originBranchId
@@ -13640,150 +13674,149 @@ export const getMyRoutes = catchAsyncError(
         ? branchMap.get(r.destinationBranchId.toString())
         : null;
 
-      // Count manifests and packages across stops
+      // Count items based on route type
+      const isHubRoute = r.type === "hub_to_hub" || r.type === "hub_to_branch";
       const totalManifests = (r.stops as any[]).reduce(
         (sum: number, s: any) => sum + (s.manifestIds?.length ?? 0), 0
       );
       const totalPackages = (r.stops as any[]).reduce(
         (sum: number, s: any) => sum + (s.packageIds?.length ?? 0), 0
       );
-      const totalWeight = (r.stops as any[]).reduce(
-        (sum: number, s: any) => sum + (s.manifestIds?.length ?? 0) * 0, 0
-        // Weight is on the manifest docs, not denormalized to stops.
-        // The frontend should use route.totalWeight if available, or
-        // fetch from manifest docs.  We expose stop-level manifest IDs
-        // so the frontend can resolve weights client-side if needed.
-      );
 
-      // Is this the route the transporter can act on right now?
       const isCurrentRoute = idx === currentRouteIndex;
-      // Is this route locked (a previous route must complete first)?
       const isLocked = idx > currentRouteIndex && currentRouteIndex !== -1;
-      // Already done (shouldn't normally appear since we filter status, but defensive)
-      const isCompleted = r.status === "completed";
 
-      // Build a compact stop list for the frontend
+      // Build stops for frontend
       const stops = (r.stops as any[]).map((s) => ({
-        stopId:       s._id,
-        order:        s.order,
-        branchId:     s.branchId,
-        branchName:   s.branchId ? branchMap.get(s.branchId.toString())?.name : undefined,
-        address:      s.address,
-        location:     s.location?.coordinates,
-        status:       s.status,
-        manifestIds:  s.manifestIds ?? [],
-        packageIds:   s.packageIds ?? [],
+        stopId: s._id,
+        order: s.order,
+        branchId: s.branchId,
+        branchName: s.branchId ? branchMap.get(s.branchId.toString())?.name : undefined,
+        address: s.address,
+        location: s.location?.coordinates,
+        status: s.status,
+        manifestIds: s.manifestIds ?? [],
+        packageIds: s.packageIds ?? [],
         manifestCount: s.manifestIds?.length ?? 0,
-        packageCount:  s.packageIds?.length ?? 0,
+        packageCount: s.packageIds?.length ?? 0,
         expectedArrival: s.expectedArrival,
-        actualArrival:   s.actualArrival,
+        actualArrival: s.actualArrival,
+        action: s.action,
+        ...(s.clientId && { clientId: s.clientId }),
+        ...(s.recipientName && { recipientName: s.recipientName }),
+        ...(s.recipientPhone && { recipientPhone: s.recipientPhone }),
       }));
 
-      // Human-readable label for the route card
-      const originLabel      = origin      ? `${origin.name} (${origin.code})`      : "—";
+      const originLabel = origin ? `${origin.name} (${origin.code})` : "—";
       const destinationLabel = destination ? `${destination.name} (${destination.code})` : "—";
 
-      // Status label for the UI
+      // Status label for UI
       let statusLabel: string;
       let actionHint: string | null = null;
+
       if (r.status === "active") {
         statusLabel = "In progress";
-        actionHint  = "Tap to view route progress";
+        actionHint = "Tap to view route progress";
       } else if (r.status === "paused") {
         statusLabel = "Paused";
-        actionHint  = "Tap to resume";
+        actionHint = "Tap to resume";
       } else if (isCurrentRoute) {
         statusLabel = "Assigned — ready to start";
-        actionHint  = "Tap to start";
+        actionHint = "Tap to start";
       } else if (isLocked) {
         const prevRoute = routes[idx - 1];
         statusLabel = "Assigned";
-        actionHint  = `Complete ${prevRoute?.routeNumber ?? "previous route"} first`;
+        actionHint = `Complete ${prevRoute?.routeNumber ?? "previous route"} first`;
       } else {
         statusLabel = "Assigned";
       }
 
       return {
-        routeId:        r._id,
-        routeNumber:    r.routeNumber,
-        routeType:      r.type,
-        status:         r.status,
+        routeId: r._id,
+        routeNumber: r.routeNumber,
+        routeType: r.type,
+        status: r.status,
         statusLabel,
         actionHint,
         isCurrentRoute,
         isLocked,
 
-
-        originBranchId:      r.originBranchId,
+        originBranchId: r.originBranchId,
         destinationBranchId: r.destinationBranchId,
         originLabel,
         destinationLabel,
-        originCity:          origin?.city      ?? "",
-        destinationCity:     destination?.city ?? "",
-
+        originCity: origin?.city ?? "",
+        destinationCity: destination?.city ?? "",
 
         totalManifests,
         totalPackages,
         loadUnit: totalManifests > 0 ? "manifests" : "packages",
 
-
-        distanceKm:          r.distance,
-        distanceSource:      r.distanceSource,
+        distanceKm: r.distance,
+        distanceSource: r.distanceSource,
         estimatedTimeMinutes: r.estimatedTime,
-        estimatedTimeLabel:  _formatMinutes(r.estimatedTime),
-
+        estimatedTimeLabel: formatMinutes(r.estimatedTime),
 
         currentStopIndex: r.currentStopIndex,
-        completedStops:   r.completedStops,
-        totalStops:       (r.stops as any[]).length,
-        progressPercent:  (r.stops as any[]).length > 0
+        completedStops: r.completedStops,
+        totalStops: (r.stops as any[]).length,
+        progressPercent: (r.stops as any[]).length > 0
           ? Math.round((r.currentStopIndex / (r.stops as any[]).length) * 100)
           : 0,
 
-
         scheduledStart: r.scheduledStart,
-        scheduledEnd:   r.scheduledEnd,
-        actualStart:    r.actualStart ?? null,
-        actualEnd:      r.actualEnd   ?? null,
-
+        scheduledEnd: r.scheduledEnd,
+        actualStart: r.actualStart ?? null,
+        actualEnd: r.actualEnd ?? null,
 
         stops,
       };
     });
 
-
-    const totalManifestsToday = shapedRoutes.reduce(
-      (s, r) => s + r.totalManifests, 0
-    );
-    const totalDistanceToday = shapedRoutes.reduce(
-      (s, r) => s + (r.distanceKm ?? 0), 0
-    );
+    const totalManifestsToday = shapedRoutes.reduce((s, r) => s + r.totalManifests, 0);
+    const totalPackagesToday = shapedRoutes.reduce((s, r) => s + r.totalPackages, 0);
+    const totalDistanceToday = shapedRoutes.reduce((s, r) => s + (r.distanceKm ?? 0), 0);
     const activeRoute = shapedRoutes.find(
       (r) => r.status === "active" || r.status === "paused"
     ) ?? null;
 
+    const responseData: any = {
+      role: userRole,
+      totalRoutes: shapedRoutes.length,
+      totalLoad: isTransporter ? totalManifestsToday : totalPackagesToday,
+      loadUnit: isTransporter ? "manifests" : "packages",
+      totalDistanceToday: parseFloat(totalDistanceToday.toFixed(1)),
+      activeRoute,
+      currentRouteIndex,
+      canStartFirst: currentRouteIndex === 0 && routes[0]?.status === "assigned",
+      routes: shapedRoutes,
+    };
+
+    if (isTransporter) {
+      responseData.transporterId = transporter!._id;
+      responseData.transporterType = transporter!.transporterType ?? "legacy";
+    } else if (isDeliverer) {
+      responseData.delivererId = deliverer!._id;
+      responseData.branchId = deliverer!.branchId;
+      responseData.availabilityStatus = deliverer!.availabilityStatus;
+    }
+
     return res.status(200).json({
       success: true,
-      data: {
-        transporterId:   transporter._id,
-        transporterType: transporter.transporterType ?? "legacy",
-
-
-        totalRoutes:         shapedRoutes.length,
-        totalManifestsToday,
-        totalDistanceToday:  parseFloat(totalDistanceToday.toFixed(1)),
-
-
-        activeRoute,
-        currentRouteIndex,
-        canStartFirst: currentRouteIndex === 0 && routes[0]?.status === "assigned",
-
-        // Full ordered list
-        routes: shapedRoutes,
-      },
+      data: responseData,
     });
   }
 );
+
+// Helper function to format minutes
+function formatMinutes(minutes: number): string {
+  if (!minutes || minutes <= 0) return "—";
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m}min`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}min`;
+}
 
 
 
