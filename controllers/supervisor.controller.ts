@@ -10805,21 +10805,15 @@ export const getMyDeliveries = catchAsyncError(
     const delivererId = await resolveDelivererId(userId, next);
     if (!delivererId) return; 
 
-
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
     const page  = Math.max(1, parseInt(req.query.page  as string) || 1);
     const skip  = (page - 1) * limit;
 
-
     const rawSearch = (req.query.q as string)?.trim() ?? "";
-
 
     const matchStage: Record<string, any> = {
       assignedDelivererId: delivererId,
     };
-
-
-
 
     const VALID_STATUSES: PackageStatus[] = [
       "pending", "accepted", "at_origin_branch", "in_transit_to_branch",
@@ -10828,14 +10822,42 @@ export const getMyDeliveries = catchAsyncError(
       "returned", "cancelled", "lost", "damaged", "on_hold",
     ];
 
+    const FAILED_STATUS_GROUP = ["failed_delivery", "cancelled", "returned"];
+
     if (req.query.status) {
       const s = req.query.status as string;
-      if (!VALID_STATUSES.includes(s as PackageStatus)) {
-        return next(new ErrorHandler(`Invalid status: ${s}`, 400));
+      
+
+      if (s.toLowerCase() === "failed") {
+        matchStage.status = { $in: FAILED_STATUS_GROUP };
+      } else {
+
+        if (!VALID_STATUSES.includes(s as PackageStatus)) {
+          return next(new ErrorHandler(`Invalid status: ${s}`, 400));
+        }
+        matchStage.status = s;
       }
-      matchStage.status = s;
     }
 
+    if (req.query.statuses) {
+      const rawStatuses = (req.query.statuses as string).split(",").map(s => s.trim());
+      const expandedStatuses: string[] = [];
+      
+      for (const status of rawStatuses) {
+        if (status.toLowerCase() === "failed") {
+          expandedStatuses.push(...FAILED_STATUS_GROUP);
+        } else {
+          if (!VALID_STATUSES.includes(status as PackageStatus)) {
+            return next(new ErrorHandler(`Invalid status: ${status}`, 400));
+          }
+          expandedStatuses.push(status);
+        }
+      }
+      
+
+      const uniqueStatuses = [...new Set(expandedStatuses)];
+      matchStage.status = uniqueStatuses.length === 1 ? uniqueStatuses[0] : { $in: uniqueStatuses };
+    }
 
     const VALID_DELIVERY_TYPES: DeliveryType[] = ["home", "branch_pickup"];
 
@@ -10846,7 +10868,6 @@ export const getMyDeliveries = catchAsyncError(
       }
       matchStage.deliveryType = dt;
     }
-
 
     const VALID_PAYMENT_STATUSES: PaymentStatus[] = [
       "pending", "paid", "partially_paid", "refunded", "failed",
@@ -10860,7 +10881,6 @@ export const getMyDeliveries = catchAsyncError(
       matchStage.paymentStatus = ps;
     }
 
-
     const VALID_PRIORITIES = ["standard", "express", "same_day"];
 
     if (req.query.deliveryPriority) {
@@ -10871,7 +10891,6 @@ export const getMyDeliveries = catchAsyncError(
       matchStage.deliveryPriority = dp;
     }
 
-
     if (req.query.hasIssues !== undefined) {
       if (req.query.hasIssues === "true") {
         matchStage.issues = { $elemMatch: { resolved: false } };
@@ -10880,13 +10899,11 @@ export const getMyDeliveries = catchAsyncError(
       }
     }
 
-
     if (req.query.needsAttention === "true") {
       matchStage.status = {
         $in: ["failed_delivery", "failed_delivery_attempt", "damaged", "lost", "on_hold"],
       };
     }
-
 
     if (req.query.city) {
       matchStage["destination.city"] = new RegExp(req.query.city as string, "i");
@@ -10895,14 +10912,12 @@ export const getMyDeliveries = catchAsyncError(
       matchStage["destination.state"] = new RegExp(req.query.state as string, "i");
     }
 
-
     if (req.query.fromDate || req.query.toDate) {
       matchStage.createdAt = {
         ...(req.query.fromDate && { $gte: new Date(req.query.fromDate as string) }),
         ...(req.query.toDate   && { $lte: new Date(req.query.toDate   as string) }),
       };
     }
-
 
     if (req.query.deliveredFrom || req.query.deliveredTo) {
       matchStage.deliveredAt = {
@@ -10911,11 +10926,9 @@ export const getMyDeliveries = catchAsyncError(
       };
     }
 
-
     const pipeline: any[] = [
 
       { $match: matchStage },
-
 
       {
         $addFields: {
@@ -10963,11 +10976,9 @@ export const getMyDeliveries = catchAsyncError(
         },
       },
 
-
       ...(req.query.isOverdue !== undefined
         ? [{ $match: { _isOverdue: req.query.isOverdue === "true" } }]
         : []),
-
 
       ...(rawSearch
         ? [
@@ -11016,7 +11027,6 @@ export const getMyDeliveries = catchAsyncError(
           ]
         : [{ $addFields: { _searchScore: 0 } }]),
 
-
       {
         $sort: {
           _searchScore: -1,
@@ -11024,7 +11034,6 @@ export const getMyDeliveries = catchAsyncError(
           createdAt: -1,
         },
       },
-
 
       {
         $facet: {
@@ -11037,7 +11046,6 @@ export const getMyDeliveries = catchAsyncError(
                 _estimatedTimeRemaining: 0,
                 _isOverdue: 0,
                 _searchScore: 0,
-
                 trackingHistory: 0,
               },
             },
@@ -11051,14 +11059,12 @@ export const getMyDeliveries = catchAsyncError(
     const total: number     = result.metadata[0]?.total ?? 0;
     const packages: any[]   = result.data ?? [];
 
-
     const formattedDeliveries = packages.map((pkg) => ({
       id: pkg._id,
       trackingNumber: pkg.trackingNumber,
       status: pkg.status,
       type: pkg.type,
       isFragile: pkg.isFragile,
-
 
       destination: {
         recipientName:    pkg.destination.recipientName,
@@ -11072,27 +11078,21 @@ export const getMyDeliveries = catchAsyncError(
         notes:            pkg.destination.notes ?? null,
       },
 
-      // Delivery logistics
       deliveryType:         pkg.deliveryType,
       deliveryPriority:     pkg.deliveryPriority,
       estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
 
-      // Payment
       totalPrice:    pkg.totalPrice,
       paymentStatus: pkg.paymentStatus,
       paymentMethod: pkg.paymentMethod ?? null,
-
 
       attemptCount:    pkg.attemptCount,
       maxAttempts:     pkg.maxAttempts,
       nextAttemptDate: pkg.nextAttemptDate ?? null,
 
-
       isReturn: pkg.returnInfo?.isReturn ?? false,
 
-
       unresolvedIssuesCount: (pkg.issues as any[]).filter((i) => !i.resolved).length,
-
 
       createdAt:   pkg.createdAt,
       updatedAt:   pkg.updatedAt,
@@ -11113,7 +11113,6 @@ export const getMyDeliveries = catchAsyncError(
     });
   },
 );
-
 
 export const getMyDeliveryById = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
