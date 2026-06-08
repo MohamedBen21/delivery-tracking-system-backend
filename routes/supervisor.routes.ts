@@ -131,7 +131,7 @@ supervisorRouter.patch(
 );
 
 supervisorRouter.get("/packages/search", isAuthenticated, searchPackages);
-supervisorRouter.get("/packages", isAuthenticated, getPackagesPaginated);
+supervisorRouter.get("/packages", isAuthenticated , authorizeRoles("deliverer" , "transporter"), getPackagesPaginated);
 
 
 // Role-based middleware for supervisor, manager, or admin

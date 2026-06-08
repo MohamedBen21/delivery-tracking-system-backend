@@ -10214,7 +10214,6 @@ export const searchPackages = catchAsyncError(
 export const getPackagesPaginated = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-
       const limit = Math.min(
         100,
         Math.max(1, parseInt(req.query.limit as string) || 20),
@@ -10222,20 +10221,47 @@ export const getPackagesPaginated = catchAsyncError(
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
       const skip = (page - 1) * limit;
 
-
       const filter: Record<string, any> = {};
 
-
       const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
-      const isValidId  = (val: string) => mongoose.Types.ObjectId.isValid(val);
+      const isValidId = (val: string) => mongoose.Types.ObjectId.isValid(val);
 
+      // ── Authentication and role-based access control ──────────────────────
+      const user = (req as any).user;
+      const userRole = user?.role;
+      const userId = user?._id;
 
+      let assignedDelivererId: mongoose.Types.ObjectId | null = null;
+
+      // ── COMPANY FILTER ────────────────────────────────────────────────────
       if (req.query.companyId) {
         if (!isValidId(req.query.companyId as string))
           return next(new ErrorHandler("Invalid companyId.", 400));
         filter.companyId = toObjectId(req.query.companyId as string);
       }
 
+      // ── STRICT ACCESS CONTROL FOR DELIVERER ROLE ──────────────────────────
+      if (userRole === 'deliverer') {
+        // Find the deliverer record for this user
+        const deliverer = await DelivererModel.findOne({ userId: userId });
+        if (!deliverer) {
+          return next(new ErrorHandler("Deliverer profile not found.", 404));
+        }
+        
+        // STRICT: Only show packages explicitly assigned to this deliverer
+        filter.assignedDelivererId = deliverer._id;
+        assignedDelivererId = deliverer._id;
+      }
+
+      // ── If query explicitly asks for a specific deliverer (admin only) ─────
+      if (req.query.assignedDelivererId && userRole !== 'deliverer') {
+        if (!isValidId(req.query.assignedDelivererId as string))
+          return next(new ErrorHandler("Invalid assignedDelivererId.", 400));
+        assignedDelivererId = toObjectId(req.query.assignedDelivererId as string);
+        filter.assignedDelivererId = assignedDelivererId;
+      }
+
+      // ── Other filters (client, branch, status, etc.) ───────────────────────
       if (req.query.clientId) {
         if (!isValidId(req.query.clientId as string))
           return next(new ErrorHandler("Invalid clientId.", 400));
@@ -10254,21 +10280,11 @@ export const getPackagesPaginated = catchAsyncError(
         filter.currentBranchId = toObjectId(req.query.currentBranchId as string);
       }
 
-      // ── Track if we're filtering by deliverer ──────────────────────────────
-      let assignedDelivererId: mongoose.Types.ObjectId | null = null;
-      
-      if (req.query.assignedDelivererId) {
-        if (!isValidId(req.query.assignedDelivererId as string))
-          return next(new ErrorHandler("Invalid assignedDelivererId.", 400));
-        assignedDelivererId = toObjectId(req.query.assignedDelivererId as string);
-        filter.assignedDelivererId = assignedDelivererId;
-      }
-
-
+      // Status filter
       const VALID_STATUSES: PackageStatus[] = [
         "pending", "accepted", "at_origin_branch", "in_transit_to_branch",
         "at_destination_branch", "out_for_delivery", "delivered",
-        "failed_delivery", "rescheduled", "returned", "cancelled",
+        "failed_delivery", "failed_delivery_attempt", "rescheduled", "returned", "cancelled",
         "lost", "damaged", "on_hold",
       ];
       if (req.query.status) {
@@ -10278,6 +10294,7 @@ export const getPackagesPaginated = catchAsyncError(
         filter.status = s;
       }
 
+      // Type filter
       const VALID_TYPES: PackageType[] = [
         "document", "parcel", "fragile", "heavy",
         "perishable", "electronic", "clothing",
@@ -10289,6 +10306,7 @@ export const getPackagesPaginated = catchAsyncError(
         filter.type = t;
       }
 
+      // Payment status filter
       const VALID_PAYMENT_STATUSES: PaymentStatus[] = [
         "pending", "paid", "partially_paid", "refunded", "failed",
       ];
@@ -10299,6 +10317,7 @@ export const getPackagesPaginated = catchAsyncError(
         filter.paymentStatus = ps;
       }
 
+      // Delivery priority filter
       const VALID_PRIORITIES = ["standard", "express", "same_day"];
       if (req.query.deliveryPriority) {
         const dp = req.query.deliveryPriority as string;
@@ -10307,6 +10326,7 @@ export const getPackagesPaginated = catchAsyncError(
         filter.deliveryPriority = dp;
       }
 
+      // Delivery type filter
       const VALID_DELIVERY_TYPES: DeliveryType[] = ["home", "branch_pickup"];
       if (req.query.deliveryType) {
         const dt = req.query.deliveryType as string;
@@ -10315,7 +10335,7 @@ export const getPackagesPaginated = catchAsyncError(
         filter.deliveryType = dt;
       }
 
-
+      // Boolean filters
       if (req.query.isFragile !== undefined) {
         filter.isFragile = req.query.isFragile === "true";
       }
@@ -10331,7 +10351,7 @@ export const getPackagesPaginated = catchAsyncError(
             : { $not: { $elemMatch: { resolved: false } } };
       }
 
-
+      // Range filters
       const applyRange = (
         field: string,
         minKey: string,
@@ -10351,13 +10371,13 @@ export const getPackagesPaginated = catchAsyncError(
         }
       };
 
-      applyRange("weight",            "minWeight", "maxWeight");
-      applyRange("volume",            "minVolume", "maxVolume");
+      applyRange("weight", "minWeight", "maxWeight");
+      applyRange("volume", "minVolume", "maxVolume");
       applyRange("dimensions.length", "minLength", "maxLength");
-      applyRange("dimensions.width",  "minWidth",  "maxWidth");
+      applyRange("dimensions.width", "minWidth", "maxWidth");
       applyRange("dimensions.height", "minHeight", "maxHeight");
 
-
+      // Location filters
       if (req.query.city) {
         filter["destination.city"] = new RegExp(req.query.city as string, "i");
       }
@@ -10372,7 +10392,7 @@ export const getPackagesPaginated = catchAsyncError(
           .lean({ virtuals: true });
 
         if (deliverer) {
-          // Aggregate package stats for this deliverer
+          // Aggregate package stats for this deliverer (strictly assigned packages)
           const packageStats = await PackageModel.aggregate([
             {
               $match: {
@@ -10468,13 +10488,10 @@ export const getPackagesPaginated = catchAsyncError(
           };
 
           delivererStats = {
-            // ── Deliverer profile ────────────────────────────────────────────
             id: deliverer._id,
             userId: deliverer.userId,
             branchId: deliverer.branchId,
             companyId: deliverer.companyId,
-
-            // ── Status & verification ───────────────────────────────────────
             availabilityStatus: deliverer.availabilityStatus,
             verificationStatus: deliverer.verificationStatus,
             isActive: deliverer.isActive,
@@ -10483,35 +10500,23 @@ export const getPackagesPaginated = catchAsyncError(
             isVerified: deliverer.isVerified,
             isAvailable: deliverer.isAvailable,
             isOnDuty: deliverer.isOnDuty,
-
-            // ── Performance metrics ─────────────────────────────────────────
             rating: deliverer.rating,
-            successRate: deliverer.successRate, // virtual: (successfulDeliveries / totalDeliveries) * 100
-
-            // ── Lifetime stats ──────────────────────────────────────────────
+            successRate: deliverer.successRate,
             totalDeliveries: deliverer.totalDeliveries,
             successfulDeliveries: deliverer.successfulDeliveries,
             failedDeliveries: deliverer.failedDeliveries,
-
-            // ── Today's stats ───────────────────────────────────────────────
             todayDeliveriesCount: deliverer.todayDeliveriesCount,
             todayEarnings: deliverer.todayEarnings,
             todayCollectedAmount: deliverer.todayCollectedAmount,
-
-            // ── Financials ──────────────────────────────────────────────────
             commission: deliverer.commission,
             totalEarnings: deliverer.totalEarnings,
             pendingBranchReturn: deliverer.pendingBranchReturn,
-
-            // ── Performance object ──────────────────────────────────────────
             performance: {
               averageDeliveryTime: deliverer.performance?.averageDeliveryTime ?? 0,
               onTimeDeliveryRate: deliverer.performance?.onTimeDeliveryRate ?? 0,
               customerSatisfaction: deliverer.performance?.customerSatisfaction ?? 0,
               totalDistanceCovered: deliverer.performance?.totalDistanceCovered ?? 0,
             },
-
-            // ── Package stats (from aggregation) ────────────────────────────
             packageStats: {
               totalAssigned: stats.totalPackages,
               delivered: stats.deliveredPackages,
@@ -10521,81 +10526,78 @@ export const getPackagesPaginated = catchAsyncError(
               totalCollected: stats.totalCollected,
               totalCOD: stats.totalCOD,
             },
-
-            // ── Document status ─────────────────────────────────────────────
             documentStatus: deliverer.documentStatus,
             hasValidLicense: deliverer.hasValidLicense,
             canAcceptDeliveries: deliverer.canAcceptDeliveries,
-
-            // ── Current assignment ──────────────────────────────────────────
             currentVehicleId: deliverer.currentVehicleId ?? null,
             currentRouteId: deliverer.currentRouteId ?? null,
-
-            // ── Suspension info ─────────────────────────────────────────────
             suspensionReason: deliverer.suspensionReason ?? null,
             lastActiveAt: deliverer.lastActiveAt,
           };
         }
       }
 
-      // ── Fetch packages ──────────────────────────────────────────────────────
+      // ── Fetch packages with pagination ─────────────────────────────────────
       const [total, packages] = await Promise.all([
         PackageModel.countDocuments(filter),
         PackageModel.find(filter)
           .skip(skip)
           .limit(limit)
+          .sort({ createdAt: -1 })
           .lean({ virtuals: true }),
       ]);
 
-
-      let filtered = packages as any[];
-
+      // Apply overdue filter (client-side since it's a virtual)
+      let filteredPackages = packages as any[];
       if (req.query.isOverdue !== undefined) {
         const wantOverdue = req.query.isOverdue === "true";
-        filtered = filtered.filter((pkg) => pkg.isOverdue === wantOverdue);
+        filteredPackages = filteredPackages.filter((pkg) => pkg.isOverdue === wantOverdue);
       }
 
+      // Apply sorting
+      const sortBy = (req.query.sortBy as string) || "createdAt";
+      const order = req.query.order === "desc" ? -1 : 1;
 
-      const sortBy = (req.query.sortBy as string) || "estimatedTimeRemaining";
-      const order  = req.query.order === "desc" ? -1 : 1;
-
-      if (sortBy === "estimatedTimeRemaining") {
-        filtered.sort((a, b) => {
-          const aVal = a.estimatedTimeRemaining ?? Infinity;
-          const bVal = b.estimatedTimeRemaining ?? Infinity;
-          return (aVal - bVal) * order;
-        });
-      } else if (sortBy === "weight") {
-        filtered.sort((a, b) => (a.weight - b.weight) * order);
-      } else if (sortBy === "totalPrice") {
-        filtered.sort((a, b) => (a.totalPrice - b.totalPrice) * order);
-      } else if (sortBy === "createdAt") {
-        filtered.sort(
-          (a, b) =>
-            (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) *
-            order,
-        );
-      } else if (sortBy === "attemptCount") {
-        filtered.sort((a, b) => (a.attemptCount - b.attemptCount) * order);
+      switch (sortBy) {
+        case "estimatedTimeRemaining":
+          filteredPackages.sort((a, b) => {
+            const aVal = a.estimatedTimeRemaining ?? Infinity;
+            const bVal = b.estimatedTimeRemaining ?? Infinity;
+            return (aVal - bVal) * order;
+          });
+          break;
+        case "weight":
+          filteredPackages.sort((a, b) => (a.weight - b.weight) * order);
+          break;
+        case "totalPrice":
+          filteredPackages.sort((a, b) => (a.totalPrice - b.totalPrice) * order);
+          break;
+        case "createdAt":
+          filteredPackages.sort(
+            (a, b) =>
+              (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) * order,
+          );
+          break;
+        case "attemptCount":
+          filteredPackages.sort((a, b) => (a.attemptCount - b.attemptCount) * order);
+          break;
+        default:
+          if (order === -1) filteredPackages.reverse();
       }
 
-
-      const formattedPackages = filtered.map((pkg) => ({
+      // Format packages for response
+      const formattedPackages = filteredPackages.map((pkg) => ({
         id: pkg._id,
         trackingNumber: pkg.trackingNumber,
         status: pkg.status,
         type: pkg.type,
         isFragile: pkg.isFragile,
-
         senderId: pkg.senderId,
         senderType: pkg.senderType,
         clientId: pkg.clientId ?? null,
-
         weight: pkg.weight,
         volume: pkg.volume ?? null,
         dimensions: pkg.dimensions ?? null,
-
-        // ── Updated destination with coordinates for home delivery ────────────────
         destination: {
           recipientName: pkg.destination.recipientName,
           recipientPhone: pkg.destination.recipientPhone,
@@ -10605,19 +10607,16 @@ export const getPackagesPaginated = catchAsyncError(
           state: pkg.destination.state,
           postalCode: pkg.destination.postalCode ?? null,
           notes: pkg.destination.notes ?? null,
-          // Include coordinates only for home delivery packages
           coordinates: pkg.deliveryType === "home" && pkg.destination.location?.coordinates
             ? {
                 type: pkg.destination.location.type || "Point",
-                coordinates: pkg.destination.location.coordinates, // [lng, lat]
+                coordinates: pkg.destination.location.coordinates,
               }
             : null,
         },
-
         deliveryType: pkg.deliveryType,
         deliveryPriority: pkg.deliveryPriority,
         estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
-
         estimatedTimeRemaining: pkg.estimatedTimeRemaining ?? null,
         isOverdue: pkg.isOverdue,
         deliveryProgress: pkg.deliveryProgress,
@@ -10625,75 +10624,68 @@ export const getPackagesPaginated = catchAsyncError(
         needsAttention: pkg.needsAttention,
         isInTransit: pkg.isInTransit,
         isAtBranch: pkg.isAtBranch,
-
         totalPrice: pkg.totalPrice,
         paymentStatus: pkg.paymentStatus,
         paymentMethod: pkg.paymentMethod ?? null,
         paidAt: pkg.paidAt ?? null,
-
         assignedDelivererId: pkg.assignedDelivererId ?? null,
-        assignedTransporterId: pkg.assignedTransporterId ?? null,
         assignedVehicleId: pkg.assignedVehicleId ?? null,
-
         attemptCount: pkg.attemptCount,
         maxAttempts: pkg.maxAttempts,
         lastAttemptDate: pkg.lastAttemptDate ?? null,
         nextAttemptDate: pkg.nextAttemptDate ?? null,
-
         returnInfo: pkg.returnInfo,
-
         unresolvedIssuesCount: (pkg.issues as IIssue[]).filter(
           (i) => !i.resolved,
         ).length,
-
         createdAt: pkg.createdAt,
         updatedAt: pkg.updatedAt,
         deliveredAt: pkg.deliveredAt ?? null,
       }));
 
-      // ── Build response ──────────────────────────────────────────────────────
+      // Build response
       const responseData: any = {
         packages: formattedPackages,
         pagination: {
-          total: filtered.length,
+          total: filteredPackages.length,
           page,
           limit,
-          pages: Math.ceil(filtered.length / limit),
-          hasMore: filtered.length > skip + limit,
+          pages: Math.ceil(filteredPackages.length / limit),
+          hasMore: filteredPackages.length > skip + limit,
         },
         filters: {
-          status:               req.query.status               ?? null,
-          type:                 req.query.type                 ?? null,
-          paymentStatus:        req.query.paymentStatus        ?? null,
-          deliveryPriority:     req.query.deliveryPriority     ?? null,
-          deliveryType:         req.query.deliveryType         ?? null,
-          isFragile:            req.query.isFragile            ?? null,
-          isOverdue:            req.query.isOverdue            ?? null,
-          isReturn:             req.query.isReturn             ?? null,
-          hasIssues:            req.query.hasIssues            ?? null,
-          minWeight:            req.query.minWeight            ?? null,
-          maxWeight:            req.query.maxWeight            ?? null,
-          minVolume:            req.query.minVolume            ?? null,
-          maxVolume:            req.query.maxVolume            ?? null,
-          minLength:            req.query.minLength            ?? null,
-          maxLength:            req.query.maxLength            ?? null,
-          minWidth:             req.query.minWidth             ?? null,
-          maxWidth:             req.query.maxWidth             ?? null,
-          minHeight:            req.query.minHeight            ?? null,
-          maxHeight:            req.query.maxHeight            ?? null,
-          city:                 req.query.city                 ?? null,
-          state:                req.query.state                ?? null,
-          clientId:             req.query.clientId             ?? null,
-          companyId:            req.query.companyId            ?? null,
-          originBranchId:       req.query.originBranchId       ?? null,
-          currentBranchId:      req.query.currentBranchId      ?? null,
-          assignedDelivererId:  req.query.assignedDelivererId  ?? null,
-          sortBy:               sortBy,
-          order:                req.query.order                ?? "asc",
+          status: req.query.status ?? null,
+          type: req.query.type ?? null,
+          paymentStatus: req.query.paymentStatus ?? null,
+          deliveryPriority: req.query.deliveryPriority ?? null,
+          deliveryType: req.query.deliveryType ?? null,
+          isFragile: req.query.isFragile ?? null,
+          isOverdue: req.query.isOverdue ?? null,
+          isReturn: req.query.isReturn ?? null,
+          hasIssues: req.query.hasIssues ?? null,
+          minWeight: req.query.minWeight ?? null,
+          maxWeight: req.query.maxWeight ?? null,
+          minVolume: req.query.minVolume ?? null,
+          maxVolume: req.query.maxVolume ?? null,
+          minLength: req.query.minLength ?? null,
+          maxLength: req.query.maxLength ?? null,
+          minWidth: req.query.minWidth ?? null,
+          maxWidth: req.query.maxWidth ?? null,
+          minHeight: req.query.minHeight ?? null,
+          maxHeight: req.query.maxHeight ?? null,
+          city: req.query.city ?? null,
+          state: req.query.state ?? null,
+          clientId: req.query.clientId ?? null,
+          companyId: req.query.companyId ?? null,
+          originBranchId: req.query.originBranchId ?? null,
+          currentBranchId: req.query.currentBranchId ?? null,
+          assignedDelivererId: req.query.assignedDelivererId ?? null,
+          sortBy: sortBy,
+          order: req.query.order ?? "asc",
         },
       };
 
-      // ── Attach deliverer stats if available ────────────────────────────────
+      // Attach deliverer stats if available
       if (delivererStats) {
         responseData.delivererStats = delivererStats;
       }
