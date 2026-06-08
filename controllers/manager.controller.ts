@@ -878,7 +878,6 @@ export const createBranch = catchAsyncError(
         typeof location.coordinates[1] !== "number"
       ) {
 
-
         return next(
           new ErrorHandler(
             "Invalid location format. Expected GeoJSON Point with [lng, lat]",
@@ -1062,6 +1061,7 @@ export const createBranch = catchAsyncError(
       });
 
     } catch (error: any) {
+      console.error('CATCH BLOCK ERROR:', error.message, error.stack);
       if (error.name === "ValidationError") {
         return next(new ErrorHandler(
           Object.values(error.errors).map((e: any) => e.message).join(", "), 400
@@ -1070,9 +1070,15 @@ export const createBranch = catchAsyncError(
       return next(error);
 
     } finally {
-
       if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => { });
+        try {
+          await session.abortTransaction();
+        } catch (abortErr: any) {
+          // Ignore "transaction not in progress" errors — nothing to roll back
+          if (!abortErr.message?.includes('no transaction')) {
+            console.error('Failed to abort transaction:', abortErr);
+          }
+        }
       }
       await session.endSession();
     }
@@ -1402,8 +1408,6 @@ export const toggleBlockBranch = catchAsyncError(
 );
 
 
-
-
 export const switchBranchHub = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -1632,7 +1636,6 @@ export const getBranch = catchAsyncError(
     });
   },
 );
-
 //  GET ALL BRANCHES OF MANAGER'S COMPANY
 
 export const getMyBranches = catchAsyncError(
@@ -1700,6 +1703,7 @@ export const getMyBranches = catchAsyncError(
   },
 );
 
+
 //supervisor functions and interfaces
 
 interface IWorkScheduleDayBody {
@@ -1748,14 +1752,10 @@ export const createSupervisor = catchAsyncError(
       const { companyId } = req.params;
 
       if (!managerId) {
-
         return next(new ErrorHandler("Unauthorized, user not authenticated.", 401));
       }
 
-      if (
-        !companyId ||
-        !mongoose.Types.ObjectId.isValid(companyId.toString())
-      ) {
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         return next(new ErrorHandler("Invalid company ID", 400));
       }
 
@@ -1770,15 +1770,7 @@ export const createSupervisor = catchAsyncError(
         workSchedule,
       } = req.body as ICreateSupervisor;
 
-      if (
-        !branchId ||
-        !firstName ||
-        !lastName ||
-        !email ||
-        !phone ||
-        !password
-      ) {
-
+      if (!branchId || !firstName || !lastName || !email || !phone || !password) {
         return next(new ErrorHandler("All required fields must be provided", 400));
       }
 
@@ -1790,11 +1782,7 @@ export const createSupervisor = catchAsyncError(
         typeof phone !== "string" ||
         typeof password !== "string"
       ) {
-
-        return next(new ErrorHandler(
-          "All required fields must be in their proper types.",
-          400,
-        ));
+        return next(new ErrorHandler("All required fields must be in their proper types.", 400));
       }
 
       if (!mongoose.Types.ObjectId.isValid(branchId)) {
@@ -1803,10 +1791,8 @@ export const createSupervisor = catchAsyncError(
 
       if (permissions !== undefined) {
         if (!Array.isArray(permissions)) {
-
           return next(new ErrorHandler("Permissions must be an array", 400));
         }
-
         if (new Set(permissions).size !== permissions.length) {
           return next(new ErrorHandler("Duplicate permissions are not allowed", 400));
         }
@@ -1814,23 +1800,15 @@ export const createSupervisor = catchAsyncError(
 
       const normalizedPhone = userModel.normalizePhone(phone);
 
-      const [manager, branch, existingUser] = await Promise.all([
-        ManagerModel.findOne({ userId: managerId, companyId }).session(session),
-        BranchModel.findOne({ _id: branchId, companyId }).session(session),
-        userModel.findOne({
-          $or: [
-            { email },
-            { phone: normalizedPhone }
-          ]
-        }).session(session),
-      ]);
-
-      if (existingUser) {
-        if (existingUser.email === email) {
-          throw new ErrorHandler("User with this email already exists", 400);
-        }
-        throw new ErrorHandler("User with this phone number already exists", 400);
-      }
+      // ─── FIX: Run session queries SEQUENTIALLY, not concurrently ──────────
+      // MongoDB sessions cannot handle concurrent operations — Promise.all on
+      // the same session causes "transaction number does not match" errors.
+      const manager = await ManagerModel.findOne({ userId: managerId, companyId }).session(session);
+      const branch = await BranchModel.findOne({ _id: branchId, companyId }).session(session);
+      const existingUser = await userModel.findOne({
+        $or: [{ email }, { phone: normalizedPhone }],
+      }).session(session);
+      // ──────────────────────────────────────────────────────────────────────
 
       if (!manager || !manager.isActive) {
         throw new ErrorHandler("You are not an active manager", 403);
@@ -1841,13 +1819,14 @@ export const createSupervisor = catchAsyncError(
       }
 
       if (!branch || branch.status !== "active") {
-
         throw new ErrorHandler("Invalid or inactive branch", 400);
       }
 
       if (existingUser) {
-
-        throw new ErrorHandler("User with this email already exists", 400);
+        if (existingUser.email === email) {
+          throw new ErrorHandler("User with this email already exists", 400);
+        }
+        throw new ErrorHandler("User with this phone number already exists", 400);
       }
 
       const user = await userModel.create(
@@ -1859,7 +1838,7 @@ export const createSupervisor = catchAsyncError(
             phone,
             passwordHash: password,
             role: "supervisor",
-            status: "active"
+            status: "active",
           },
         ],
         { session },
@@ -1871,7 +1850,7 @@ export const createSupervisor = catchAsyncError(
             userId: user[0]._id,
             companyId,
             branchId,
-            permissions: permissions,
+            permissions,
             ...(workSchedule && { workSchedule }),
             isActive: true,
           },
@@ -1882,24 +1861,19 @@ export const createSupervisor = catchAsyncError(
       await session.commitTransaction();
       transactionCommitted = true;
 
-
-
-      const branchName = branch ? branch.name : "Branch";
+      const branchName = branch.name;
 
       sendSupervisorAccountCreatedNotification(
         user[0]._id.toString(),
         firstName,
         lastName,
         supervisor[0]._id.toString(),
-        branchName
-      ).catch(error => {
-        console.error('Supervisor creation notification failed:', error);
+        branchName,
+      ).catch((error) => {
+        console.error("Supervisor creation notification failed:", error);
       });
 
-
-      const populatedSupervisor = await SupervisorModel.findById(
-        supervisor[0]._id,
-      )
+      const populatedSupervisor = await SupervisorModel.findById(supervisor[0]._id)
         .populate("userId", "firstName lastName email phone username imageUrl")
         .populate("branchId", "name code address status")
         .populate("companyId", "name businessType status")
@@ -1910,11 +1884,13 @@ export const createSupervisor = catchAsyncError(
         message: "Supervisor created successfully",
         data: populatedSupervisor,
       });
+
     } catch (error: any) {
 
       if (error.name === "ValidationError") {
         return next(new ErrorHandler(
-          Object.values(error.errors).map((e: any) => e.message).join(", "), 400
+          Object.values(error.errors).map((e: any) => e.message).join(", "),
+          400,
         ));
       }
 
@@ -1930,7 +1906,6 @@ export const createSupervisor = catchAsyncError(
     }
   },
 );
-
 //  UPDATE SUPERVISOR
 export const updateSupervisor = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {

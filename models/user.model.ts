@@ -16,15 +16,16 @@ export interface IUser extends Document {
   lastName: string;
   imageUrl?: {
     public_id: string;
-    url:string;
+    url: string;
   };
   role: "admin" | "manager" | "client" | "deliverer" | "transporter" | "supervisor" | "freelancer" | "cashier" | "loader";
   status: "active" | "pending" | "suspended" | "inactive";
+  companyId?: string;
 
   comparePassword: (password: string) => Promise<boolean>;
   SignAccessToken: () => string;
   SignRefreshToken: () => string;
-  
+
 }
 
 
@@ -38,7 +39,7 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
     email: {
       type: String,
       required: [
-        function(this: IUser) {
+        function (this: IUser) {
           return this.role !== "client";
         },
         "Please enter your email",
@@ -49,7 +50,7 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
       trim: true,
       validate: {
         // ✅ Regular function so `this` refers to the document
-        validator: function(this: IUser, value: string) {
+        validator: function (this: IUser, value: string) {
           // If no value and role is client, skip validation
           if (!value && this.role === "client") {
             return true;
@@ -83,7 +84,7 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
       minlength: [6, "Password must be at least 6 characters"],
       select: false,
       required: [
-        function(this: IUser) {
+        function (this: IUser) {
 
           return this.role !== "client";
         },
@@ -110,8 +111,8 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
     role: {
       type: String,
       enum: {
-        values: ["admin", "manager", "client", "deliverer", "transporter", "supervisor","freelancer","cashier" , "loader"],
-        message: "{VALUE} is not a valid role.", 
+        values: ["admin", "manager", "client", "deliverer", "transporter", "supervisor", "freelancer", "cashier", "loader"],
+        message: "{VALUE} is not a valid role.",
       },
       default: "client",
     },
@@ -124,7 +125,7 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
       },
       default: "pending",
     },
-    
+
     imageUrl: {
       type: {
         // public_id: { type: String, default: "" },
@@ -160,7 +161,7 @@ userSchema.pre<IUser>("save", async function (next) {
       if (phone.startsWith('0')) {
         phone = '+213' + phone.substring(1);
       }
-      
+
       if (!phone.startsWith('+213')) {
         return next(new Error('Phone number must start with +213 or 0') as any);
       }
@@ -174,7 +175,7 @@ userSchema.pre<IUser>("save", async function (next) {
     }
 
     this.passwordHash = await bcrypt.hash(this.passwordHash, 10);
-    
+
     next();
 
   } catch (error: any) {
@@ -210,24 +211,24 @@ userSchema.methods.comparePassword = async function (
 
     return false;
   }
-  
+
   return await bcrypt.compare(enteredPassword, this.passwordHash);
 };
 
 
 
-userSchema.statics.normalizePhone = function(phone: string): string {
-  
+userSchema.statics.normalizePhone = function (phone: string): string {
+
   let normalized = phone.trim().replace(/[^\d+]/g, '').replace(/\s+/g, '');
-  
+
   if (normalized.startsWith('0')) {
     normalized = '+213' + normalized.substring(1);
   }
-  
+
   if (!normalized.startsWith('+213')) {
     throw new Error('Phone number must start with +213 or 0');
   }
-  
+
   return normalized;
 };
 
