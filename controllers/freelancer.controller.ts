@@ -11,7 +11,7 @@ import { buildUserFieldUpdates } from "./manager.controller";
 import PaymentModel from "../models/payment.model";
 import clientModel from "../models/client.model";
 import { sendPackageCreatedNotification } from "../services/notification.service";
-import { findNearestHub } from "../utils/branch.util";
+import { findBranchByCommune, findNearestHub, loadCommunes, lookupCommune } from "../utils/branch.util";
 
 
 
@@ -1621,3 +1621,819 @@ export const createPackage = catchAsyncError(
   },
 );
 
+
+
+
+
+
+// interface ICreatePackageBody {
+
+//   recipientName: string;
+//   recipientPhone: string;
+//   alternativePhone?: string;
+//   recipientAddress: string;
+//   recipientCity: string;
+//   recipientState: string;
+//   recipientPostalCode?: string;
+//   deliveryNotes?: string;
+
+//   deliveryLat?: number;
+//   deliveryLon?: number;
+
+
+//   weight: number;
+//   dimensions?: { length: number; width: number; height: number };
+//   isFragile?: boolean;
+//   type: "document" | "parcel" | "fragile" | "heavy" | "perishable" | "electronic" | "clothing";
+//   description?: string;
+//   declaredValue?: number;
+
+
+//   deliveryType: "home" | "branch_pickup";
+//   deliveryPriority?: "standard" | "express" | "same_day";
+//   /**
+//    * For branch_pickup:
+//    *   - Supply destinationBranchId (ObjectId string) to pin the branch directly, OR
+//    *   - Supply recipientCity (commune name / post-code) and omit destinationBranchId
+//    *     to let the system auto-resolve via the commune → branch mapping.
+//    *   - If both are supplied, destinationBranchId takes precedence.
+//    */
+//   destinationBranchId?: string;
+
+
+//   totalPrice: number;
+//   paymentMethod?: string;
+
+
+//   estimatedDeliveryTime?: string;
+// }
+
+
+
+
+
+// export const createPackage = catchAsyncError(
+//   async (req: Request, res: Response, next: NextFunction) => {
+
+//     const session = await mongoose.startSession();
+//     session.startTransaction();
+
+//     let transactionCommitted = false;
+
+//     try {
+//       const freelancerUserId = req.user?._id;
+
+//       if (!freelancerUserId) {
+//         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+//       }
+
+//       const freelancer = await resolveFreelancer(freelancerUserId, next);
+//       if (!freelancer) return;
+
+
+//       const {
+//         recipientName,
+//         recipientPhone,
+//         alternativePhone,
+//         recipientAddress,
+//         recipientCity,
+//         recipientState,
+//         recipientPostalCode,
+//         deliveryNotes,
+//         weight,
+//         dimensions,
+//         isFragile,
+//         type,
+//         description,
+//         declaredValue,
+//         deliveryType,
+//         deliveryPriority,
+//         destinationBranchId: providedDestinationBranchId,
+//         totalPrice,
+//         paymentMethod,
+//         estimatedDeliveryTime,
+//         deliveryLat,
+//         deliveryLon
+//       } = req.body as ICreatePackageBody;
+
+
+//       // ── Required fields validation ──────────────────────────────────────────
+//       if (
+//         !recipientName || !recipientPhone || !recipientAddress ||
+//         !recipientCity || !recipientState || !weight || !type ||
+//         !deliveryType || !totalPrice
+//       ) {
+//         throw new ErrorHandler(
+//           "recipientName, recipientPhone, recipientAddress, recipientCity, " +
+//           "recipientState, weight, type, deliveryType, and totalPrice are required.",
+//           400,
+//         );
+//       }
+
+
+//       if (typeof weight !== "number" || weight <= 0) {
+//         throw new ErrorHandler("weight must be a positive number.", 400);
+//       }
+
+//       if (typeof totalPrice !== "number" || totalPrice <= 0) {
+//         throw new ErrorHandler("totalPrice must be a positive number.", 400);
+//       }
+
+//       const VALID_TYPES = ["document", "parcel", "fragile", "heavy", "perishable", "electronic", "clothing"];
+//       if (!VALID_TYPES.includes(type)) {
+//         throw new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400);
+//       }
+
+//       if (!["home", "branch_pickup"].includes(deliveryType)) {
+//         throw new ErrorHandler("deliveryType must be 'home' or 'branch_pickup'.", 400);
+//       }
+
+
+//       // ── Phone number normalization ──────────────────────────────────────────
+//       let normalizedRecipientPhone: string;
+//       let normalizedAlternativePhone: string | undefined;
+
+//       try {
+//         normalizedRecipientPhone = normalizePhone(recipientPhone);
+//         if (alternativePhone) {
+//           normalizedAlternativePhone = normalizePhone(alternativePhone);
+//         }
+//       } catch (error: any) {
+//         throw new ErrorHandler(error.message || "Invalid phone number format.", 400);
+//       }
+
+
+//       // ── Origin branch validation ────────────────────────────────────────────
+//       const originBranchId = freelancer.defaultOriginBranchId;
+
+//       if (!originBranchId) {
+//         throw new ErrorHandler(
+//           "Your freelancer profile has no default origin branch set. Contact support.",
+//           400,
+//         );
+//       }
+
+
+//       // ── Determine destinationBranchId ───────────────────────────────────────
+//       let finalDestinationBranchId: mongoose.Types.ObjectId | undefined;
+//       let destinationBranchDoc: any = null;
+
+//       if (deliveryType === "branch_pickup") {
+//         // ── branch_pickup: two resolution paths ──────────────────────────────
+//         //
+//         // Path A — explicit ID supplied by the freelancer (existing behaviour,
+//         //          takes precedence over commune lookup).
+//         //
+//         // Path B — no ID supplied → auto-resolve from recipientCity using the
+//         //          commune → branch mapping (servesCommunes on BranchModel).
+//         //          recipientCity is already required by the top-level validation,
+//         //          so it is always available here.
+//         //
+//         // If neither path produces a branch, we surface a clear 400 with an
+//         // actionable message instead of a generic "required field" error.
+
+//         if (providedDestinationBranchId) {
+//           // ── Path A: explicit ObjectId ───────────────────────────────────────
+//           if (!mongoose.Types.ObjectId.isValid(providedDestinationBranchId)) {
+//             throw new ErrorHandler("Invalid destinationBranchId.", 400);
+//           }
+//           finalDestinationBranchId = new mongoose.Types.ObjectId(providedDestinationBranchId);
+
+//           destinationBranchDoc = await BranchModel
+//             .findById(finalDestinationBranchId)
+//             .session(session)
+//             .lean();
+
+//           if (!destinationBranchDoc || destinationBranchDoc.status !== "active") {
+//             throw new ErrorHandler("Destination branch not found or not active.", 404);
+//           }
+
+//         } else {
+//           // ── Path B: commune auto-resolve from recipientCity ─────────────────
+//           // recipientCity holds the city/commune the freelancer typed (e.g.
+//           // "Béjaïa", "bejaia", or post-code "06001").  findBranchByCommune
+//           // normalises and fuzzy-matches it against communes.json, then queries
+//           // the branch whose servesCommunes array contains that commune id.
+
+//           const communeResult = await findBranchByCommune(
+//             recipientCity,
+//             freelancer.companyId,
+//             session,
+//           );
+
+//           if (!communeResult) {
+//             // Give the freelancer a clear, actionable error.
+//             throw new ErrorHandler(
+//               `No branch found that serves "${recipientCity}" for branch_pickup. ` +
+//               "Please provide the destinationBranchId manually, or ask your manager " +
+//               "to assign this commune to a branch.",
+//               400,
+//             );
+//           }
+
+//           finalDestinationBranchId = communeResult.branchId;
+//           destinationBranchDoc     = communeResult.branchDoc;
+
+//           // Bonus: if the commune lookup returned GPS coordinates and the
+//           // freelancer did not provide them, use the commune centroid so that
+//           // the package has a location (useful for future map display).
+//           // We only fill them in — we never override explicit freelancer coords.
+//           // Note: for branch_pickup the location field is optional in the model,
+//           // so this is purely additive.
+//           //
+//           // (deliveryLat / deliveryLon are let-bound via destructuring above;
+//           //  TypeScript doesn't allow re-assigning const-destructured values,
+//           //  so we create local mutable copies here.)
+//         }
+
+//       } else if (deliveryType === "home") {
+//         // ── home delivery: route to the nearest REGIONAL MAIN HUB ────────────
+//         // This path is unchanged — GPS coords are required and we call
+//         // findNearestHub exactly as before.
+
+//         if (deliveryLat === undefined || deliveryLon === undefined) {
+//           throw new ErrorHandler(
+//             "GPS coordinates (deliveryLat, deliveryLon) are required for home delivery. " +
+//             "Please provide the customer's location for route optimization.",
+//             400
+//           );
+//         }
+
+//         if (deliveryLat < -90 || deliveryLat > 90 || deliveryLon < -180 || deliveryLon > 180) {
+//           throw new ErrorHandler(
+//             "Invalid GPS coordinates. Latitude must be between -90 and 90, longitude between -180 and 180.",
+//             400
+//           );
+//         }
+
+//         const nearestHubId = await findNearestHub(
+//           [deliveryLon, deliveryLat],
+//           freelancer.companyId
+//         );
+
+//         if (!nearestHubId) {
+//           throw new ErrorHandler(
+//             "No active hub found near the delivery address. " +
+//             "Please contact support to add hub coverage for this area.",
+//             400
+//           );
+//         }
+
+//         finalDestinationBranchId = nearestHubId;
+
+//         destinationBranchDoc = await BranchModel
+//           .findById(finalDestinationBranchId)
+//           .session(session)
+//           .lean();
+//       }
+
+
+//       // ── Validate origin branch ──────────────────────────────────────────────
+//       const originBranch = await BranchModel.findById(originBranchId).session(session).lean();
+
+//       if (!originBranch) {
+//         throw new ErrorHandler("Origin branch not found.", 404);
+//       }
+
+//       if (originBranch.status !== "active") {
+//         throw new ErrorHandler("Your origin branch is not currently active.", 400);
+//       }
+
+
+//       // Always start as pending — cashier claim/accept handles the rest
+//       const initialStatus: PackageStatus = "pending";
+
+
+//       // ── Build destination object ────────────────────────────────────────────
+//       // For branch_pickup via commune lookup we optionally enrich with commune
+//       // centroid coordinates when the freelancer did not supply GPS coords.
+//       // We derive resolved coords before building the object so the logic stays
+//       // in one place.
+
+//       let resolvedLat: number | undefined = deliveryLat;
+//       let resolvedLon: number | undefined = deliveryLon;
+
+//       if (
+//         deliveryType === "branch_pickup" &&
+//         !providedDestinationBranchId &&            // came via commune path
+//         resolvedLat === undefined &&
+//         resolvedLon === undefined
+//       ) {
+//         // findBranchByCommune returns the commune centroid. To access it here
+//         // we need the result — but it was already consumed above. Re-derive it
+//         // cheaply: look up the commune again (synchronous, in-memory cache).
+//         const commune = lookupCommune(recipientCity);
+//         if (commune) {
+//           const lon = parseFloat(commune.longitude);
+//           const lat = parseFloat(commune.latitude);
+//           if (!isNaN(lon) && !isNaN(lat)) {
+//             resolvedLon = lon;
+//             resolvedLat = lat;
+//           }
+//         }
+//       }
+
+//       const destination = {
+//         recipientName: recipientName.trim(),
+//         recipientPhone: normalizedRecipientPhone,
+//         alternativePhone: normalizedAlternativePhone,
+//         address: recipientAddress.trim(),
+//         city: recipientCity.trim(),
+//         state: recipientState.trim(),
+//         postalCode: recipientPostalCode?.trim(),
+//         notes: deliveryNotes?.trim(),
+//         ...(resolvedLat !== undefined && resolvedLon !== undefined && {
+//           location: {
+//             type: "Point" as const,
+//             coordinates: [resolvedLon, resolvedLat] as [number, number],
+//           },
+//         }),
+//       };
+
+
+//       const trackingNumber = generateTrackingNumber();
+
+
+//       const clientId = await resolveClientByPhone(
+//         recipientPhone,
+//         recipientName,
+//         recipientAddress,
+//         recipientCity,
+//         recipientState,
+//         alternativePhone,
+//         session,
+//       );
+
+
+//       // ── Create package document ─────────────────────────────────────────────
+//       const [packageDoc] = await PackageModel.create(
+//         [
+//           {
+//             trackingNumber,
+//             companyId: freelancer.companyId,
+//             senderId: freelancerUserId,
+//             senderType: "freelancer",
+//             clientId,
+
+//             weight,
+//             dimensions,
+//             isFragile: isFragile ?? false,
+//             type,
+//             description: description?.trim(),
+//             declaredValue,
+
+//             originBranchId,
+//             currentBranchId: originBranchId,
+//             destinationBranchId: finalDestinationBranchId,
+
+//             destination,
+
+//             status: initialStatus,
+//             deliveryType,
+//             deliveryPriority: deliveryPriority ?? "standard",
+
+//             totalPrice,
+//             paymentStatus: "pending",
+//             paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
+
+//             maxAttempts: 3,
+//             attemptCount: 0,
+//             issues: [],
+//             returnInfo: { isReturn: false },
+
+//             estimatedDeliveryTime: estimatedDeliveryTime
+//               ? new Date(estimatedDeliveryTime)
+//               : undefined,
+
+//             trackingHistory: [
+//               {
+//                 status: "pending",
+//                 branchId: originBranchId,
+//                 userId: freelancerUserId,
+//                 notes: `Package registered by freelancer. ${deliveryType === "home" ? `Routed to hub: ${destinationBranchDoc?.name || "unknown"}` : ""}`,
+//                 timestamp: new Date(),
+//               },
+//             ],
+//           },
+//         ],
+//         { session },
+//       );
+
+
+//       await PackageHistoryModel.create(
+//         [
+//           {
+//             packageId: packageDoc._id,
+//             status: "pending" as PackageStatus,
+//             branchId: originBranchId,
+//             handledBy: freelancerUserId,
+//             handlerRole: "freelancer",
+//             notes: deliveryType === "home"
+//               ? `Package registered for home delivery. Will be routed to hub: ${destinationBranchDoc?.name || "unknown"}`
+//               : "Package registered by freelancer via mobile app.",
+//             timestamp: new Date(),
+//           },
+//         ],
+//         { session },
+//       );
+
+
+//       // ── Create payment record ───────────────────────────────────────────────
+//       await PaymentModel.create(
+//         [
+//           {
+//             companyId: freelancer.companyId,
+//             packageId: packageDoc._id,
+//             trackingNumber,
+//             branchId: originBranchId,
+//             clientId,
+//             senderId: freelancerUserId,
+//             collectionMethod: deliveryType === "home" ? "home_delivery" : "branch_pickup",
+//             amount: totalPrice,
+//             paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
+//             status: "pending",
+//           },
+//         ],
+//         { session },
+//       );
+
+
+//       // ── Update freelancer stats ─────────────────────────────────────────────
+//       await FreelancerModel.findByIdAndUpdate(
+//         freelancer._id,
+//         {
+//           $inc: { "statistics.totalPackagesSent": 1 },
+//           $set: { lastActiveAt: new Date() },
+//         },
+//         { session },
+//       );
+
+//       await session.commitTransaction();
+//       transactionCommitted = true;
+
+
+//       sendPackageCreatedNotification(
+//         freelancerUserId.toString(),
+//         "freelancer",
+//         packageDoc._id.toString(),
+//         trackingNumber
+//       ).catch(error => {
+//         console.error('Package created notification failed:', error);
+//       });
+
+
+//       // ── Build response message ──────────────────────────────────────────────
+//       let responseMessage: string;
+//       if (deliveryType === "branch_pickup") {
+//         responseMessage = "Package registered successfully. Please print the bordereau and bring the package to your branch counter.";
+//       } else {
+//         responseMessage = `Package registered successfully. It will be routed to ${destinationBranchDoc?.name || "the nearest hub"} for delivery to the customer.`;
+//       }
+
+//       return res.status(201).json({
+//         success: true,
+//         message: responseMessage,
+//         data: {
+//           packageId: packageDoc._id,
+//           status: "pending",
+//           destinationBranch: destinationBranchDoc ? {
+//             id: destinationBranchDoc._id,
+//             name: destinationBranchDoc.name,
+//             code: destinationBranchDoc.code,
+//           } : null,
+
+//           bordereau: {
+//             trackingNumber,
+//             barcodeFormat: "CODE128",
+//             generatedAt: new Date().toISOString(),
+
+//             sender: {
+//               businessName: freelancer.businessName ?? null,
+//               phone: (req.user as any)?.phone ?? null,
+//             },
+
+//             recipient: {
+//               name: destination.recipientName,
+//               phone: destination.recipientPhone,
+//               address: destination.address,
+//               city: destination.city,
+//               state: destination.state,
+//               postalCode: destination.postalCode ?? null,
+//             },
+
+//             package: {
+//               weight,
+//               type,
+//               isFragile: isFragile ?? false,
+//               declaredValue: declaredValue ?? null,
+//               deliveryType,
+//               deliveryPriority: deliveryPriority ?? "standard",
+//             },
+
+//             originBranch: {
+//               id: originBranch._id,
+//               name: originBranch.name,
+//               code: originBranch.code,
+//               address: originBranch.address,
+//             },
+
+//             destinationBranch: destinationBranchDoc
+//               ? {
+//                   id: destinationBranchDoc._id,
+//                   name: destinationBranchDoc.name,
+//                   code: destinationBranchDoc.code,
+//                   address: destinationBranchDoc.address,
+//                 }
+//               : null,
+
+//             totalPrice,
+//             paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
+//           },
+
+//           createdAt: packageDoc.createdAt,
+//         },
+//       });
+
+//     } catch (error: any) {
+
+//       if (error.name === "ValidationError") {
+//         return next(
+//           new ErrorHandler(
+//             Object.values(error.errors)
+//               .map((e: any) => e.message)
+//               .join(", "),
+//             400,
+//           ),
+//         );
+//       }
+
+//       return next(error);
+
+//     } finally {
+//       if (!transactionCommitted) {
+//         await session.abortTransaction().catch(() => {});
+//       }
+//       await session.endSession();
+//     }
+//   },
+// );
+
+
+
+
+// interface ISearchCommunesQuery {
+//   search: string;        // The commune name or post code the freelancer is typing
+//   companyId: string;     // From freelancer's profile
+// }
+
+// interface IServedCommuneResult {
+//   commune: {
+//     id: string;
+//     name: string;
+//     post_code: string;
+//     wilaya_id: string;
+//     ar_name: string;
+//     coordinates: [number, number] | null;
+//   };
+//   branch: {
+//     id: string;
+//     name: string;
+//     code: string;
+//     address: {
+//       street: string;
+//       city: string;
+//       state: string;
+//       postalCode?: string;
+//     };
+//     distance?: number;  // Optional: distance from commune to branch in km
+//   };
+// }
+
+// /**
+//  * GET /api/freelancer/communes/search?search=béjaïa&companyId=...
+//  * 
+//  * For branch_pickup: Autocomplete communes that the company serves.
+//  * Returns matching communes with the branch that will handle the pickup.
+//  * 
+//  * Used by freelancer mobile app while typing the recipient city.
+//  */
+// export const searchServedCommunes = catchAsyncError(
+//   async (req: Request, res: Response, next: NextFunction) => {
+//     const { search, companyId } = req.query as any;
+
+//     if (!search || typeof search !== "string" || search.trim().length === 0) {
+//       return res.status(200).json({
+//         success: true,
+//         data: [],
+//         message: "No search term provided",
+//       });
+//     }
+
+//     if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
+//       return next(new ErrorHandler("Invalid company ID", 400));
+//     }
+
+//     const searchTerm = search.trim().toLowerCase();
+
+//     // Step 1: Find all branches for this company that have servesCommunes
+//     const branchesWithCommunes = await BranchModel.find({
+//       companyId: new mongoose.Types.ObjectId(companyId),
+//       status: "active",
+//       servesCommunes: { $exists: true, $ne: [] },
+//     })
+//       .select("_id name code address location servesCommunes")
+//       .lean();
+
+//     if (branchesWithCommunes.length === 0) {
+//       return res.status(200).json({
+//         success: true,
+//         data: [],
+//         message: "No branches have been configured to serve specific communes yet",
+//       });
+//     }
+
+//     // Step 2: Collect all commune IDs that this company serves
+//     const servedCommuneIds = new Set<string>();
+//     branchesWithCommunes.forEach((branch) => {
+//       (branch.servesCommunes || []).forEach((communeId: string) => {
+//         servedCommuneIds.add(communeId);
+//       });
+//     });
+
+//     // Step 3: Search for matching communes in communes.json
+//     // We need to search through all communes and find ones that:
+//     // - Are in servedCommuneIds (company actually serves them)
+//     // - Match the search term (name, post_code, or ar_name)
+    
+//     const allCommunes = loadCommunes(); // You'll need to export this from branch.util.ts
+//     const matchingResults: IServedCommuneResult[] = [];
+
+//     for (const commune of allCommunes) {
+//       // Skip if this commune is not served by the company
+//       if (!servedCommuneIds.has(commune.id)) continue;
+
+//       // Check if commune matches search term
+//       const matchesName = commune.name.toLowerCase().includes(searchTerm);
+//       const matchesArName = commune.ar_name.toLowerCase().includes(searchTerm);
+//       const matchesPostCode = commune.post_code.includes(searchTerm);
+
+//       if (!matchesName && !matchesArName && !matchesPostCode) continue;
+
+//       // Find which branch serves this commune
+//       const servingBranch = branchesWithCommunes.find((branch) =>
+//         branch.servesCommunes?.includes(commune.id)
+//       );
+
+//       if (!servingBranch) continue;
+
+//       // Parse coordinates
+//       const lon = parseFloat(commune.longitude);
+//       const lat = parseFloat(commune.latitude);
+//       const coordinates: [number, number] | null =
+//         !isNaN(lon) && !isNaN(lat) ? [lon, lat] : null;
+
+//       // Calculate distance between commune and branch (if both have coordinates)
+//       let distance: number | undefined;
+//       if (coordinates && servingBranch.location?.coordinates) {
+//         const [branchLon, branchLat] = servingBranch.location.coordinates;
+//         distance = haversineKm(coordinates, [branchLon, branchLat]);
+//       }
+
+//       matchingResults.push({
+//         commune: {
+//           id: commune.id,
+//           name: commune.name,
+//           post_code: commune.post_code,
+//           wilaya_id: commune.wilaya_id,
+//           ar_name: commune.ar_name,
+//           coordinates,
+//         },
+//         branch: {
+//           id: servingBranch._id.toString(),
+//           name: servingBranch.name,
+//           code: servingBranch.code,
+//           address: servingBranch.address,
+//           ...(distance !== undefined && { distance }),
+//         },
+//       });
+//     }
+
+//     // Sort results: exact matches first, then by name similarity
+//     matchingResults.sort((a, b) => {
+//       const aExact = a.commune.name.toLowerCase() === searchTerm;
+//       const bExact = b.commune.name.toLowerCase() === searchTerm;
+//       if (aExact && !bExact) return -1;
+//       if (!aExact && bExact) return 1;
+//       return a.commune.name.localeCompare(b.commune.name);
+//     });
+
+//     // Limit to top 20 results
+//     const limitedResults = matchingResults.slice(0, 20);
+
+//     return res.status(200).json({
+//       success: true,
+//       data: limitedResults,
+//       message: limitedResults.length === 0
+//         ? `We don't serve "${searchTerm}". Please check the name or contact support.`
+//         : `Found ${limitedResults.length} served commune(s) matching "${searchTerm}"`,
+//     });
+//   }
+// );
+
+// /**
+//  * GET /api/freelancer/communes/check
+//  * 
+//  * Quick check if a specific commune is served (returns branch or null)
+//  * Useful for validation before submitting the form
+//  */
+// export const checkCommuneServed = catchAsyncError(
+//   async (req: Request, res: Response, next: NextFunction) => {
+//     const { communeName, companyId } = req.query as any;
+
+//     if (!communeName || typeof communeName !== "string") {
+//       return next(new ErrorHandler("Commune name is required", 400));
+//     }
+
+//     if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
+//       return next(new ErrorHandler("Invalid company ID", 400));
+//     }
+
+//     // Look up the commune in communes.json
+//     const commune = lookupCommune(communeName);
+//     if (!commune) {
+//       return res.status(200).json({
+//         success: true,
+//         data: null,
+//         message: `"${communeName}" is not a recognized commune in Algeria`,
+//       });
+//     }
+
+//     // Find branch that serves this commune
+//     const branch = await BranchModel.findOne({
+//       companyId: new mongoose.Types.ObjectId(companyId),
+//       status: "active",
+//       servesCommunes: commune.id,
+//     })
+//       .select("_id name code address location")
+//       .lean();
+
+//     if (!branch) {
+//       return res.status(200).json({
+//         success: true,
+//         data: null,
+//         message: `We don't serve "${commune.name}". Please choose a different commune or contact support.`,
+//       });
+//     }
+
+//     // Parse commune coordinates
+//     const lon = parseFloat(commune.longitude);
+//     const lat = parseFloat(commune.latitude);
+//     const coordinates: [number, number] | null =
+//       !isNaN(lon) && !isNaN(lat) ? [lon, lat] : null;
+
+//     // Calculate distance
+//     let distance: number | undefined;
+//     if (coordinates && branch.location?.coordinates) {
+//       const [branchLon, branchLat] = branch.location.coordinates;
+//       distance = haversineKm(coordinates, [branchLon, branchLat]);
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       data: {
+//         commune: {
+//           id: commune.id,
+//           name: commune.name,
+//           post_code: commune.post_code,
+//           wilaya_id: commune.wilaya_id,
+//           coordinates,
+//         },
+//         branch: {
+//           id: branch._id.toString(),
+//           name: branch.name,
+//           code: branch.code,
+//           address: branch.address,
+//           ...(distance !== undefined && { distance }),
+//         },
+//       },
+//       message: `"${commune.name}" is served by ${branch.name}`,
+//     });
+//   }
+// );
+
+// // Helper function (if not already exported from branch.util.ts)
+// function haversineKm(a: [number, number], b: [number, number]): number {
+//   const R = 6371;
+//   const dLat = toRad(b[1] - a[1]);
+//   const dLon = toRad(b[0] - a[0]);
+//   const sinLat = Math.sin(dLat / 2);
+//   const sinLon = Math.sin(dLon / 2);
+//   const h =
+//     sinLat * sinLat +
+//     Math.cos(toRad(a[1])) * Math.cos(toRad(b[1])) * sinLon * sinLon;
+//   return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+// }
+
+// function toRad(deg: number): number {
+//   return (deg * Math.PI) / 180;
+// }
