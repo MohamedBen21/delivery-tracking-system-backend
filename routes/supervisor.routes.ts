@@ -22,6 +22,7 @@ import {
   getMyDeliverers,
   getMyFreelancers,
   getMyLoaders,
+  getMyRoutes,
   getPackage,
   getPackageHistory,
   getPackagesByBranch,
@@ -249,6 +250,16 @@ supervisorRouter.patch(
   "/branches/:branchId/loaders/:loaderId/toggle-block",
   ...supMgrAdmin,
   toggleBlockLoader
+);
+
+
+
+
+supervisorRouter.get(
+  "/routes/get-my-routes",
+  isAuthenticated, 
+  authorizeRoles("supervisor" , "transporter", "deliverer"),
+  getMyRoutes
 );
 
 export default supervisorRouter;

@@ -10839,6 +10839,7 @@ export const getMyDeliveries = catchAsyncError(
       }
     }
 
+    // enpoint ?statuses=delivered,cancelled
     if (req.query.statuses) {
       const rawStatuses = (req.query.statuses as string).split(",").map(s => s.trim());
       const expandedStatuses: string[] = [];
