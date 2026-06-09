@@ -406,10 +406,10 @@ try {
     }
     return next(error);
 } finally {
-    if (!transactionCommitted) {
+  if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
     await session.abortTransaction().catch(() => {});
-    }
-    await session.endSession();
+  }
+  await session.endSession();
 }
 },
 );
@@ -601,7 +601,7 @@ export const acceptPackage = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -813,8 +813,8 @@ try {
     }
     return next(error);
 } finally {
-    if (!transactionCommitted) {
-    await session.abortTransaction().catch(() => {});
+    if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      await session.abortTransaction().catch(() => {});
     }
     await session.endSession();
 }

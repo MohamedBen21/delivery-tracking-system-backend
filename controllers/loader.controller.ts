@@ -348,8 +348,9 @@ export const createManifest = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed) await session.abortTransaction().catch(() => {});
-
+      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => {});
+      }
       await session.endSession();
     }
   },
@@ -582,8 +583,9 @@ export const scanPackageIn = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed) await session.abortTransaction().catch(() => {});
-
+      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => {});
+      }
       await session.endSession();
     }
   },
@@ -733,8 +735,9 @@ export const removePackageFromManifest = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed) await session.abortTransaction().catch(() => {});
-
+      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => {});
+      }
       await session.endSession();
     }
   },
@@ -895,8 +898,9 @@ export const sealManifest = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed) await session.abortTransaction().catch(() => {});
-
+      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => {});
+      }
       await session.endSession();
     }
   },
@@ -1126,7 +1130,9 @@ export const loadManifestOnTruck = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
-      if (!committed) await session.abortTransaction().catch(() => {});
+      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => {});
+      }
       await session.endSession();
     }
   },
@@ -1281,8 +1287,9 @@ export const markManifestDeparted = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed) await session.abortTransaction().catch(() => {});
-
+      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => {});
+      }
       await session.endSession();
     }
   },
@@ -1448,7 +1455,9 @@ export const markManifestArrived = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
-      if (!committed) await session.abortTransaction().catch(() => {});
+      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => {});
+      }
       await session.endSession();
     }
   },
@@ -1700,7 +1709,9 @@ export const scanPackageOut = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
-      if (!committed) await session.abortTransaction().catch(() => {});
+      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => {});
+      }
       await session.endSession();
     }
   },
@@ -1922,8 +1933,9 @@ export const remanifestPackage = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed) await session.abortTransaction().catch(() => {});
-
+      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => {});
+      }
       await session.endSession();
     }
   },
@@ -2094,8 +2106,9 @@ export const closeManifest = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed) await session.abortTransaction().catch(() => {});
-
+      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => {});
+      }
       await session.endSession();
     }
   },
@@ -2263,8 +2276,9 @@ export const flagDiscrepancy = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed) await session.abortTransaction().catch(() => {});
-      
+      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => {});
+      }
       await session.endSession();
     }
   },

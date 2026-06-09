@@ -663,10 +663,9 @@ export const cancelPackage = catchAsyncError(
     }
     finally {
 
-      if (!transactionCommitted) {
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
         await session.abortTransaction().catch(() => {});
       }
-      
       await session.endSession();
     }
   },
@@ -1613,7 +1612,7 @@ export const createPackage = catchAsyncError(
       return next(error);
 
     } finally {
-      if (!transactionCommitted) {
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -1621,6 +1620,10 @@ export const createPackage = catchAsyncError(
   },
 );
 
+  // if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+  //   await session.abortTransaction().catch(() => {});
+  // }
+  // await session.endSession();
 
 
 
@@ -2170,10 +2173,10 @@ export const createPackage = catchAsyncError(
 //       return next(error);
 
 //     } finally {
-//       if (!transactionCommitted) {
-//         await session.abortTransaction().catch(() => {});
-//       }
-//       await session.endSession();
+      // if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      //   await session.abortTransaction().catch(() => {});
+      // }
+      // await session.endSession();
 //     }
 //   },
 // );

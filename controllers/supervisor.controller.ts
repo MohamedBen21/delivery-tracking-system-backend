@@ -458,10 +458,10 @@ export const updateDeliverer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
 
     }
   }
@@ -579,10 +579,10 @@ export const toggleBlockDeliverer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
 
     }
   }
@@ -944,10 +944,10 @@ export const createTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -1125,10 +1125,10 @@ export const updateTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -1261,10 +1261,10 @@ export const toggleBlockTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -2103,11 +2103,10 @@ export const createPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -2357,11 +2356,10 @@ export const updatePackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -2519,11 +2517,10 @@ export const toggleCancelPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -2845,11 +2842,10 @@ export const addPackageIssue = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
 
   }
@@ -2996,11 +2992,10 @@ export const resolvePackageIssue = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
 
   }
@@ -3225,11 +3220,10 @@ export const createFreelancer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -3383,11 +3377,10 @@ export const updateFreelancer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
 
     }
   }
@@ -3504,11 +3497,10 @@ export const toggleBlockFreelancer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
 
   }
@@ -3800,11 +3792,10 @@ export const assignDeliverer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -3947,10 +3938,10 @@ export const assignTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -4081,10 +4072,10 @@ export const assignFreelancer = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -5640,11 +5631,10 @@ export const cancelPackage = catchAsyncError(
 
     } finally {
     
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   },
 );
@@ -6845,10 +6835,10 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   },
 );
@@ -7154,10 +7144,10 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   },
 );
@@ -7308,10 +7298,10 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   },
 );
@@ -7560,10 +7550,10 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   },
 );
@@ -7766,11 +7756,10 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   },
 );
@@ -7985,11 +7974,10 @@ export const deliverPackageFail = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
 
     }
   },
@@ -8182,11 +8170,10 @@ export const deliveryReturnPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
 
     }
   },
@@ -8432,11 +8419,10 @@ export const updateRoute = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
 
     }
   },
@@ -9063,11 +9049,10 @@ export const toggleCancelRoute = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
       
     }
   },
@@ -13196,10 +13181,10 @@ export const generateStopQr = catchAsyncError(
     } catch (error: any) {
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   },
 );
@@ -13433,10 +13418,10 @@ export const scanStopQr = catchAsyncError(
     } catch (error: any) {
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   },
 );
@@ -14079,8 +14064,10 @@ export const createCashier = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) await session.abortTransaction().catch(() => {});
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -14218,8 +14205,10 @@ export const updateCashier = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) await session.abortTransaction().catch(() => {});
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -14330,8 +14319,10 @@ export const toggleBlockCashier = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) await session.abortTransaction().catch(() => {});
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -14669,8 +14660,10 @@ export const createLoader = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) await session.abortTransaction().catch(() => {});
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -14826,8 +14819,10 @@ export const updateLoader = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) await session.abortTransaction().catch(() => {});
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -14938,8 +14933,10 @@ export const toggleBlockLoader = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) await session.abortTransaction().catch(() => {});
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );

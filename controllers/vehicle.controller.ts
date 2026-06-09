@@ -474,10 +474,10 @@ export const createVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   },
 );
@@ -854,10 +854,10 @@ export const updateVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   },
 );
@@ -940,10 +940,10 @@ export const toggleVehicleStatus = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -1507,10 +1507,10 @@ export const assignVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
@@ -1618,10 +1618,10 @@ export const releaseVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted) {
-        await session.abortTransaction().catch(() => {});
-      }
-      await session.endSession();
+        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+          await session.abortTransaction().catch(() => {});
+        }
+        await session.endSession();
     }
   }
 );
