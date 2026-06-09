@@ -58,7 +58,7 @@ interface ICreateDeliverer {
 interface IUpdateDeliverer {
   email?: string;
   phone?: string;
-  username?: string;
+  // username?: string;
   firstName?: string;
   lastName?: string;
   // imageUrl?: string;
@@ -107,7 +107,7 @@ export const createDeliverer = catchAsyncError(
       if (!email || !phone  || !password || !firstName || !lastName) {
 
         return next(
-          new ErrorHandler("email, phone, username, password, firstName, and lastName are required", 400)
+          new ErrorHandler("email, phone, password, firstName, and lastName are required", 400)
         );
       }
 
@@ -254,7 +254,7 @@ export const createDeliverer = catchAsyncError(
       });
 
       const populatedDeliverer = await DelivererModel.findById(deliverer[0]._id)
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("branchId", "name code address status")
         .populate("companyId", "name businessType status")
         .lean();
@@ -332,10 +332,10 @@ export const updateDeliverer = catchAsyncError(
         return next(new ErrorHandler("phone must be a string", 400));
       }
 
-      if (body.username !== undefined && typeof body.username !== "string") {
+      // if (body.username !== undefined && typeof body.username !== "string") {
 
-        return next(new ErrorHandler("username must be a string", 400));
-      }
+      //   return next(new ErrorHandler("username must be a string", 400));
+      // }
 
       if (body.currentLocation) {
         if (
@@ -388,17 +388,17 @@ export const updateDeliverer = catchAsyncError(
         );
       }
 
-      if (body.username) {
-        duplicateChecks.push(
-          userModel.findOne({ username: body.username, _id: { $ne: deliverer.userId } }).session(session)
-        );
-      }
+      // if (body.username) {
+      //   duplicateChecks.push(
+      //     userModel.findOne({ username: body.username, _id: { $ne: deliverer.userId } }).session(session)
+      //   );
+      // }
 
       const duplicateResults = await Promise.all(duplicateChecks);
 
       if (duplicateResults.some((result) => result !== null)) {
 
-        throw new ErrorHandler("Email, phone, or username already exists", 400);
+        throw new ErrorHandler("Email or phone already exists", 400);
       }
 
 
@@ -407,7 +407,7 @@ export const updateDeliverer = catchAsyncError(
 
       if (body.email) userUpdates.email = body.email;
       if (body.phone) userUpdates.phone = userModel.normalizePhone(body.phone);
-      if (body.username) userUpdates.username = body.username;
+      // if (body.username) userUpdates.username = body.username;
       if (body.firstName) userUpdates.firstName = body.firstName;
       if (body.lastName) userUpdates.lastName = body.lastName;
       // if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
@@ -436,7 +436,7 @@ export const updateDeliverer = catchAsyncError(
       transactionCommitted = true;
 
       const populatedDeliverer = await DelivererModel.findById(delivererId)
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("branchId", "name code address status")
         .populate("companyId", "name businessType status")
         .lean();
@@ -555,7 +555,7 @@ export const toggleBlockDeliverer = catchAsyncError(
       });
 
       const updatedDeliverer = await DelivererModel.findById(delivererId)
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("branchId", "name code address status")
         .lean();
 
@@ -610,7 +610,7 @@ export const getDeliverer = catchAsyncError(
 
     const [deliverer, supervisor, requestingUser] = await Promise.all([
       DelivererModel.findOne({ _id: delivererId, branchId })
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("branchId", "name code address status")
         .populate("companyId", "name businessType status")
         .lean(),
@@ -706,7 +706,7 @@ export const getMyDeliverers = catchAsyncError(
     }
 
     const deliverers = await DelivererModel.find(delivererQuery)
-      .populate("userId", "firstName lastName email phone username imageUrl role status")
+      .populate("userId", "firstName lastName email phone imageUrl role status")
       .populate("branchId", "name code address status")
       .sort({ createdAt: -1 })
       .lean();
@@ -738,7 +738,7 @@ interface ICreateTransporter {
 
   email: string;
   phone: string;
-  username: string;
+  // username: string;
   password: string;
   firstName: string;
   lastName: string;
@@ -751,7 +751,7 @@ interface IUpdateTransporter {
 
   email?: string;
   phone?: string;
-  username?: string;
+  // username?: string;
   firstName?: string;
   lastName?: string;
   // imageUrl?: string;
@@ -787,7 +787,7 @@ export const createTransporter = catchAsyncError(
       const {
         email,
         phone,
-        username,
+        // username,
         password,
         firstName,
         lastName,
@@ -795,16 +795,16 @@ export const createTransporter = catchAsyncError(
         documents,
       } = req.body as ICreateTransporter;
 
-      if (!email || !phone || !username || !password || !firstName || !lastName) {
+      if (!email || !phone ||  !password || !firstName || !lastName) {
         return next(
-          new ErrorHandler("email, phone, username, password, firstName, and lastName are required", 400)
+          new ErrorHandler("email, phone, password, firstName, and lastName are required", 400)
         );
       }
 
       if (
         typeof email !== "string" ||
         typeof phone !== "string" ||
-        typeof username !== "string" ||
+        // typeof username !== "string" ||
         typeof password !== "string" ||
         typeof firstName !== "string" ||
         typeof lastName !== "string"
@@ -855,10 +855,10 @@ export const createTransporter = catchAsyncError(
 
       const normalizedPhone = userModel.normalizePhone(phone);
 
-      const [existingEmail, existingPhone, existingUsername] = await Promise.all([
+      const [existingEmail, existingPhone] = await Promise.all([
         userModel.findOne({ email }).session(session),
         userModel.findOne({ phone: normalizedPhone }).session(session),
-        userModel.findOne({ username }).session(session),
+        // userModel.findOne({ username }).session(session),
       ]);
 
       if (existingEmail) {
@@ -869,16 +869,16 @@ export const createTransporter = catchAsyncError(
         throw new ErrorHandler("Phone number already exists", 400);
       }
 
-      if (existingUsername) {
-        throw new ErrorHandler("Username already exists", 400);
-      }
+      // if (existingUsername) {
+      //   throw new ErrorHandler("Username already exists", 400);
+      // }
 
       const user = await userModel.create(
         [
           {
             email,
             phone,
-            username,
+            // username,
             passwordHash: password,
             firstName,
             lastName,
@@ -927,7 +927,7 @@ export const createTransporter = catchAsyncError(
       });
 
       const populatedTransporter = await TransporterModel.findById(transporter[0]._id)
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("companyId", "name businessType status")
         .lean();
 
@@ -991,9 +991,9 @@ export const updateTransporter = catchAsyncError(
         return next(new ErrorHandler("phone must be a string", 400));
       }
 
-      if (body.username !== undefined && typeof body.username !== "string") {
-        return next(new ErrorHandler("username must be a string", 400));
-      }
+      // if (body.username !== undefined && typeof body.username !== "string") {
+      //   return next(new ErrorHandler("username must be a string", 400));
+      // }
 
       if (body.currentBranchId !== undefined && !mongoose.Types.ObjectId.isValid(body.currentBranchId)) {
         return next(new ErrorHandler("Invalid branch ID", 400));
@@ -1058,16 +1058,16 @@ export const updateTransporter = catchAsyncError(
         );
       }
 
-      if (body.username) {
-        duplicateChecks.push(
-          userModel.findOne({ username: body.username, _id: { $ne: transporter.userId } }).session(session)
-        );
-      }
+      // if (body.username) {
+      //   duplicateChecks.push(
+      //     userModel.findOne({ username: body.username, _id: { $ne: transporter.userId } }).session(session)
+      //   );
+      // }
 
       const duplicateResults = await Promise.all(duplicateChecks);
 
       if (duplicateResults.some((result) => result !== null)) {
-        throw new ErrorHandler("Email, phone, or username already exists", 400);
+        throw new ErrorHandler("Email or phone already exists", 400);
       }
 
       const userUpdates: any = {};
@@ -1075,7 +1075,7 @@ export const updateTransporter = catchAsyncError(
 
       if (body.email) userUpdates.email = body.email;
       if (body.phone) userUpdates.phone = userModel.normalizePhone(body.phone);
-      if (body.username) userUpdates.username = body.username;
+      // if (body.username) userUpdates.username = body.username;
       if (body.firstName) userUpdates.firstName = body.firstName;
       if (body.lastName) userUpdates.lastName = body.lastName;
       // if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
@@ -1107,7 +1107,7 @@ export const updateTransporter = catchAsyncError(
       transactionCommitted = true;
 
       const populatedTransporter = await TransporterModel.findById(transporterId)
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("companyId", "name businessType status")
         .populate("currentBranchId", "name code address status")
         .lean();
@@ -1240,7 +1240,7 @@ export const toggleBlockTransporter = catchAsyncError(
       });
 
       const updatedTransporter = await TransporterModel.findById(transporterId)
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("companyId", "name businessType status")
         .populate("currentBranchId", "name code address status")
         .lean();
@@ -1289,7 +1289,7 @@ export const getTransporter = catchAsyncError(
     }
 
     const transporter = await TransporterModel.findOne({ _id: transporterId, companyId })
-      .populate("userId", "firstName lastName email phone username imageUrl role status")
+      .populate("userId", "firstName lastName email phone imageUrl role status")
       .populate("companyId", "name businessType status")
       .populate("currentBranchId", "name code address status")
       .populate("currentVehicleId", "type brand model registrationNumber")
@@ -1423,7 +1423,7 @@ export const getMyTransporters = catchAsyncError(
     }
 
     const transporters = await TransporterModel.find(transporterQuery)
-      .populate("userId", "firstName lastName email phone username imageUrl role status")
+      .populate("userId", "firstName lastName email phone imageUrl role status")
       .populate("currentBranchId", "name code address status")
       .populate("currentVehicleId", "type brand model registrationNumber")
       .sort({ createdAt: -1 })
@@ -2494,7 +2494,7 @@ export const toggleCancelPackage = catchAsyncError(
       }
 
       const updatedPackage = await PackageModel.findById(packageId)
-        .populate("clientId", "firstName lastName email phone username")
+        .populate("clientId", "firstName lastName email phone")
         .populate("originBranchId", "name code address")
         .populate("currentBranchId", "name code address")
         .populate("destinationBranchId", "name code address")
@@ -2548,7 +2548,7 @@ export const getPackage = catchAsyncError(
         _id: packageId,
         $or: [{ originBranchId: branchId }, { currentBranchId: branchId }],
       })
-        .populate("clientId", "firstName lastName email phone username imageUrl")
+        .populate("clientId", "firstName lastName email phone imageUrl")
         .populate("originBranchId", "name code address status")
         .populate("currentBranchId", "name code address status")
         .populate("destinationBranchId", "name code address status")
@@ -2679,7 +2679,7 @@ export const getMyBranchPackages = catchAsyncError(
 
     const [packages, totalCount] = await Promise.all([
       PackageModel.find(packageQuery)
-        .populate("clientId", "firstName lastName email phone username")
+        .populate("clientId", "firstName lastName email phone")
         .populate("originBranchId", "name code")
         .populate("currentBranchId", "name code")
         .populate("destinationBranchId", "name code")
@@ -2822,7 +2822,7 @@ export const addPackageIssue = catchAsyncError(
       });
 
       const updatedPackage = await PackageModel.findById(packageId)
-        .populate("clientId", "firstName lastName email phone username")
+        .populate("clientId", "firstName lastName email phone")
         .lean();
 
       return res.status(200).json({
@@ -2972,7 +2972,7 @@ export const resolvePackageIssue = catchAsyncError(
       });
 
       const updatedPackage = await PackageModel.findById(packageId)
-        .populate("clientId", "firstName lastName email phone username")
+        .populate("clientId", "firstName lastName email phone")
         .lean();
 
       return res.status(200).json({
@@ -3007,7 +3007,7 @@ export const resolvePackageIssue = catchAsyncError(
 interface ICreateFreelancer {
   email: string;
   phone: string;
-  username: string;
+  // username: string;
   password: string;
   firstName: string;
   lastName: string;
@@ -3022,7 +3022,7 @@ interface ICreateFreelancer {
 interface IUpdateFreelancer {
   email?: string;
   phone?: string;
-  username?: string;
+  // username?: string;
   firstName?: string;
   lastName?: string;
   // imageUrl?: string;
@@ -3060,7 +3060,7 @@ export const createFreelancer = catchAsyncError(
       const {
         email,
         phone,
-        username,
+        // username,
         password,
         firstName,
         lastName,
@@ -3070,10 +3070,10 @@ export const createFreelancer = catchAsyncError(
         preferredDeliveryType,
       } = req.body as ICreateFreelancer;
 
-      if (!email || !phone || !username || !password || !firstName || !lastName) {
+      if (!email || !phone  || !password || !firstName || !lastName) {
 
         return next(
-          new ErrorHandler("email, phone, username, password, firstName, and lastName are required", 400)
+          new ErrorHandler("email, phone, password, firstName, and lastName are required", 400)
         );
       }
 
@@ -3081,7 +3081,7 @@ export const createFreelancer = catchAsyncError(
       if (
         typeof email !== "string" ||
         typeof phone !== "string" ||
-        typeof username !== "string" ||
+        // typeof username !== "string" ||
         typeof password !== "string" ||
         typeof firstName !== "string" ||
         typeof lastName !== "string"
@@ -3119,11 +3119,11 @@ export const createFreelancer = catchAsyncError(
 
       const normalizedPhone = userModel.normalizePhone(phone);
 
-      const [existingEmail, existingPhone, existingUsername] = await Promise.all([
+      const [existingEmail, existingPhone] = await Promise.all([
         userModel.findOne({ email }).session(session),
 
         userModel.findOne({ phone: normalizedPhone }).session(session),
-        userModel.findOne({ username }).session(session),
+        // userModel.findOne({ username }).session(session),
       ]);
 
       if (existingEmail) {
@@ -3134,10 +3134,10 @@ export const createFreelancer = catchAsyncError(
         throw new ErrorHandler("Phone number already exists", 400);
       }
 
-      if (existingUsername) {
+      // if (existingUsername) {
 
-        throw new ErrorHandler("Username already exists", 400);
-      }
+      //   throw new ErrorHandler("Username already exists", 400);
+      // }
 
 
       const user = await userModel.create(
@@ -3145,7 +3145,7 @@ export const createFreelancer = catchAsyncError(
           {
             email,
             phone,
-            username,
+            // username,
             passwordHash: password,
             firstName,
             lastName,
@@ -3198,7 +3198,7 @@ export const createFreelancer = catchAsyncError(
       });
 
       const populatedFreelancer = await FreelancerModel.findById(freelancer[0]._id)
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("defaultOriginBranchId", "name code address status")
         .populate("companyId", "name businessType status")
         .lean();
@@ -3275,10 +3275,10 @@ export const updateFreelancer = catchAsyncError(
         return next(new ErrorHandler("phone must be a string", 400));
       }
 
-      if (body.username !== undefined && typeof body.username !== "string") {
+      // if (body.username !== undefined && typeof body.username !== "string") {
 
-        return next(new ErrorHandler("username must be a string", 400));
-      }
+      //   return next(new ErrorHandler("username must be a string", 400));
+      // }
 
 
       const [freelancer, supervisor] = await Promise.all([
@@ -3316,16 +3316,16 @@ export const updateFreelancer = catchAsyncError(
         );
       }
 
-      if (body.username) {
-        duplicateChecks.push(
-          userModel.findOne({ username: body.username, _id: { $ne: freelancer.userId } }).session(session)
-        );
-      }
+      // if (body.username) {
+      //   duplicateChecks.push(
+      //     userModel.findOne({ username: body.username, _id: { $ne: freelancer.userId } }).session(session)
+      //   );
+      // }
 
       const duplicateResults = await Promise.all(duplicateChecks);
 
       if (duplicateResults.some((result) => result !== null)) {
-        throw new ErrorHandler("Email, phone, or username already exists", 400);
+        throw new ErrorHandler("Email or  phone already exists", 400);
       }
 
 
@@ -3334,7 +3334,7 @@ export const updateFreelancer = catchAsyncError(
 
       if (body.email) userUpdates.email = body.email;
       if (body.phone) userUpdates.phone = userModel.normalizePhone(body.phone);
-      if (body.username) userUpdates.username = body.username;
+      // if (body.username) userUpdates.username = body.username;
       if (body.firstName) userUpdates.firstName = body.firstName;
       if (body.lastName) userUpdates.lastName = body.lastName;
       // if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
@@ -3355,7 +3355,7 @@ export const updateFreelancer = catchAsyncError(
       transactionCommitted = true;
 
       const populatedFreelancer = await FreelancerModel.findById(freelancerId)
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("defaultOriginBranchId", "name code address status")
         .populate("companyId", "name businessType status")
         .lean();
@@ -3473,7 +3473,7 @@ export const toggleBlockFreelancer = catchAsyncError(
       });
 
       const updatedFreelancer = await FreelancerModel.findById(freelancerId)
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("defaultOriginBranchId", "name code address status")
         .lean();
 
@@ -3528,7 +3528,7 @@ export const getFreelancer = catchAsyncError(
 
     const [freelancer, supervisor, requestingUser] = await Promise.all([
       FreelancerModel.findOne({ _id: freelancerId, defaultOriginBranchId: branchId })
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("defaultOriginBranchId", "name code address status")
         .populate("companyId", "name businessType status")
         .lean(),
@@ -3601,7 +3601,7 @@ export const getMyFreelancers = catchAsyncError(
     const freelancers = await FreelancerModel.find(freelancerQuery)
       .populate({
         path: "userId",
-        select: "firstName lastName email phone username imageUrl role status",
+        select: "firstName lastName email phone imageUrl role status",
         ...(search && typeof search === "string"
           ? {
               match: {
@@ -3769,7 +3769,7 @@ export const assignDeliverer = catchAsyncError(
       transactionCommitted = true;
 
       const populatedDeliverer = await DelivererModel.findById(deliverer[0]._id)
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("branchId", "name code address status")
         .populate("companyId", "name businessType status")
         .lean();
@@ -3919,7 +3919,7 @@ export const assignTransporter = catchAsyncError(
       await session.commitTransaction();
       transactionCommitted = true;
       const populatedTransporter = await TransporterModel.findById(transporter[0]._id)
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("companyId", "name businessType status")
         .populate("currentBranchId", "name code address status")
         .lean();
@@ -4053,7 +4053,7 @@ export const assignFreelancer = catchAsyncError(
       await session.commitTransaction();
       transactionCommitted = true;
       const populatedFreelancer = await FreelancerModel.findById(freelancer[0]._id)
-        .populate("userId", "firstName lastName email phone username imageUrl role status")
+        .populate("userId", "firstName lastName email phone imageUrl role status")
         .populate("defaultOriginBranchId", "name code address status")
         .populate("companyId", "name businessType status")
         .lean();
@@ -10295,7 +10295,7 @@ export const getPackagesPaginated = catchAsyncError(
       const VALID_PAYMENT_STATUSES: PaymentStatus[] = [
         "pending", "paid", "partially_paid", "refunded", "failed",
       ];
-      if (req.query.paymentStatus) {
+      if (req.query.paymentStatus && req.query.paymentStatus !== "") {
         const ps = req.query.paymentStatus as string;
         if (!VALID_PAYMENT_STATUSES.includes(ps as PaymentStatus))
           return next(new ErrorHandler(`Invalid paymentStatus: ${ps}.`, 400));
@@ -10304,7 +10304,7 @@ export const getPackagesPaginated = catchAsyncError(
 
       // Delivery priority filter
       const VALID_PRIORITIES = ["standard", "express", "same_day"];
-      if (req.query.deliveryPriority) {
+      if (req.query.deliveryPriority && req.query.deliveryPriority !== "") {
         const dp = req.query.deliveryPriority as string;
         if (!VALID_PRIORITIES.includes(dp))
           return next(new ErrorHandler(`Invalid deliveryPriority: ${dp}.`, 400));
@@ -10321,7 +10321,7 @@ export const getPackagesPaginated = catchAsyncError(
       }
 
       // Boolean filters
-      if (req.query.isFragile !== undefined) {
+      if (req.query.isFragile !== undefined && req.query.isFragile !== "") {
         filter.isFragile = req.query.isFragile === "true";
       }
 

@@ -441,7 +441,7 @@ export const updateCompany = catchAsyncError(
       transactionCommitted = true;
 
       const populatedCompany = await CompanyModel.findById(companyId)
-        .populate("userId", "firstName lastName email phone username")
+        .populate("userId", "firstName lastName email phone")
         .lean();
 
       return res.status(200).json({
@@ -539,7 +539,7 @@ export const toggleBlockCompany = catchAsyncError(
       transactionCommitted = true;
 
       const updatedCompany = await CompanyModel.findById(companyId)
-        .populate("userId", "firstName lastName email phone username")
+        .populate("userId", "firstName lastName email phone")
         .lean();
 
       return res.status(200).json({
@@ -592,7 +592,7 @@ export const getCompany = catchAsyncError(
 
       const [company, manager, user] = await Promise.all([
         CompanyModel.findById(companyId)
-          .populate("userId", "firstName lastName email phone username")
+          .populate("userId", "firstName lastName email phone")
           .lean(),
         ManagerModel.findOne({ userId, companyId }).lean(),
         userModel.findById(userId).select("role").lean(),
@@ -640,7 +640,7 @@ export const getMyCompany = catchAsyncError(
     const manager = await ManagerModel.findOne({ userId })
       .populate({
         path: "userId",
-        select: "firstName lastName email phone username",
+        select: "firstName lastName email phone",
       })
       .populate("companyId")
       .lean();
@@ -671,7 +671,7 @@ export const getAllCompanies = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const companies = await CompanyModel.find()
-        .populate("userId", "firstName lastName email phone username")
+        .populate("userId", "firstName lastName email phone")
         .sort({ createdAt: -1 })
         .lean();
 
@@ -1869,7 +1869,7 @@ export const createSupervisor = catchAsyncError(
       });
 
       const populatedSupervisor = await SupervisorModel.findById(supervisor[0]._id)
-        .populate("userId", "firstName lastName email phone username imageUrl")
+        .populate("userId", "firstName lastName email phone imageUrl")
         .populate("branchId", "name code address status")
         .populate("companyId", "name businessType status")
         .lean();
@@ -2031,7 +2031,7 @@ export const updateSupervisor = catchAsyncError(
       transactionCommitted = true;
 
       const updatedSupervisor = await SupervisorModel.findById(supervisorId)
-        .populate("userId", "firstName lastName email phone username imageUrl")
+        .populate("userId", "firstName lastName email phone imageUrl")
         .populate("branchId", "name code address status")
         .lean();
 
@@ -2150,7 +2150,7 @@ export const toggleBlockSupervisor = catchAsyncError(
       });
 
       const updatedSupervisor = await SupervisorModel.findById(supervisorId)
-        .populate("userId", "firstName lastName email phone username imageUrl")
+        .populate("userId", "firstName lastName email phone imageUrl")
         .populate("branchId", "name code address status")
         .lean();
 
@@ -2205,7 +2205,7 @@ export const getBranchSupervisor = catchAsyncError(
 
     const [supervisor, manager, requestingUser] = await Promise.all([
       SupervisorModel.findOne({ branchId, companyId })
-        .populate("userId", "firstName lastName email phone username imageUrl")
+        .populate("userId", "firstName lastName email phone imageUrl")
         .populate("branchId", "name code address status")
         .lean(),
       ManagerModel.findOne({ userId: managerId, companyId }),
@@ -2283,7 +2283,7 @@ export const getMySupervisors = catchAsyncError(
     const supervisors = await SupervisorModel.find(supervisorQuery)
       .populate({
         path: "userId",
-        select: "firstName lastName email phone username imageUrl",
+        select: "firstName lastName email phone imageUrl",
         ...(search && typeof search === "string"
           ? {
             match: {

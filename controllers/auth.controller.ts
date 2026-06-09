@@ -402,7 +402,7 @@ export const googleLogin = catchAsyncError(
       if (!user) {
         user = new User({
           email,
-          username: name,
+          firstName: name,
           avatar: picture,
           googleAccount: true,
           password: null,
