@@ -4,6 +4,7 @@ import {
   cancelPackage,
   // checkCommuneServed,
   createPackage,
+  createPackageWithImages,
   getMeFreelancer,
   getMyActivePackages,
   getMyDeliveredPackages,
@@ -27,6 +28,9 @@ freelancerRouter.get("/packages/:packageId/track", trackPackage);
 freelancerRouter.patch("/packages/:packageId/cancel", cancelPackage);
 
 freelancerRouter.post("/packages" ,isAuthenticated,authorizeRoles("freelancer"), createPackage);
+
+
+freelancerRouter.post("/packages" ,isAuthenticated,authorizeRoles("freelancer"), createPackageWithImages);
 
 
 // // For autocomplete as they type

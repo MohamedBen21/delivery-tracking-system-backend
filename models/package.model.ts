@@ -97,6 +97,12 @@ export interface IDeliveryOtp {
 
 }
 
+
+export interface IPackageImage {
+  public_id: string;
+  url: string;
+}
+
 export interface IPackage extends Document {
   trackingNumber: string;
   companyId: mongoose.Types.ObjectId;
@@ -113,7 +119,7 @@ export interface IPackage extends Document {
   type: PackageType;
   description?: string;
   declaredValue?: number;
-  images?: string[];
+  images: IPackageImage[];
   
   originBranchId: mongoose.Types.ObjectId;
   currentBranchId?: mongoose.Types.ObjectId;
@@ -457,6 +463,19 @@ const deliveryOtpSchema = new Schema<IDeliveryOtp>({
 }, { _id: false });
 
 
+
+const packageImageSchema = new Schema<IPackageImage>({
+  public_id: {
+    type: String,
+    required: true,
+  },
+  url: {
+    type: String,
+    required: true,
+  }
+}, { _id: false });
+
+
 const packageSchema = new Schema<IPackage>({
 
   trackingNumber: {
@@ -535,9 +554,10 @@ const packageSchema = new Schema<IPackage>({
   },
 
   images: {
-    type: [String],
+    type: [packageImageSchema],
+    default: [],
     validate: {
-      validator: function(images: string[]) {
+      validator: function(images: IPackageImage[]) {
         return images.length <= 10;
       },
       message: 'Cannot have more than 10 images',
