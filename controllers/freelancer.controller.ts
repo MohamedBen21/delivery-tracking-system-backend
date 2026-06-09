@@ -12,7 +12,7 @@ import PaymentModel from "../models/payment.model";
 import clientModel from "../models/client.model";
 import { sendPackageCreatedNotification } from "../services/notification.service";
 import { findBranchByCommune, findNearestHub, loadCommunes, lookupCommune } from "../utils/branch.util";
-
+import { v2 as cloudinary } from 'cloudinary';
 
 
 // Freelancer may only cancel before the package leaves their origin branch.
@@ -2440,3 +2440,545 @@ export const createPackage = catchAsyncError(
 // function toRad(deg: number): number {
 //   return (deg * Math.PI) / 180;
 // }
+
+
+
+
+
+
+
+cloudinary.config({
+  cloud_name: process.env.CLOUD_NAME,
+  api_key: process.env.CLOUD_API_KEY,
+  api_secret: process.env.CLOUD_SECRET_KEY
+});
+
+// Constants for package images
+const PACKAGE_UPLOAD_FOLDER = "packages";
+const MAX_PACKAGE_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB per image
+const MAX_PACKAGE_IMAGES = 10;
+const ALLOWED_IMAGE_FORMATS = ["jpg", "jpeg", "png", "webp"];
+
+// Helper function to upload a single package image
+async function uploadPackageImageToCloudinary(
+  source: string,
+  order: number
+): Promise<{ public_id: string; url: string }> {
+  const result = await cloudinary.uploader.upload(source, {
+    folder: PACKAGE_UPLOAD_FOLDER,
+    quality: "auto:good",
+    fetch_format: "auto",
+    resource_type: "image",
+    allowed_formats: ALLOWED_IMAGE_FORMATS,
+  });
+
+  return {
+    public_id: result.public_id,
+    url: result.secure_url,
+  };
+}
+
+// Helper function to delete package images (if needed for rollback)
+async function deletePackageImagesFromCloudinary(publicIds: string[]): Promise<void> {
+  for (const publicId of publicIds) {
+    try {
+      await cloudinary.uploader.destroy(publicId);
+    } catch (err) {
+      console.warn(`Failed to delete package image ${publicId}:`, err);
+    }
+  }
+}
+
+// Update ICreatePackageBody interface to include images
+interface ICreatePackageBodyWithImages {
+  recipientName: string;
+  recipientPhone: string;
+  alternativePhone?: string;
+  recipientAddress: string;
+  recipientCity: string;
+  recipientState: string;
+  recipientPostalCode?: string;
+  deliveryNotes?: string;
+
+  deliveryLat?: number;
+  deliveryLon?: number;
+ 
+  weight: number;
+  dimensions?: { length: number; width: number; height: number };
+  isFragile?: boolean;
+  type: "document" | "parcel" | "fragile" | "heavy" | "perishable" | "electronic" | "clothing";
+  description?: string;
+  declaredValue?: number;
+ 
+  deliveryType: "home" | "branch_pickup";
+  deliveryPriority?: "standard" | "express" | "same_day";
+  destinationBranchId?: string;   
+ 
+  totalPrice: number;
+  paymentMethod?: string;
+ 
+  estimatedDeliveryTime?: string;
+  
+  images?: string[];
+}
+
+export const createPackageWithImages = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    let transactionCommitted = false;
+    let uploadedImagePublicIds: string[] = []; 
+ 
+    try {
+      const freelancerUserId = req.user?._id;
+ 
+      if (!freelancerUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      const freelancer = await resolveFreelancer(freelancerUserId, next);
+      if (!freelancer) return;
+ 
+      const {
+        recipientName,
+        recipientPhone,
+        alternativePhone,
+        recipientAddress,
+        recipientCity,
+        recipientState,
+        recipientPostalCode,
+        deliveryNotes,
+        weight,
+        dimensions,
+        isFragile,
+        type,
+        description,
+        declaredValue,
+        deliveryType,
+        deliveryPriority,
+        destinationBranchId: providedDestinationBranchId,
+        totalPrice,
+        paymentMethod,
+        estimatedDeliveryTime,
+        deliveryLat,
+        deliveryLon,
+        images: providedImages
+      } = req.body as ICreatePackageBodyWithImages;
+
+
+      if (
+        !recipientName || !recipientPhone || !recipientAddress ||
+        !recipientCity || !recipientState || !weight || !type ||
+        !deliveryType || !totalPrice
+      ) {
+        throw new ErrorHandler(
+          "recipientName, recipientPhone, recipientAddress, recipientCity, " +
+          "recipientState, weight, type, deliveryType, and totalPrice are required.",
+          400,
+        );
+      }
+ 
+      if (typeof weight !== "number" || weight <= 0) {
+        throw new ErrorHandler("weight must be a positive number.", 400);
+      }
+ 
+      if (typeof totalPrice !== "number" || totalPrice <= 0) {
+        throw new ErrorHandler("totalPrice must be a positive number.", 400);
+      }
+ 
+      const VALID_TYPES = ["document", "parcel", "fragile", "heavy", "perishable", "electronic", "clothing"];
+      if (!VALID_TYPES.includes(type)) {
+        throw new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400);
+      }
+ 
+      if (!["home", "branch_pickup"].includes(deliveryType)) {
+        throw new ErrorHandler("deliveryType must be 'home' or 'branch_pickup'.", 400);
+      }
+
+
+      let uploadedImages: Array<{ public_id: string; url: string }> = [];
+      
+      if (providedImages && Array.isArray(providedImages) && providedImages.length > 0) {
+
+        if (providedImages.length > MAX_PACKAGE_IMAGES) {
+          throw new ErrorHandler(`Cannot upload more than ${MAX_PACKAGE_IMAGES} images per package.`, 400);
+        }
+        
+
+        for (let i = 0; i < providedImages.length; i++) {
+          const img = providedImages[i];
+          
+          if (!img || typeof img !== 'string') {
+            throw new ErrorHandler(`Image at index ${i} is invalid.`, 400);
+          }
+          
+
+          const isValidBase64 = img.startsWith('data:image/');
+          const isValidUrl = img.startsWith('http://') || img.startsWith('https://');
+          
+          if (!isValidBase64 && !isValidUrl) {
+            throw new ErrorHandler(
+              `Invalid image format at index ${i}. Please provide base64 data URL or valid image URL.`,
+              400
+            );
+          }
+          
+
+          if (isValidBase64) {
+            const base64Data = img.split(',')[1];
+            const sizeInBytes = base64Data ? Buffer.byteLength(base64Data, 'base64') : 0;
+            if (sizeInBytes > MAX_PACKAGE_IMAGE_BYTES) {
+              throw new ErrorHandler(
+                `Image at index ${i} exceeds maximum size of ${MAX_PACKAGE_IMAGE_BYTES / 1024 / 1024} MB.`,
+                400
+              );
+            }
+          }
+          
+          try {
+            const uploaded = await uploadPackageImageToCloudinary(img, i);
+            uploadedImages.push(uploaded);
+            uploadedImagePublicIds.push(uploaded.public_id);
+          } catch (uploadError: any) {
+            throw new ErrorHandler(`Failed to upload image at index ${i}: ${uploadError.message}`, 400);
+          }
+        }
+      }
+ 
+
+      let normalizedRecipientPhone: string;
+      let normalizedAlternativePhone: string | undefined;
+      
+      try {
+        normalizedRecipientPhone = normalizePhone(recipientPhone);
+        if (alternativePhone) {
+          normalizedAlternativePhone = normalizePhone(alternativePhone);
+        }
+      } catch (error: any) {
+        throw new ErrorHandler(error.message || "Invalid phone number format.", 400);
+      }
+ 
+
+      const originBranchId = freelancer.defaultOriginBranchId;
+ 
+      if (!originBranchId) {
+        throw new ErrorHandler(
+          "Your freelancer profile has no default origin branch set. Contact support.",
+          400,
+        );
+      }
+ 
+
+      let finalDestinationBranchId: mongoose.Types.ObjectId | undefined;
+      let destinationBranchDoc: any = null;
+
+      if (deliveryType === "branch_pickup") {
+        if (!providedDestinationBranchId) {
+          throw new ErrorHandler("destinationBranchId is required for branch_pickup deliveries.", 400);
+        }
+        if (!mongoose.Types.ObjectId.isValid(providedDestinationBranchId)) {
+          throw new ErrorHandler("Invalid destinationBranchId.", 400);
+        }
+        finalDestinationBranchId = new mongoose.Types.ObjectId(providedDestinationBranchId);
+        
+        destinationBranchDoc = await BranchModel.findById(finalDestinationBranchId).session(session).lean();
+        if (!destinationBranchDoc || destinationBranchDoc.status !== "active") {
+          throw new ErrorHandler("Destination branch not found or not active.", 404);
+        }
+        
+      } else if (deliveryType === "home") {
+        if (deliveryLat === undefined || deliveryLon === undefined) {
+          throw new ErrorHandler(
+            "GPS coordinates (deliveryLat, deliveryLon) are required for home delivery. " +
+            "Please provide the customer's location for route optimization.",
+            400
+          );
+        }
+
+        if (deliveryLat < -90 || deliveryLat > 90 || deliveryLon < -180 || deliveryLon > 180) {
+          throw new ErrorHandler(
+            "Invalid GPS coordinates. Latitude must be between -90 and 90, longitude between -180 and 180.",
+            400
+          );
+        }
+
+        const nearestHubId = await findNearestHub(
+          [deliveryLon, deliveryLat],
+          freelancer.companyId
+        );
+
+        if (!nearestHubId) {
+          throw new ErrorHandler(
+            "No active hub found near the delivery address. " +
+            "Please contact support to add hub coverage for this area.",
+            400
+          );
+        }
+
+        finalDestinationBranchId = nearestHubId;
+        
+        destinationBranchDoc = await BranchModel
+          .findById(finalDestinationBranchId)
+          .session(session)
+          .lean();
+      }
+ 
+
+      const originBranch = await BranchModel.findById(originBranchId).session(session).lean();
+ 
+      if (!originBranch) {
+        throw new ErrorHandler("Origin branch not found.", 404);
+      }
+ 
+      if (originBranch.status !== "active") {
+        throw new ErrorHandler("Your origin branch is not currently active.", 400);
+      }
+ 
+      const initialStatus: PackageStatus = "pending";
+   
+
+      const destination = {
+        recipientName: recipientName.trim(),
+        recipientPhone: normalizedRecipientPhone,
+        alternativePhone: normalizedAlternativePhone,
+        address: recipientAddress.trim(),
+        city: recipientCity.trim(),
+        state: recipientState.trim(),
+        postalCode: recipientPostalCode?.trim(),
+        notes: deliveryNotes?.trim(),
+        ...(deliveryLat !== undefined && deliveryLon !== undefined && {
+          location: {
+            type: "Point" as const,
+            coordinates: [deliveryLon, deliveryLat] as [number, number],
+          },
+        }),
+      };
+ 
+      const trackingNumber = generateTrackingNumber();
+ 
+      const clientId = await resolveClientByPhone(
+        recipientPhone,
+        recipientName,
+        recipientAddress,
+        recipientCity,
+        recipientState,
+        alternativePhone,
+        session,
+      );
+ 
+
+      const [packageDoc] = await PackageModel.create(
+        [
+          {
+            trackingNumber,
+            companyId: freelancer.companyId,
+            senderId: freelancerUserId,
+            senderType: "freelancer",
+            clientId,
+ 
+            weight,
+            dimensions,
+            isFragile: isFragile ?? false,
+            type,
+            description: description?.trim(),
+            declaredValue,
+            
+
+            images: uploadedImages,
+ 
+            originBranchId,
+            currentBranchId: originBranchId,
+            destinationBranchId: finalDestinationBranchId,
+ 
+            destination,
+ 
+            status: initialStatus,
+            deliveryType,
+            deliveryPriority: deliveryPriority ?? "standard",
+ 
+            totalPrice,
+            paymentStatus: "pending",
+            paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
+ 
+            maxAttempts: 3,
+            attemptCount: 0,
+            issues: [],
+            returnInfo: { isReturn: false },
+ 
+            estimatedDeliveryTime: estimatedDeliveryTime
+              ? new Date(estimatedDeliveryTime)
+              : undefined,
+ 
+            trackingHistory: [
+              {
+                status: "pending",
+                branchId: originBranchId,
+                userId: freelancerUserId,
+                notes: `Package registered by freelancer. ${deliveryType === "home" ? `Routed to hub: ${destinationBranchDoc?.name || "unknown"}` : ""}`,
+                timestamp: new Date(),
+              },
+            ],
+          },
+        ],
+        { session },
+      );
+ 
+      await PackageHistoryModel.create(
+        [
+          {
+            packageId: packageDoc._id,
+            status: "pending" as PackageStatus,
+            branchId: originBranchId,
+            handledBy: freelancerUserId,
+            handlerRole: "freelancer",
+            notes: deliveryType === "home" 
+              ? `Package registered for home delivery. Will be routed to hub: ${destinationBranchDoc?.name || "unknown"}`
+              : "Package registered by freelancer via mobile app.",
+            timestamp: new Date(),
+          },
+        ],
+        { session },
+      );
+ 
+      await PaymentModel.create(
+        [
+          {
+            companyId: freelancer.companyId,
+            packageId: packageDoc._id,
+            trackingNumber,
+            branchId: originBranchId,
+            clientId,
+            senderId: freelancerUserId,
+            collectionMethod: deliveryType === "home" ? "home_delivery" : "branch_pickup",
+            amount: totalPrice,
+            paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
+            status: "pending",
+          },
+        ],
+        { session },
+      );
+ 
+      await FreelancerModel.findByIdAndUpdate(
+        freelancer._id,
+        {
+          $inc: { "statistics.totalPackagesSent": 1 },
+          $set: { lastActiveAt: new Date() },
+        },
+        { session },
+      );
+ 
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      sendPackageCreatedNotification(
+        freelancerUserId.toString(),
+        "freelancer",
+        packageDoc._id.toString(),
+        trackingNumber
+      ).catch(error => {
+        console.error('Package created notification failed:', error);
+      });
+ 
+
+      let responseMessage: string;
+      if (deliveryType === "branch_pickup") {
+        responseMessage = "Package registered successfully. Please print the bordereau and bring the package to your branch counter.";
+      } else {
+        responseMessage = `Package registered successfully. It will be routed to ${destinationBranchDoc?.name || "the nearest hub"} for delivery to the customer.`;
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: responseMessage,
+        data: {
+          packageId: packageDoc._id,
+          status: "pending",
+          destinationBranch: destinationBranchDoc ? {
+            id: destinationBranchDoc._id,
+            name: destinationBranchDoc.name,
+            code: destinationBranchDoc.code,
+          } : null,
+          
+
+          images: uploadedImages,
+
+          bordereau: {
+            trackingNumber,
+            barcodeFormat: "CODE128",
+            generatedAt: new Date().toISOString(),
+ 
+            sender: {
+              businessName: freelancer.businessName ?? null,
+              phone: (req.user as any)?.phone ?? null,
+            },
+ 
+            recipient: {
+              name: destination.recipientName,
+              phone: destination.recipientPhone,
+              address: destination.address,
+              city: destination.city,
+              state: destination.state,
+              postalCode: destination.postalCode ?? null,
+            },
+ 
+            package: {
+              weight,
+              type,
+              isFragile: isFragile ?? false,
+              declaredValue: declaredValue ?? null,
+              deliveryType,
+              deliveryPriority: deliveryPriority ?? "standard",
+            },
+ 
+            originBranch: {
+              id: originBranch._id,
+              name: originBranch.name,
+              code: originBranch.code,
+              address: originBranch.address,
+            },
+ 
+            destinationBranch: destinationBranchDoc
+              ? {
+                  id: destinationBranchDoc._id,
+                  name: destinationBranchDoc.name,
+                  code: destinationBranchDoc.code,
+                  address: destinationBranchDoc.address,
+                }
+              : null,
+ 
+            totalPrice,
+            paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
+          },
+ 
+          createdAt: packageDoc.createdAt,
+        },
+      });
+ 
+    } catch (error: any) {
+
+      if (uploadedImagePublicIds.length > 0) {
+        await deletePackageImagesFromCloudinary(uploadedImagePublicIds).catch(console.warn);
+      }
+
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+      
+      return next(error);
+
+    } finally {
+      if (!transactionCommitted && session.inTransaction()) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
+  },
+);
