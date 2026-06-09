@@ -1,8 +1,7 @@
-import { Request,Response,NextFunction } from "express";
+import { Request, Response, NextFunction } from "express";
 import { catchAsyncError } from "../middleware/catchAsyncErrors";
 import ErrorHandler from "../utils/ErrorHandler";
 import notificationModel from "../models/notification.model";
-import mongoose from "mongoose";
 
 
 
@@ -55,97 +54,96 @@ export const getAllNotifications = catchAsyncError(
   }
 );
 
+// Mark a single notification as read
+export const markNotificationAsRead = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user?._id;
+      const { notification_id } = req.params;
 
-  // Mark a single notification as read
-  export const markNotificationAsRead = catchAsyncError(
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const userId = req.user?._id;
-        const { notification_id } = req.params;
-
-        if (!userId) {
-          return next(new ErrorHandler("User not found", 404));
-        }
-
-        if (!notification_id) {
-          return next(new ErrorHandler("Notification ID is required", 400));
-        }
-
-
-        const notification = await notificationModel.findOneAndUpdate(
-          {
-            _id: notification_id,
-            user_id: userId, 
-          },
-          {
-            is_read: true,
-          },
-          {
-            new: true, 
-            runValidators: true,
-          }
-        ).lean();
-
-        if (!notification) {
-          return next(
-            new ErrorHandler("Notification not found or unauthorized", 404)
-          );
-        }
-
-        res.status(200).json({
-          success: true,
-          message: "Notification marked as read",
-          notification,
-        });
-      } catch (error: any) {
-        return next(new ErrorHandler(error.message, 400));
+      if (!userId) {
+        return next(new ErrorHandler("User not found", 404));
       }
+
+      if (!notification_id) {
+        return next(new ErrorHandler("Notification ID is required", 400));
+      }
+
+
+      const notification = await notificationModel.findOneAndUpdate(
+        {
+          _id: notification_id,
+          user_id: userId,
+        },
+        {
+          is_read: true,
+        },
+        {
+          new: true,
+          runValidators: true,
+        }
+      ).lean();
+
+      if (!notification) {
+        return next(
+          new ErrorHandler("Notification not found or unauthorized", 404)
+        );
+      }
+
+      res.status(200).json({
+        success: true,
+        message: "Notification marked as read",
+        notification,
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 400));
     }
-  );
+  }
+);
 
-  // // Mark all notifications as read
-  // export const markAllNotificationsAsRead = catchAsyncError(
-  //   async (req: Request, res: Response, next: NextFunction) => {
-  //     try {
-  //       const userId = req.user?._id;
+// // Mark all notifications as read
+// export const markAllNotificationsAsRead = catchAsyncError(
+//   async (req: Request, res: Response, next: NextFunction) => {
+//     try {
+//       const userId = req.user?._id;
 
-  //       if (!userId) {
-  //         return next(new ErrorHandler("User not found", 404));
-  //       }
-  // 
-  //       const [updateResult, updatedCount] = await Promise.all([
-  //         notificationModel.updateMany(
-  //           {
-  //             user_id: userId,
-  //             is_read: false, 
-  //           },
-  //           {
-  //             is_read: true,
-  //           }
-  //         ),
-  //         notificationModel.countDocuments({
-  //           user_id: userId,
-  //           is_read: false,
-  //         }),
-  //       ]);
+//       if (!userId) {
+//         return next(new ErrorHandler("User not found", 404));
+//       }
+// 
+//       const [updateResult, updatedCount] = await Promise.all([
+//         notificationModel.updateMany(
+//           {
+//             user_id: userId,
+//             is_read: false, 
+//           },
+//           {
+//             is_read: true,
+//           }
+//         ),
+//         notificationModel.countDocuments({
+//           user_id: userId,
+//           is_read: false,
+//         }),
+//       ]);
 
-  //       res.status(200).json({
-  //         success: true,
-  //         message: "All notifications marked as read",
-  //         updated_count: updateResult.modifiedCount || updatedCount,
-  //       });
-  //     } catch (error: any) {
-  //       return next(new ErrorHandler(error.message, 400));
-  //     }
-  //   }
-  // );
+//       res.status(200).json({
+//         success: true,
+//         message: "All notifications marked as read",
+//         updated_count: updateResult.modifiedCount || updatedCount,
+//       });
+//     } catch (error: any) {
+//       return next(new ErrorHandler(error.message, 400));
+//     }
+//   }
+// );
 
 
-  // interface IMarkMultipleNotificationsAsRead {
-  //   notification_ids: string[];
-  // }
+// interface IMarkMultipleNotificationsAsRead {
+//   notification_ids: string[];
+// }
 
-  export const markMultipleNotificationsAsRead = catchAsyncError(
+export const markMultipleNotificationsAsRead = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user?._id;
@@ -188,14 +186,14 @@ export const verifyUnreadNotification = catchAsyncError(
 
       const [hasUnread, unreadCount] = await Promise.all([
 
-        notificationModel.exists({ 
-          user_id, 
-          is_read: false 
+        notificationModel.exists({
+          user_id,
+          is_read: false
         }),
-        
-        notificationModel.countDocuments({ 
-          user_id, 
-          is_read: false 
+
+        notificationModel.countDocuments({
+          user_id,
+          is_read: false
         })
       ]);
 

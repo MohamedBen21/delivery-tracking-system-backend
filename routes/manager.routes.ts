@@ -6,6 +6,9 @@ import {
   createBranch,
   createCompany,
   createSupervisor,
+  getManagerAnalytics,
+  getManagerDashboardOverview,
+  getManagerPerformance,
   getBranch,
   getBranchSupervisor,
   getCompany,
@@ -23,6 +26,7 @@ import {
   updateCompany,
   updateMeManager,
   updateSupervisor,
+  getWilayaList,
 } from "../controllers/manager.controller";
 import {
   assignTransporter,
@@ -37,8 +41,14 @@ const managerRouter = Router();
 
 const managerOrAdmin = [isAuthenticated, authorizeRoles("manager", "admin")] as const;
 
+managerRouter.get("/dashboard/overview", ...managerOrAdmin, getManagerDashboardOverview);
+managerRouter.get("/dashboard/analytics", ...managerOrAdmin, getManagerAnalytics);
+managerRouter.get("/dashboard/performance", ...managerOrAdmin, getManagerPerformance);
+
 managerRouter.get("/me", ...managerOrAdmin, getMeManager);
 managerRouter.patch("/me", ...managerOrAdmin, updateMeManager);
+
+managerRouter.get("/wilayas", ...managerOrAdmin, getWilayaList);
 
 managerRouter.post("/companies", isAuthenticated, authorizeRoles("client"), createCompany);
 managerRouter.get("/routes", ...managerOrAdmin, getAllRoutes);
@@ -117,6 +127,11 @@ managerRouter.post(
   ...managerOrAdmin,
   assignTransporterBranches,
 );
+
+
+// Taffif routes 
+
+managerRouter.get("/taffifs", ...managerOrAdmin,)
 
 export default managerRouter;
 

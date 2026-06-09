@@ -13,6 +13,8 @@ import delivererRouter from "./routes/deliverer.routes";
 import vehicleRouter from "./routes/vehicle.routes";
 import cashierRouter from "./routes/cashier.routes";
 import loaderRouter from "./routes/loader.routes";
+import tarrifRouter from "./routes/tarrif.router";
+import notificationRouter from "./routes/notification.routes";
 
 app.use(express.json({ limit: "50mb" }));
 
@@ -42,6 +44,8 @@ app.use("/api/deliverer", delivererRouter);
 app.use("/api/vehicle", vehicleRouter);
 app.use("/api/cashier", cashierRouter);
 app.use("/api/loader", loaderRouter);
+app.use("/api/tariffs", tarrifRouter);
+app.use("/api/notifications", notificationRouter);
 
 
 app.all("*", (req: Request, res: Response, next: NextFunction) => {
