@@ -1884,7 +1884,7 @@ export class SocketService {
             const route = await RouteModel.findOne({
               _id: data.routeId,
               assignedDelivererId: deliverer._id,
-              status: "assigned",
+              // status: "assigned",
             });
             if (!route) {
               socket.emit("route_error", {
@@ -2654,8 +2654,11 @@ export class SocketService {
             notes?: string;
           }) => {
             try {
+              console.log("[DEBUG] cancel_package received:", JSON.stringify(data, null, 2));
+
               // ── Validate required fields ──────────────────────────────────────────
               if (!data?.routeId || !data?.reason) {
+                console.log("[DEBUG] Missing routeId or reason");
                 socket.emit("route_error", {
                   code: "MISSING_DATA",
                   message: "routeId and reason are required.",
@@ -2666,6 +2669,7 @@ export class SocketService {
                 !data?.routeId ||
                 !mongoose.Types.ObjectId.isValid(data.routeId)
               ) {
+                console.log("[DEBUG] Invalid routeId");
                 socket.emit("route_error", {
                   code: "INVALID_ROUTE_ID",
                   message: "Invalid routeId.",
@@ -2673,6 +2677,7 @@ export class SocketService {
                 return;
               }
               if (data.stopIndex === undefined || data.stopIndex < 0) {
+                console.log("[DEBUG] Invalid stopIndex");
                 socket.emit("route_error", {
                   code: "INVALID_STOP",
                   message: "Invalid stopIndex.",
@@ -2680,6 +2685,7 @@ export class SocketService {
                 return;
               }
               if (!data?.coordinates || data.coordinates.length !== 2) {
+                console.log("[DEBUG] Missing coordinates");
                 socket.emit("route_error", {
                   code: "NO_COORDINATES",
                   message: "Coordinates are required.",
@@ -2688,31 +2694,38 @@ export class SocketService {
               }
 
               // ── Fetch deliverer ──────────────────────────────────────────────────
+              console.log("[DEBUG] Fetching deliverer for userId:", userId);
               const deliverer = await DelivererModel.findOne({ userId }).lean();
               if (!deliverer) {
+                console.log("[DEBUG] Deliverer not found");
                 socket.emit("route_error", {
                   code: "NOT_FOUND",
                   message: "Deliverer not found.",
                 });
                 return;
               }
+              console.log("[DEBUG] Deliverer found:", deliverer._id);
 
               // ── Fetch active route ───────────────────────────────────────────────
+              console.log("[DEBUG] Fetching route:", data.routeId);
               const route = await RouteModel.findOne({
                 _id: data.routeId,
                 assignedDelivererId: deliverer._id,
                 status: "active",
               });
               if (!route) {
+                console.log("[DEBUG] Route not found or not active");
                 socket.emit("route_error", {
                   code: "ROUTE_NOT_FOUND",
                   message: "Active route not found.",
                 });
                 return;
               }
+              console.log("[DEBUG] Route found, currentStopIndex:", route.currentStopIndex);
 
               // ── Validate stop index ──────────────────────────────────────────────
               if (data.stopIndex !== route.currentStopIndex) {
+                console.log("[DEBUG] Wrong stop index. Expected:", route.currentStopIndex, "Got:", data.stopIndex);
                 socket.emit("route_error", {
                   code: "WRONG_STOP",
                   message: `Expected stop ${route.currentStopIndex}, got ${data.stopIndex}.`,
@@ -2723,12 +2736,14 @@ export class SocketService {
 
               const stop = route.stops[data.stopIndex];
               if (!stop || !stop.packageIds[0]) {
+                console.log("[DEBUG] Stop or package not found");
                 socket.emit("route_error", {
                   code: "STOP_NOT_FOUND",
                   message: "Stop or package not found.",
                 });
                 return;
               }
+              console.log("[DEBUG] Stop found, packageId:", stop.packageIds[0]);
 
               // ── Proximity check (50m) ────────────────────────────────────────────
               const distanceMeters =
@@ -2736,7 +2751,10 @@ export class SocketService {
                   data.coordinates,
                   stop.location.coordinates,
                 ) * 1000;
+              console.log("[DEBUG] Distance to stop:", distanceMeters, "meters");
+              
               if (distanceMeters > 50) {
+                console.log("[DEBUG] Too far from stop");
                 socket.emit("route_error", {
                   code: "TOO_FAR",
                   message: `Must be within 50m to cancel. Current: ${Math.round(distanceMeters)}m.`,
@@ -2748,16 +2766,19 @@ export class SocketService {
               }
 
               const packageId = stop.packageIds[0].toString();
+              console.log("[DEBUG] Package ID:", packageId);
 
               // ── Fetch package ────────────────────────────────────────────────────
               const pkg = await PackageModel.findById(packageId);
               if (!pkg) {
+                console.log("[DEBUG] Package not found");
                 socket.emit("route_error", {
                   code: "PACKAGE_NOT_FOUND",
                   message: "Package not found.",
                 });
                 return;
               }
+              console.log("[DEBUG] Package found, current status:", pkg.status);
 
               // ── Build detailed cancellation notes with route/stop context ────────
               const cancellationDetails = {
@@ -2775,6 +2796,7 @@ export class SocketService {
               const trackingNotes = JSON.stringify(cancellationDetails);
 
               // ── Update package status to cancelled ───────────────────────────────
+              console.log("[DEBUG] Updating package status to cancelled");
               await pkg.updateStatus(
                 "cancelled",
                 deliverer.userId,
@@ -2784,6 +2806,7 @@ export class SocketService {
               );
 
               // ── Update payment status ────────────────────────────────────────────
+              console.log("[DEBUG] Updating payment status");
               await PaymentModel.findOneAndUpdate(
                 { packageId: pkg._id },
                 {
@@ -2797,11 +2820,13 @@ export class SocketService {
               this.deliveryOTPs.delete(`delivery_otp_${packageId}`);
 
               // ── Mark stop as failed (permanently, no requeue) ────────────────────
+              console.log("[DEBUG] Marking stop as failed");
               await route.failStop(data.stopIndex, data.reason, [
                 new mongoose.Types.ObjectId(packageId),
               ]);
 
               // ── Update deliverer stats ───────────────────────────────────────────
+              console.log("[DEBUG] Updating deliverer stats");
               await DelivererModel.findByIdAndUpdate(deliverer._id, {
                 $inc: { totalDeliveries: 1, failedDeliveries: 1 },
                 lastActiveAt: new Date(),
@@ -2811,9 +2836,13 @@ export class SocketService {
               const isLastStop = data.stopIndex === route.stops.length - 1;
               const routeRoom = this.getRouteRoom(data.routeId);
 
-
+              // ═══════════════════════════════════════════════════════════════════════
+              // ★ EMIT CANCELLATION SUCCESS TO DELIVERER ★
+              // ═══════════════════════════════════════════════════════════════════════
+              console.log("[DEBUG] Emitting cancellation_success to deliverer");
               socket.emit("cancellation_success", {
                 success: true,
+                routeId: data.routeId,
                 packageId,
                 trackingNumber: updatedPkg?.trackingNumber,
                 stopIndex: data.stopIndex,
@@ -2828,6 +2857,7 @@ export class SocketService {
                 timestamp: new Date(),
               });
 
+      // ... rest of your code remains the same ...
               // ── Notify package room ──────────────────────────────────────────────
               this.io
                 .to(this.getPackageRoom(packageId))
