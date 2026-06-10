@@ -2775,7 +2775,6 @@ export class SocketService {
               const trackingNotes = JSON.stringify(cancellationDetails);
 
               // ── Update package status to cancelled ───────────────────────────────
-              // Use the existing updateStatus method which adds to trackingHistory
               await pkg.updateStatus(
                 "cancelled",
                 deliverer.userId,
@@ -2811,6 +2810,23 @@ export class SocketService {
               const updatedPkg = await PackageModel.findById(packageId).lean();
               const isLastStop = data.stopIndex === route.stops.length - 1;
               const routeRoom = this.getRouteRoom(data.routeId);
+
+
+              socket.emit("cancellation_success", {
+                success: true,
+                packageId,
+                trackingNumber: updatedPkg?.trackingNumber,
+                stopIndex: data.stopIndex,
+                stopId: stop._id,
+                branchId: stop.branchId,
+                address: stop.address,
+                reason: data.reason,
+                notes: data.notes,
+                distanceMeters: Math.round(distanceMeters),
+                isLastStop,
+                message: `Package ${updatedPkg?.trackingNumber || packageId} has been successfully cancelled.`,
+                timestamp: new Date(),
+              });
 
               // ── Notify package room ──────────────────────────────────────────────
               this.io

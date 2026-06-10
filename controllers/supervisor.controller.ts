@@ -10130,6 +10130,13 @@ export const searchPackages = catchAsyncError(
           state: pkg.destination.state,
           postalCode: pkg.destination.postalCode ?? null,
           notes: pkg.destination.notes ?? null,
+
+          coordinates: pkg.deliveryType === "home" && pkg.destination.location?.coordinates
+            ? {
+                type: pkg.destination.location.type || "Point",
+                coordinates: pkg.destination.location.coordinates,
+              }
+            : null,
         },
 
 
