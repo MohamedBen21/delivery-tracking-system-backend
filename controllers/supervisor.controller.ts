@@ -15372,6 +15372,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
 
       let assignedDelivererId: mongoose.Types.ObjectId | null = null;
       let routePackageIds: mongoose.Types.ObjectId[] | null = null;
+      let packageStopOrderMap: Map<string, { stopIndex: number; orderInStop: number }> | null = null;
 
       // ── COMPANY FILTER ────────────────────────────────────────────────────
       if (req.query.companyId) {
@@ -15395,16 +15396,28 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         }).lean();
 
         if (activeRoute && activeRoute.stops && activeRoute.stops.length > 0) {
-          // Extract all package IDs from all stops
+          // Extract all package IDs with their stop order information
           const allPackageIds: mongoose.Types.ObjectId[] = [];
-          for (const stop of activeRoute.stops) {
+          const stopOrderMap = new Map<string, { stopIndex: number; orderInStop: number }>();
+          
+          for (let stopIndex = 0; stopIndex < activeRoute.stops.length; stopIndex++) {
+            const stop = activeRoute.stops[stopIndex];
             if (stop.packageIds && stop.packageIds.length > 0) {
-              allPackageIds.push(...stop.packageIds);
+              // Add each package with its stop index and order within the stop
+              for (let orderInStop = 0; orderInStop < stop.packageIds.length; orderInStop++) {
+                const packageId = stop.packageIds[orderInStop];
+                allPackageIds.push(packageId);
+                stopOrderMap.set(packageId.toString(), {
+                  stopIndex: stopIndex,
+                  orderInStop: orderInStop
+                });
+              }
             }
           }
           
           if (allPackageIds.length > 0) {
             routePackageIds = allPackageIds;
+            packageStopOrderMap = stopOrderMap;
             // Filter packages to only those in the active route
             filter._id = { $in: allPackageIds };
           } else {
@@ -15725,7 +15738,6 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         PackageModel.find(filter)
           .skip(skip)
           .limit(limit)
-          .sort({ createdAt: -1 })
           .lean({ virtuals: true }),
       ]);
 
@@ -15736,35 +15748,56 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         filteredPackages = filteredPackages.filter((pkg) => pkg.isOverdue === wantOverdue);
       }
 
-      // Apply sorting
-      const sortBy = (req.query.sortBy as string) || "createdAt";
-      const order = req.query.order === "desc" ? -1 : 1;
+      // Sort packages by route stop order (for deliverer role only)
+      if (userRole === 'deliverer' && packageStopOrderMap) {
+        filteredPackages.sort((a, b) => {
+          const orderA = packageStopOrderMap.get(a._id.toString());
+          const orderB = packageStopOrderMap.get(b._id.toString());
+          
+          // If both have order info, sort by stop index first, then by order within stop
+          if (orderA && orderB) {
+            if (orderA.stopIndex !== orderB.stopIndex) {
+              return orderA.stopIndex - orderB.stopIndex;
+            }
+            return orderA.orderInStop - orderB.orderInStop;
+          }
+          
+          // If one doesn't have order info (shouldn't happen), put it at the end
+          if (orderA) return -1;
+          if (orderB) return 1;
+          return 0;
+        });
+      } else {
+        // Apply client-side sorting for non-deliverer roles
+        const sortBy = (req.query.sortBy as string) || "createdAt";
+        const order = req.query.order === "desc" ? -1 : 1;
 
-      switch (sortBy) {
-        case "estimatedTimeRemaining":
-          filteredPackages.sort((a, b) => {
-            const aVal = a.estimatedTimeRemaining ?? Infinity;
-            const bVal = b.estimatedTimeRemaining ?? Infinity;
-            return (aVal - bVal) * order;
-          });
-          break;
-        case "weight":
-          filteredPackages.sort((a, b) => (a.weight - b.weight) * order);
-          break;
-        case "totalPrice":
-          filteredPackages.sort((a, b) => (a.totalPrice - b.totalPrice) * order);
-          break;
-        case "createdAt":
-          filteredPackages.sort(
-            (a, b) =>
-              (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) * order,
-          );
-          break;
-        case "attemptCount":
-          filteredPackages.sort((a, b) => (a.attemptCount - b.attemptCount) * order);
-          break;
-        default:
-          if (order === -1) filteredPackages.reverse();
+        switch (sortBy) {
+          case "estimatedTimeRemaining":
+            filteredPackages.sort((a, b) => {
+              const aVal = a.estimatedTimeRemaining ?? Infinity;
+              const bVal = b.estimatedTimeRemaining ?? Infinity;
+              return (aVal - bVal) * order;
+            });
+            break;
+          case "weight":
+            filteredPackages.sort((a, b) => (a.weight - b.weight) * order);
+            break;
+          case "totalPrice":
+            filteredPackages.sort((a, b) => (a.totalPrice - b.totalPrice) * order);
+            break;
+          case "createdAt":
+            filteredPackages.sort(
+              (a, b) =>
+                (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) * order,
+            );
+            break;
+          case "attemptCount":
+            filteredPackages.sort((a, b) => (a.attemptCount - b.attemptCount) * order);
+            break;
+          default:
+            if (order === -1) filteredPackages.reverse();
+        }
       }
 
       // Format packages for response
@@ -15862,7 +15895,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
           originBranchId: req.query.originBranchId ?? null,
           currentBranchId: req.query.currentBranchId ?? null,
           assignedDelivererId: req.query.assignedDelivererId ?? null,
-          sortBy: sortBy,
+          sortBy: req.query.sortBy ?? "route_order",
           order: req.query.order ?? "asc",
         },
       };
