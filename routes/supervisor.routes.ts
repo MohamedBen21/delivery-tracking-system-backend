@@ -51,6 +51,7 @@ import {
   updateRoute,
   deleteCashier,
   deleteLoader,
+  getPackagesPaginatedFromRoute,
 } from "../controllers/supervisor.controller";
 
 const supervisorRouter = Router();
@@ -134,6 +135,7 @@ supervisorRouter.patch(
 
 supervisorRouter.get("/packages/search", isAuthenticated, searchPackages);
 supervisorRouter.get("/packages", isAuthenticated , authorizeRoles("deliverer" , "transporter"), getPackagesPaginated);
+supervisorRouter.get("/packages", isAuthenticated , authorizeRoles("deliverer" , "transporter"), getPackagesPaginatedFromRoute);
 
 
 // Role-based middleware for supervisor, manager, or admin

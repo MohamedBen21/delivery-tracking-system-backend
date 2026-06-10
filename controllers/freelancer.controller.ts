@@ -2982,3 +2982,154 @@ export const createPackageWithImages = catchAsyncError(
     }
   },
 );
+
+
+
+
+
+interface ISearchBranchesByCityQuery {
+  city: string;
+  companyId?: string;
+  limit?: number;
+}
+
+/**
+ * GET /api/freelancer/branches/search?city=Algiers&limit=10
+ * 
+ * Search for branches that can be used as destination branches for branch_pickup.
+ * Returns branches matching the city name (case-insensitive partial match)
+ * with their details including ID, name, address, and distance from city center.
+ */
+export const searchBranchesForPickup = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const freelancerUserId = req.user?._id;
+    
+    if (!freelancerUserId) {
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    }
+
+    const freelancer = await resolveFreelancer(freelancerUserId, next);
+    if (!freelancer) return;
+
+    const { city, limit = 20 } = req.query as { city?: string; limit?: string };
+    
+    if (!city || city.trim().length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        message: "No city provided",
+      });
+    }
+
+    const limitNum = Math.min(parseInt(limit.toString(), 10) || 20, 50); // Max 50 results
+    const searchCity = city.trim().toLowerCase();
+
+    // Build the query - include BOTH local_branch and regional_main_hub
+    const query: any = {
+      companyId: freelancer.companyId,
+      status: 'active',
+      branchType: { $in: ['local_branch', 'regional_main_hub'] }, // Changed: include both types
+    };
+
+    // Search by city name (case-insensitive, partial match)
+    query.$or = [
+      { 'address.city': { $regex: searchCity, $options: 'i' } },
+      { name: { $regex: searchCity, $options: 'i' } },
+      { code: { $regex: searchCity, $options: 'i' } },
+    ];
+
+    // Find branches
+    let branches = await BranchModel.find(query)
+      .select('_id name code address phone email location status branchType parentHubId')
+      .limit(limitNum)
+      .lean();
+
+    console.log(`Found ${branches.length} branches for city "${searchCity}"`);
+
+    // Try to get commune coordinates for distance calculation
+    let communeCoords: [number, number] | null = null;
+    let communeName: string = searchCity;
+    
+    try {
+      // Try to find the commune in the database or JSON
+      const commune = lookupCommune(searchCity);
+      if (commune && commune.longitude && commune.latitude) {
+        communeCoords = [parseFloat(commune.longitude), parseFloat(commune.latitude)];
+        communeName = commune.name;
+        console.log(`Found commune "${communeName}" at coordinates:`, communeCoords);
+      }
+    } catch (err) {
+      console.log("Commune lookup failed:", err);
+    }
+
+    // If no coordinates from commune, try to use a branch's location as reference
+    if (!communeCoords && branches.length > 0 && branches[0].location?.coordinates) {
+      communeCoords = branches[0].location.coordinates;
+      console.log("Using first branch coordinates as reference:", communeCoords);
+    }
+
+    // Format response with distance if coordinates available
+    const formattedBranches = branches.map(branch => {
+      let distance: number | null = null;
+      if (communeCoords && branch.location?.coordinates) {
+        const [branchLon, branchLat] = branch.location.coordinates;
+        distance = haversineDistance(communeCoords, [branchLon, branchLat]);
+      }
+
+      return {
+        id: branch._id.toString(),
+        name: branch.name,
+        code: branch.code,
+        branchType: branch.branchType === 'regional_main_hub' ? 'Hub' : 'Local Branch',
+        address: branch.address,
+        phone: branch.phone,
+        email: branch.email,
+        distance: distance !== null ? `${distance.toFixed(1)} km` : null,
+        isHub: branch.branchType === 'regional_main_hub',
+      };
+    });
+
+    // Sort by distance (closest first) if coordinates available
+    if (communeCoords) {
+      formattedBranches.sort((a, b) => {
+        const aDist = a.distance ? parseFloat(a.distance) : Infinity;
+        const bDist = b.distance ? parseFloat(b.distance) : Infinity;
+        return aDist - bDist;
+      });
+    } else {
+      // If no coordinates, sort by name
+      formattedBranches.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: formattedBranches,
+      total: formattedBranches.length,
+      searchedCity: communeName,
+      message: formattedBranches.length === 0 
+        ? `No branches found serving "${city}". Please try a different city or contact support.`
+        : `Found ${formattedBranches.length} branch(es) in ${communeName}`,
+    });
+  }
+);
+
+// Helper function for haversine distance calculation
+function haversineDistance(
+  coord1: [number, number],
+  coord2: [number, number]
+): number {
+  const R = 6371; // Earth's radius in km
+  const dLat = toRadians(coord2[1] - coord1[1]);
+  const dLon = toRadians(coord2[0] - coord1[0]);
+  const lat1 = toRadians(coord1[1]);
+  const lat2 = toRadians(coord2[1]);
+
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function toRadians(degrees: number): number {
+  return degrees * (Math.PI / 180);
+}

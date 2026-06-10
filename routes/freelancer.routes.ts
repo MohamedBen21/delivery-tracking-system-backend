@@ -9,6 +9,7 @@ import {
   getMyActivePackages,
   getMyDeliveredPackages,
   getMyPackages,
+  searchBranchesForPickup,
   // searchServedCommunes,
   trackPackage,
   updateMeFreelancer,
@@ -32,6 +33,7 @@ freelancerRouter.post("/packages" ,isAuthenticated,authorizeRoles("freelancer"),
 
 freelancerRouter.post("/packages" ,isAuthenticated,authorizeRoles("freelancer"), createPackageWithImages);
 
+freelancerRouter.get("/branches/search", searchBranchesForPickup);
 
 // // For autocomplete as they type
 // freelancerRouter.get(
@@ -50,3 +52,9 @@ freelancerRouter.post("/packages" ,isAuthenticated,authorizeRoles("freelancer"),
 // );
 
 export default freelancerRouter;
+
+
+// {
+//     "email": "imed.ferhat@example.com",
+//     "password": "Freelancer123"
+// }
