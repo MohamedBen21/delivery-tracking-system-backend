@@ -13926,6 +13926,7 @@ interface IUpdateCashier {
 // ─────────────────────────────────────────────────────────────────────────────
 export const createCashier = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+    console.log("hello")
     const session = await mongoose.startSession();
     session.startTransaction();
     let transactionCommitted = false;
@@ -13961,7 +13962,8 @@ export const createCashier = catchAsyncError(
           )
         );
       }
-
+      console.log(req.body)
+console.log("hello 4")
       if (
         typeof email !== "string" ||
         typeof phone !== "string" ||
@@ -13972,15 +13974,15 @@ export const createCashier = catchAsyncError(
         return next(new ErrorHandler("All required fields must be strings", 400));
       }
 
-      if (counterNumber !== undefined && (typeof counterNumber !== "number" || counterNumber < 1 || counterNumber > 99)) {
-        return next(new ErrorHandler("counterNumber must be a number between 1 and 99", 400));
+      if (counterNumber !== undefined && (typeof counterNumber !== "number" || counterNumber < 1 || counterNumber > 999)) {
+        return next(new ErrorHandler("counterNumber must be a number between 1 and 999", 400));
       }
 
       // ── auth & branch checks ─────────────────────────────────────────────
       const branch = await BranchModel.findById(branchId).session(session);
 
       await assertSupervisorOrAdmin(requestingUserId, branchId.toString(), PERMISSIONS.MANAGE_DELIVERERS, session);
-
+console.log("hello 3")
       if (!branch) {
         throw new ErrorHandler("Branch not found", 404);
       }
@@ -14004,11 +14006,12 @@ export const createCashier = catchAsyncError(
 
       if (existingEmail) throw new ErrorHandler("Email already exists", 400);
       if (existingPhone) throw new ErrorHandler("Phone number already exists", 400);
-
+      console.log("hello 2")
       // ── employee code ────────────────────────────────────────────────────
       const employeeCode = await generateEmployeeCode("CSH", branch.code || branch.name, CashierModel);
 
       // ── create user + cashier ────────────────────────────────────────────
+      console.log("before create user")
       const [user] = await userModel.create(
         [
           {
@@ -14023,7 +14026,7 @@ export const createCashier = catchAsyncError(
         ],
         { session }
       );
-
+console.log("after create user")
       const [cashier] = await CashierModel.create(
         [
           {
@@ -14038,7 +14041,6 @@ export const createCashier = catchAsyncError(
         ],
         { session }
       );
-
       await session.commitTransaction();
       transactionCommitted = true;
 
@@ -14054,6 +14056,7 @@ export const createCashier = catchAsyncError(
         data: populated,
       });
     } catch (error: any) {
+      console.log(error)
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -15124,5 +15127,217 @@ export const getMyLoaders = catchAsyncError(
       count: loaders.length,
       data: loaders,
     });
+  }
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DELETE CASHIER
+// ─────────────────────────────────────────────────────────────────────────────
+export const deleteCashier = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const requestingUserId = req.user?._id;
+      const { branchId, cashierId } = req.params;
+
+      if (!requestingUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!cashierId || !mongoose.Types.ObjectId.isValid(cashierId.toString())) {
+        return next(new ErrorHandler("Invalid cashier ID", 400));
+      }
+
+      const [cashier, branch, requestingUser] = await Promise.all([
+        CashierModel.findOne({ _id: cashierId, assignedBranchId: branchId }).session(session),
+        BranchModel.findById(branchId).session(session),
+        userModel.findById(requestingUserId).select("role").session(session),
+      ]);
+
+      if (!cashier) {
+        throw new ErrorHandler("Cashier not found", 404);
+      }
+
+      if (!branch) {
+        throw new ErrorHandler("Branch not found", 404);
+      }
+
+      const isAdmin = requestingUser?.role === "admin";
+      let isAuthorized = isAdmin;
+
+      if (!isAuthorized && requestingUser?.role === "supervisor") {
+        const supervisor = await SupervisorModel.findOne({ userId: requestingUserId, branchId }).session(session);
+        if (!supervisor || !supervisor.isActive) {
+          throw new ErrorHandler("You are not an active supervisor of this branch", 403);
+        }
+        isAuthorized = true;
+      }
+
+      if (!isAuthorized && requestingUser?.role === "manager") {
+        const manager = await ManagerModel.findOne({
+          userId: requestingUserId,
+          companyId: branch.companyId,
+        }).session(session);
+        if (!manager || !manager.isActive) {
+          throw new ErrorHandler("You are not an active manager of this company", 403);
+        }
+        isAuthorized = true;
+      }
+
+      if (!isAuthorized) {
+        throw new ErrorHandler("Not authorized to delete this cashier", 403);
+      }
+
+      // If the cashier is currently active, prevent deletion
+      if (cashier.currentShift && cashier.currentShift.status === "active") {
+        throw new ErrorHandler("Cannot delete a cashier that is currently checked in", 400);
+      }
+
+      // Perform deletion
+      await userModel.findByIdAndDelete(cashier.userId, { session });
+      await CashierModel.findByIdAndDelete(cashierId, { session });
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      return res.status(200).json({
+        success: true,
+        message: "Cashier deleted successfully",
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted && session.inTransaction()) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
+  }
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DELETE LOADER
+// ─────────────────────────────────────────────────────────────────────────────
+export const deleteLoader = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const requestingUserId = req.user?._id;
+      const { branchId, loaderId } = req.params;
+
+      if (!requestingUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!loaderId || !mongoose.Types.ObjectId.isValid(loaderId.toString())) {
+        return next(new ErrorHandler("Invalid loader ID", 400));
+      }
+
+      const [loader, branch, requestingUser] = await Promise.all([
+        LoaderModel.findOne({
+          _id: loaderId,
+          $or: [
+            { assignedBranchId: branchId },
+            { temporaryBranchId: branchId }
+          ]
+        }).session(session),
+        BranchModel.findById(branchId).session(session),
+        userModel.findById(requestingUserId).select("role").session(session),
+      ]);
+
+      if (!loader) {
+        throw new ErrorHandler("Loader not found in this branch", 404);
+      }
+
+      if (!branch) {
+        throw new ErrorHandler("Branch not found", 404);
+      }
+
+      const isAdmin = requestingUser?.role === "admin";
+      let isAuthorized = isAdmin;
+
+      if (!isAuthorized && requestingUser?.role === "supervisor") {
+        const supervisor = await SupervisorModel.findOne({ userId: requestingUserId, branchId }).session(session);
+        if (!supervisor || !supervisor.isActive) {
+          throw new ErrorHandler("You are not an active supervisor of this branch", 403);
+        }
+        isAuthorized = true;
+      }
+
+      if (!isAuthorized && requestingUser?.role === "manager") {
+        const manager = await ManagerModel.findOne({
+          userId: requestingUserId,
+          companyId: branch.companyId,
+        }).session(session);
+        if (!manager || !manager.isActive) {
+          throw new ErrorHandler("You are not an active manager of this company", 403);
+        }
+        isAuthorized = true;
+      }
+
+      if (!isAuthorized) {
+        throw new ErrorHandler("Not authorized to delete this loader", 403);
+      }
+
+      // If the loader is currently active, prevent deletion
+      if (loader.currentShift && loader.currentShift.status === "active") {
+        throw new ErrorHandler("Cannot delete a loader that is currently checked in", 400);
+      }
+
+      // Perform deletion
+      await userModel.findByIdAndDelete(loader.userId, { session });
+      await LoaderModel.findByIdAndDelete(loaderId, { session });
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      return res.status(200).json({
+        success: true,
+        message: "Loader deleted successfully",
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted && session.inTransaction()) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
   }
 );

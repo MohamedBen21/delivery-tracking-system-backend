@@ -373,7 +373,7 @@ const cashierSchema = new Schema<ICashier, ICashierModel>(
     counterNumber: {
       type: Number,
       min: [1, 'Counter number must be at least 1'],
-      max: [99, 'Counter number cannot exceed 99'],
+      max: [999, 'Counter number cannot exceed 999'],
     },
     employeeCode: {
       type: String,

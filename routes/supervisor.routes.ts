@@ -49,6 +49,8 @@ import {
   updateMeSupervisor,
   updatePackage,
   updateRoute,
+  deleteCashier,
+  deleteLoader,
 } from "../controllers/supervisor.controller";
 
 const supervisorRouter = Router();
@@ -250,6 +252,28 @@ supervisorRouter.patch(
   "/branches/:branchId/loaders/:loaderId/toggle-block",
   ...supMgrAdmin,
   toggleBlockLoader
+);
+
+/**
+ * @route   DELETE /api/supervisor/branches/:branchId/cashiers/:cashierId
+ * @desc    Delete a cashier and their user account
+ * @access  Supervisor, Manager, Admin
+ */
+supervisorRouter.delete(
+  "/branches/:branchId/cashiers/:cashierId",
+  ...supMgrAdmin,
+  deleteCashier
+);
+
+/**
+ * @route   DELETE /api/supervisor/branches/:branchId/loaders/:loaderId
+ * @desc    Delete a loader and their user account
+ * @access  Supervisor, Manager, Admin
+ */
+supervisorRouter.delete(
+  "/branches/:branchId/loaders/:loaderId",
+  ...supMgrAdmin,
+  deleteLoader
 );
 
 
