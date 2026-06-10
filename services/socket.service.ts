@@ -1884,7 +1884,7 @@ export class SocketService {
             const route = await RouteModel.findOne({
               _id: data.routeId,
               assignedDelivererId: deliverer._id,
-              status: "assigned",
+              // status: "assigned",
             });
             if (!route) {
               socket.emit("route_error", {
@@ -2679,13 +2679,6 @@ export class SocketService {
                 });
                 return;
               }
-              if (!data?.coordinates || data.coordinates.length !== 2) {
-                socket.emit("route_error", {
-                  code: "NO_COORDINATES",
-                  message: "Coordinates are required.",
-                });
-                return;
-              }
 
               // ── Fetch deliverer ──────────────────────────────────────────────────
               const deliverer = await DelivererModel.findOne({ userId }).lean();
@@ -2730,22 +2723,7 @@ export class SocketService {
                 return;
               }
 
-              // ── Proximity check (50m) ────────────────────────────────────────────
-              const distanceMeters =
-                this.calculateDistance(
-                  data.coordinates,
-                  stop.location.coordinates,
-                ) * 1000;
-              if (distanceMeters > 50) {
-                socket.emit("route_error", {
-                  code: "TOO_FAR",
-                  message: `Must be within 50m to cancel. Current: ${Math.round(distanceMeters)}m.`,
-                  distanceMeters: Math.round(distanceMeters),
-                  requiredMeters: 50,
-                  stopLocation: stop.location.coordinates,
-                });
-                return;
-              }
+              // ── PROXIMITY CHECK REMOVED ── Deliverer can cancel from anywhere
 
               const packageId = stop.packageIds[0].toString();
 
@@ -2775,7 +2753,6 @@ export class SocketService {
               const trackingNotes = JSON.stringify(cancellationDetails);
 
               // ── Update package status to cancelled ───────────────────────────────
-              // Use the existing updateStatus method which adds to trackingHistory
               await pkg.updateStatus(
                 "cancelled",
                 deliverer.userId,
@@ -2811,6 +2788,25 @@ export class SocketService {
               const updatedPkg = await PackageModel.findById(packageId).lean();
               const isLastStop = data.stopIndex === route.stops.length - 1;
               const routeRoom = this.getRouteRoom(data.routeId);
+
+              // ═══════════════════════════════════════════════════════════════════════
+              // ★ EMIT CANCELLATION SUCCESS TO DELIVERER ★
+              // ═══════════════════════════════════════════════════════════════════════
+              socket.emit("cancellation_success", {
+                success: true,
+                routeId: data.routeId,
+                packageId,
+                trackingNumber: updatedPkg?.trackingNumber,
+                stopIndex: data.stopIndex,
+                stopId: stop._id,
+                branchId: stop.branchId,
+                address: stop.address,
+                reason: data.reason,
+                notes: data.notes,
+                isLastStop,
+                message: `Package ${updatedPkg?.trackingNumber || packageId} has been successfully cancelled.`,
+                timestamp: new Date(),
+              });
 
               // ── Notify package room ──────────────────────────────────────────────
               this.io
@@ -2942,7 +2938,6 @@ export class SocketService {
                     reason: data.reason,
                     notes: data.notes,
                   },
-                  distanceMeters: Math.round(distanceMeters),
                   nextStop: nextStop
                     ? {
                         stopIndex: data.stopIndex + 1,

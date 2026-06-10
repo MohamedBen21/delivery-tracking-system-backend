@@ -28,7 +28,7 @@ async function bootstrap() {
 
   const io = new Server(httpServer, {
     cors: {
-      origin: process.env.ORIGIN || "http://localhost:5173",
+      origin: process.env.ORIGIN || "http://localhost:3000",
       methods: ["GET", "POST"],
       credentials: true
     },
