@@ -18,28 +18,28 @@ const vehicleRouter = express.Router();
 vehicleRouter.post(
   "/company/:companyId/vehicle",
   isAuthenticated,
-  authorizeRoles("manager"),
+  authorizeRoles("manager", "supervisor"),
   createVehicle
 );
 
 vehicleRouter.put(
   "/company/:companyId/vehicle/:vehicleId",
   isAuthenticated,
-  authorizeRoles("manager"),
+  authorizeRoles("manager", "supervisor"),
   updateVehicle
 );
 
 vehicleRouter.patch(
   "/company/:companyId/vehicle/:vehicleId/toggle-status",
   isAuthenticated,
-  authorizeRoles("manager", "admin"),
+  authorizeRoles("manager", "supervisor"),
   toggleVehicleStatus
 );
 
 vehicleRouter.get(
   "/company/:companyId/vehicle/:vehicleId",
   isAuthenticated,
-  authorizeRoles("manager", "admin", "supervisor","deliverer", "transporter"),
+  authorizeRoles("manager", "admin", "supervisor", "deliverer", "transporter"),
   getVehicle
 );
 
@@ -55,14 +55,14 @@ vehicleRouter.get(
 vehicleRouter.patch(
   "/company/:companyId/vehicle/:vehicleId/assign",
   isAuthenticated,
-  authorizeRoles("manager", "supervisor" , "admin"),
+  authorizeRoles("manager", "supervisor", "admin"),
   assignVehicle
 );
 
 vehicleRouter.patch(
   "/company/:companyId/vehicle/:vehicleId/release",
   isAuthenticated,
-  authorizeRoles("manager", "supervisor" , "admin"),
+  authorizeRoles("manager", "supervisor", "admin"),
   releaseVehicle
 );
 

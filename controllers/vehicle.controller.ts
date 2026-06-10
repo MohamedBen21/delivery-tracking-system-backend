@@ -10,6 +10,7 @@ import userModel from "../models/user.model";
 import { notifyAdminsNewEntityPending } from "../services/notification.service";
 import DelivererModel from "../models/deliverer.model";
 import TransporterModel from "../models/transporter.model";
+import SupervisorModel from "../models/supervisor.model";
 
 const VEHICLE_TYPES: VehicleType[] = [
   "motorcycle",
@@ -27,35 +28,30 @@ const VEHICLE_STATUSES: VehicleStatus[] = [
   "retired",
 ];
 
-const ASSIGNED_USER_ROLES: AssignedUserRole[] = [
-  "transporter",
-  "deliverer",
-  "driver",
-];
 
 
 const REGISTRATION_NUMBER_REGEX = /^[A-Z0-9\s\-]{5,20}$/;
 
 
 interface ICreateVehicleDocuments {
-  registrationCard?: string; 
+  registrationCard?: string;
   insurance?: string;
-  insuranceExpiry?: string; 
-  technicalInspection?: string; 
-  inspectionExpiry?: string; 
+  insuranceExpiry?: string;
+  technicalInspection?: string;
+  inspectionExpiry?: string;
 }
 
 interface ICreateVehicleBody {
   type: VehicleType;
-  registrationNumber: string; 
-  brand?: string; 
-  modelName?: string; 
-  year?: number; 
+  registrationNumber: string;
+  brand?: string;
+  modelName?: string;
+  year?: number;
   color?: string;
   maxWeight: number;
   maxVolume: number;
   supportsFragile?: boolean;
-  currentBranchId?: string; 
+  currentBranchId?: string;
   documents?: ICreateVehicleDocuments;
   notes?: string;
 }
@@ -81,15 +77,13 @@ interface IGetCompanyVehiclesQuery {
   type?: VehicleType;
   status?: VehicleStatus;
   branchId?: string;
-  search?: string; 
+  search?: string;
   page?: string;
   limit?: string;
   sortBy?: "createdAt" | "maxWeight" | "maxVolume" | "year" | "status";
   sortOrder?: "asc" | "desc";
 }
 
-
-//  HELPER — validate document sub-object
 
 
 function validateDocuments(
@@ -121,9 +115,9 @@ function validateDocuments(
     key: "insuranceExpiry" | "inspectionExpiry";
     label: string;
   }> = [
-    { key: "insuranceExpiry", label: "documents.insuranceExpiry" },
-    { key: "inspectionExpiry", label: "documents.inspectionExpiry" },
-  ];
+      { key: "insuranceExpiry", label: "documents.insuranceExpiry" },
+      { key: "inspectionExpiry", label: "documents.inspectionExpiry" },
+    ];
 
   for (const { key, label } of dateFields) {
     const val = docs[key];
@@ -162,14 +156,8 @@ export const createVehicle = catchAsyncError(
     let transactionCommitted = false;
 
     try {
-      const managerId = req.user?._id;
+      const userId = req.user?._id;
       const { companyId } = req.params;
-
-      if (!managerId) {
-        return next(
-          new ErrorHandler("Unauthorized, you are not authenticated.", 401),
-        );
-      }
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
         return next(new ErrorHandler("Invalid company ID", 400));
@@ -337,13 +325,16 @@ export const createVehicle = catchAsyncError(
         }
       }
 
-      const [company, manager, requestingUser, existingVehicle] =
+      const [company, manager, supervisor, requestingUser, existingVehicle] =
         await Promise.all([
           CompanyModel.findById(companyId).session(session).lean(),
-          ManagerModel.findOne({ userId: managerId, companyId }).session(
+          ManagerModel.findOne({ userId: userId, companyId }).session(
             session,
           ),
-          userModel.findById(managerId).select("role").session(session).lean(),
+          SupervisorModel.findOne({ userId: userId, companyId }).session(
+            session,
+          ),
+          userModel.findById(userId).select("role").session(session).lean(),
           VehicleModel.findOne({ registrationNumber: normalizedRegNum })
             .session(session)
             .lean(),
@@ -362,8 +353,12 @@ export const createVehicle = catchAsyncError(
         manager &&
         manager.isActive &&
         manager.hasPermission("can_manage_vehicles");
+      const isAuthorizedSupervisor =
+        supervisor &&
+        supervisor.isActive &&
+        supervisor.hasPermission("can_manage_vehicles");
 
-      if (!isAdmin && !isAuthorizedManager) {
+      if (!isAdmin && !isAuthorizedManager && !isAuthorizedSupervisor) {
         throw new ErrorHandler(
           "Not authorized to manage vehicles for this company",
           403,
@@ -424,10 +419,10 @@ export const createVehicle = catchAsyncError(
 
       notifyAdminsNewEntityPending(
         vehicle._id.toString(),
-        "Vehicle", 
+        "Vehicle",
         `New Vehicle: ${normalizedRegNum} (${type}) - ${brand || 'Unknown'} ${modelName || ''}`
       ).catch(error => {
-        
+
         console.error('Admin notification for new vehicle failed:', error);
         // Will implement proper logging later
       });
@@ -474,10 +469,10 @@ export const createVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -854,10 +849,10 @@ export const updateVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -940,10 +935,10 @@ export const toggleVehicleStatus = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -955,7 +950,7 @@ export const toggleVehicleStatus = catchAsyncError(
 export const getVehicle = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?._id;
-    const userRole = req.user?.role;
+
     const { companyId, vehicleId } = req.params;
 
     if (!userId) {
@@ -981,7 +976,7 @@ export const getVehicle = catchAsyncError(
       return next(new ErrorHandler("Vehicle not found", 404));
     }
 
-  
+
     const requestingUser = await userModel.findById(userId).select("role").lean();
 
     if (!requestingUser) {
@@ -1013,7 +1008,13 @@ export const getVehicle = catchAsyncError(
         vehicle.assignedUserId &&
         (vehicle.assignedUserId as any)._id?.toString() === deliverer.userId.toString()
       );
+    } else if (requestingUser.role === "supervisor") {
+
+      const supervisor = await SupervisorModel.findOne({ userId }).lean();
+      isAuthorized = !!(supervisor && supervisor.isActive && supervisor.companyId.toString() === companyId.toString());
     }
+
+    console.log("Authorization check for user", userId.toString(), "with role", requestingUser.role, "isAuthorized:", isAuthorized);
 
     if (!isAuthorized) {
       return next(new ErrorHandler("Not authorized to view this vehicle", 403));
@@ -1032,284 +1033,281 @@ export const getVehicle = catchAsyncError(
 
 export const getCompanyVehicles = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+    console.log("Received request to get company vehicles with query:", req.query);
     try {
-      
-      const managerId = req.user?._id;
-    const { companyId } = req.params;
+
+      const { companyId } = req.params;
+      const userId = req.user?._id;
+
+      console.log("Company ID:", companyId);
 
 
-    if (!managerId) {
-      return next(
-        new ErrorHandler("Unauthorized, you are not authenticated.", 401),
-      );
-    }
-
-
-    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
-      return next(new ErrorHandler("Invalid company ID", 400));
-    }
-
-
-    const {
-      type,
-      status,
-      branchId,
-      search,
-      page = "1",
-      limit = "20",
-      sortBy = "createdAt",
-      sortOrder = "desc",
-    } = req.query as IGetCompanyVehiclesQuery;
-
-    if (type && !VEHICLE_TYPES.includes(type as VehicleType)) {
-      return next(
-        new ErrorHandler(
-          `Invalid type filter. Must be one of: ${VEHICLE_TYPES.join(", ")}`,
-          400,
-        ),
-      );
-    }
-
-    if (status && !VEHICLE_STATUSES.includes(status as VehicleStatus)) {
-      return next(
-        new ErrorHandler(
-          `Invalid status filter. Must be one of: ${VEHICLE_STATUSES.join(", ")}`,
-          400,
-        ),
-      );
-    }
-
-    if (branchId && !mongoose.Types.ObjectId.isValid(branchId)) {
-      return next(new ErrorHandler("Invalid branchId filter", 400));
-    }
-
-    const pageNum = parseInt(page, 10);
-    const limitNum = parseInt(limit, 10);
-
-    if (isNaN(pageNum) || pageNum < 1) {
-      return next(new ErrorHandler("page must be a positive integer", 400));
-    }
-    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
-      return next(
-        new ErrorHandler("limit must be between 1 and 100", 400),
-      );
-    }
-
-    const ALLOWED_SORT_FIELDS = [
-      "createdAt",
-      "maxWeight",
-      "maxVolume",
-      "year",
-      "status",
-    ];
-    if (!ALLOWED_SORT_FIELDS.includes(sortBy)) {
-      return next(
-        new ErrorHandler(
-          `sortBy must be one of: ${ALLOWED_SORT_FIELDS.join(", ")}`,
-          400,
-        ),
-      );
-    }
-    if (!["asc", "desc"].includes(sortOrder)) {
-      return next(
-        new ErrorHandler("sortOrder must be 'asc' or 'desc'", 400),
-      );
-    }
-
-
-    const [company, manager, requestingUser] = await Promise.all([
-      CompanyModel.findById(companyId).lean(),
-      ManagerModel.findOne({ userId: managerId, companyId }).lean(),
-      userModel.findById(managerId).select("role").lean(),
-    ]);
-
-    if (!company) {
-      return next(new ErrorHandler("Company not found", 404));
-    }
-
-    const isAdmin = requestingUser?.role === "admin";
-    const isAuthorizedManager = manager && manager.isActive;
-
-    if (!isAdmin && !isAuthorizedManager) {
-      return next(
-        new ErrorHandler(
-          "Not authorized to view vehicles for this company",
-          403,
-        ),
-      );
-    }
-
-
-    const matchStage: Record<string, any> = {
-      companyId: new mongoose.Types.ObjectId(companyId.toString()),
-    };
-
-    if (type) matchStage.type = type;
-    if (status) matchStage.status = status;
-
-
-    if (branchId) {
-      if (!isAdmin && manager && !manager.branchAccess.allBranches) {
-        const allowedIds = manager.branchAccess.specificBranches.map((id) =>
-          id.toString(),
-        );
-        if (!allowedIds.includes(branchId)) {
-          return next(
-            new ErrorHandler(
-              "You do not have access to this branch",
-              403,
-            ),
-          );
-        }
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId.toString())) {
+        return next(new ErrorHandler("Invalid company ID", 400));
       }
-      matchStage.currentBranchId = new mongoose.Types.ObjectId(branchId);
-    } else if (!isAdmin && manager && !manager.branchAccess.allBranches) {
-      matchStage.currentBranchId = {
-        $in: manager.branchAccess.specificBranches,
-      };
-    }
 
 
-    if (search && typeof search === "string" && search.trim().length > 0) {
-      const searchRegex = { $regex: search.trim(), $options: "i" };
-      matchStage.$or = [
-        { registrationNumber: searchRegex },
-        { brand: searchRegex },
-        { modelName: searchRegex },
+      const {
+        type,
+        status,
+        branchId,
+        search,
+        page = "1",
+        limit = "20",
+        sortBy = "createdAt",
+        sortOrder = "desc",
+      } = req.query as IGetCompanyVehiclesQuery;
+
+      if (type && !VEHICLE_TYPES.includes(type as VehicleType)) {
+        return next(
+          new ErrorHandler(
+            `Invalid type filter. Must be one of: ${VEHICLE_TYPES.join(", ")}`,
+            400,
+          ),
+        );
+      }
+
+      if (status && !VEHICLE_STATUSES.includes(status as VehicleStatus)) {
+        return next(
+          new ErrorHandler(
+            `Invalid status filter. Must be one of: ${VEHICLE_STATUSES.join(", ")}`,
+            400,
+          ),
+        );
+      }
+
+      if (branchId && !mongoose.Types.ObjectId.isValid(branchId)) {
+        return next(new ErrorHandler("Invalid branchId filter", 400));
+      }
+
+      const pageNum = parseInt(page, 10);
+      const limitNum = parseInt(limit, 10);
+
+      if (isNaN(pageNum) || pageNum < 1) {
+        return next(new ErrorHandler("page must be a positive integer", 400));
+      }
+      if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
+        return next(
+          new ErrorHandler("limit must be between 1 and 100", 400),
+        );
+      }
+
+      const ALLOWED_SORT_FIELDS = [
+        "createdAt",
+        "maxWeight",
+        "maxVolume",
+        "year",
+        "status",
       ];
-    }
+      if (!ALLOWED_SORT_FIELDS.includes(sortBy)) {
+        return next(
+          new ErrorHandler(
+            `sortBy must be one of: ${ALLOWED_SORT_FIELDS.join(", ")}`,
+            400,
+          ),
+        );
+      }
+      if (!["asc", "desc"].includes(sortOrder)) {
+        return next(
+          new ErrorHandler("sortOrder must be 'asc' or 'desc'", 400),
+        );
+      }
 
-    const sortDirection = sortOrder === "asc" ? 1 : -1;
-    const skip = (pageNum - 1) * limitNum;
 
-    const pipeline: mongoose.PipelineStage[] = [
-      { $match: matchStage },
+      const [company, manager, requestingUser, supervisor] = await Promise.all([
+        CompanyModel.findById(companyId).lean(),
+        ManagerModel.findOne({ userId: userId, companyId }).lean(),
+        userModel.findById(userId).select("role").lean(),
+        SupervisorModel.findOne({ userId: userId, companyId }).lean(),
+      ]);
 
-      {
-        $lookup: {
-          from: "companies",
-          localField: "companyId",
-          foreignField: "_id",
-          as: "company",
-          pipeline: [{ $project: { name: 1, businessType: 1 } }],
+      if (!company) {
+        return next(new ErrorHandler("Company not found", 404));
+      }
+
+      const isAdmin = requestingUser?.role === "admin";
+      const isAuthorizedManager = manager && manager.isActive;
+      const isAuthorizedSupervisor = supervisor && supervisor.isActive;
+      if (!isAdmin && !isAuthorizedManager && !isAuthorizedSupervisor) {
+        return next(
+          new ErrorHandler(
+            "Not authorized to view vehicles for this company",
+            403,
+          ),
+        );
+      }
+
+
+      const matchStage: Record<string, any> = {
+        companyId: new mongoose.Types.ObjectId(companyId.toString()),
+      };
+
+      if (type) matchStage.type = type;
+      if (status) matchStage.status = status;
+
+
+      if (branchId) {
+        if (!isAdmin && manager && !manager.branchAccess.allBranches) {
+          const allowedIds = manager.branchAccess.specificBranches.map((id) =>
+            id.toString(),
+          );
+          if (!allowedIds.includes(branchId)) {
+            return next(
+              new ErrorHandler(
+                "You do not have access to this branch",
+                403,
+              ),
+            );
+          }
+        }
+        matchStage.currentBranchId = new mongoose.Types.ObjectId(branchId);
+      } else if (!isAdmin && manager && !manager.branchAccess.allBranches) {
+        matchStage.currentBranchId = {
+          $in: manager.branchAccess.specificBranches,
+        };
+      }
+
+
+      if (search && typeof search === "string" && search.trim().length > 0) {
+        const searchRegex = { $regex: search.trim(), $options: "i" };
+        matchStage.$or = [
+          { registrationNumber: searchRegex },
+          { brand: searchRegex },
+          { modelName: searchRegex },
+        ];
+      }
+
+      const sortDirection = sortOrder === "asc" ? 1 : -1;
+      const skip = (pageNum - 1) * limitNum;
+
+      const pipeline: mongoose.PipelineStage[] = [
+        { $match: matchStage },
+
+        {
+          $lookup: {
+            from: "companies",
+            localField: "companyId",
+            foreignField: "_id",
+            as: "company",
+            pipeline: [{ $project: { name: 1, businessType: 1 } }],
+          },
         },
-      },
-      { $unwind: { path: "$company", preserveNullAndEmptyArrays: true } },
+        { $unwind: { path: "$company", preserveNullAndEmptyArrays: true } },
 
-      {
-        $lookup: {
-          from: "branches",
-          localField: "currentBranchId",
-          foreignField: "_id",
-          as: "currentBranch",
-          pipeline: [{ $project: { name: 1, code: 1, status: 1 } }],
+        {
+          $lookup: {
+            from: "branches",
+            localField: "currentBranchId",
+            foreignField: "_id",
+            as: "currentBranch",
+            pipeline: [{ $project: { name: 1, code: 1, status: 1 } }],
+          },
         },
-      },
-      { $unwind: { path: "$currentBranch", preserveNullAndEmptyArrays: true } },
+        { $unwind: { path: "$currentBranch", preserveNullAndEmptyArrays: true } },
 
-      {
-        $lookup: {
-          from: "users",
-          localField: "assignedUserId",
-          foreignField: "_id",
-          as: "assignedUser",
-          pipeline: [
-            {
-              $project: { firstName: 1, lastName: 1, email: 1, phone: 1 },
-            },
-          ],
-        },
-      },
-      { $unwind: { path: "$assignedUser", preserveNullAndEmptyArrays: true } },
-
-      {
-        $addFields: {
-          isAssigned: {
-            $and: [
-              { $ifNull: ["$assignedUserId", false] },
-              { $ifNull: ["$currentBranchId", false] },
+        {
+          $lookup: {
+            from: "users",
+            localField: "assignedUserId",
+            foreignField: "_id",
+            as: "assignedUser",
+            pipeline: [
+              {
+                $project: { firstName: 1, lastName: 1, email: 1, phone: 1 },
+              },
             ],
           },
-          isHeavy: {
-            $in: ["$type", ["large_truck", "small_truck"]],
-          },
-          isLight: {
-            $in: ["$type", ["motorcycle", "car"]],
-          },
-          category: {
-            $switch: {
-              branches: [
-                {
-                  case: { $in: ["$type", ["motorcycle", "car"]] },
-                  then: "Light",
-                },
-                { case: { $eq: ["$type", "van"] }, then: "Medium" },
-                {
-                  case: {
-                    $in: ["$type", ["small_truck", "large_truck"]],
-                  },
-                  then: "Heavy",
-                },
+        },
+        { $unwind: { path: "$assignedUser", preserveNullAndEmptyArrays: true } },
+
+        {
+          $addFields: {
+            isAssigned: {
+              $and: [
+                { $ifNull: ["$assignedUserId", false] },
+                { $ifNull: ["$currentBranchId", false] },
               ],
-              default: "Unknown",
+            },
+            isHeavy: {
+              $in: ["$type", ["large_truck", "small_truck"]],
+            },
+            isLight: {
+              $in: ["$type", ["motorcycle", "car"]],
+            },
+            category: {
+              $switch: {
+                branches: [
+                  {
+                    case: { $in: ["$type", ["motorcycle", "car"]] },
+                    then: "Light",
+                  },
+                  { case: { $eq: ["$type", "van"] }, then: "Medium" },
+                  {
+                    case: {
+                      $in: ["$type", ["small_truck", "large_truck"]],
+                    },
+                    then: "Heavy",
+                  },
+                ],
+                default: "Unknown",
+              },
             },
           },
         },
-      },
 
-      { $sort: { [sortBy]: sortDirection } },
+        { $sort: { [sortBy]: sortDirection } },
 
-      {
-        $facet: {
-          data: [{ $skip: skip }, { $limit: limitNum }],
-          totalCount: [{ $count: "count" }],
+        {
+          $facet: {
+            data: [{ $skip: skip }, { $limit: limitNum }],
+            totalCount: [{ $count: "count" }],
 
-          statusSummary: [
-            { $group: { _id: "$status", count: { $sum: 1 } } },
-          ],
-          typeSummary: [
-            { $group: { _id: "$type", count: { $sum: 1 } } },
-          ],
+            statusSummary: [
+              { $group: { _id: "$status", count: { $sum: 1 } } },
+            ],
+            typeSummary: [
+              { $group: { _id: "$type", count: { $sum: 1 } } },
+            ],
+          },
         },
-      },
-    ];
+      ];
 
-    const [result] = await VehicleModel.aggregate(pipeline);
+      const [result] = await VehicleModel.aggregate(pipeline);
 
-    const total: number = result.totalCount[0]?.count ?? 0;
-    const totalPages = Math.ceil(total / limitNum);
+      const total: number = result.totalCount[0]?.count ?? 0;
+      const totalPages = Math.ceil(total / limitNum);
 
 
-    const statusSummary = Object.fromEntries(
-      (result.statusSummary as { _id: string; count: number }[]).map(
-        ({ _id, count }) => [_id, count],
-      ),
-    );
+      const statusSummary = Object.fromEntries(
+        (result.statusSummary as { _id: string; count: number }[]).map(
+          ({ _id, count }) => [_id, count],
+        ),
+      );
 
-    const typeSummary = Object.fromEntries(
-      (result.typeSummary as { _id: string; count: number }[]).map(
-        ({ _id, count }) => [_id, count],
-      ),
-    );
+      const typeSummary = Object.fromEntries(
+        (result.typeSummary as { _id: string; count: number }[]).map(
+          ({ _id, count }) => [_id, count],
+        ),
+      );
 
-    return res.status(200).json({
-      success: true,
-      data: result.data,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages,
-        hasNextPage: pageNum < totalPages,
-        hasPrevPage: pageNum > 1,
-      },
-      summary: {
-        byStatus: statusSummary,
-        byType: typeSummary,
-      },
-    });
+      return res.status(200).json({
+        success: true,
+        data: result.data,
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages,
+          hasNextPage: pageNum < totalPages,
+          hasPrevPage: pageNum > 1,
+        },
+        summary: {
+          byStatus: statusSummary,
+          byType: typeSummary,
+        },
+      });
 
-    } catch (error:any) {
+    } catch (error: any) {
 
       if (error.name === "ValidationError") {
         return next(
@@ -1323,7 +1321,7 @@ export const getCompanyVehicles = catchAsyncError(
       }
 
       return next(error);
-      
+
     }
   },
 );
@@ -1339,7 +1337,7 @@ export const assignVehicle = catchAsyncError(
 
     const session = await mongoose.startSession();
     session.startTransaction();
-    
+
     let transactionCommitted = false;
 
     try {
@@ -1415,51 +1413,51 @@ export const assignVehicle = catchAsyncError(
 
       // ── Update assigned user's document (deliverer or transporter) ───────────
       const userRole = assignedUserRole || assignedUser.role;
-      
+
       if (userRole === "deliverer") {
         const deliverer = await DelivererModel.findOne({ userId: assignedUserId }).session(session);
-        
+
         if (!deliverer) {
           throw new ErrorHandler("Deliverer profile not found for this user", 404);
         }
-        
+
         // // Check if deliverer is already assigned to another vehicle
         // if (deliverer.currentVehicleId) {
         //   throw new ErrorHandler(`Deliverer already has an assigned vehicle: ${deliverer.currentVehicleId}`, 400);
         // }
-        
+
         deliverer.currentVehicleId = vehicle._id;
         deliverer.lastActiveAt = new Date();
-        
+
         // If deliverer is available, set to on_route (or keep as is)
         // if (deliverer.availabilityStatus === "available") {
         //   deliverer.availabilityStatus = "on_route";
         // }
-        
+
         await deliverer.save({ session });
-        
+
       } else if (userRole === "transporter") {
         const transporter = await TransporterModel.findOne({ userId: assignedUserId }).session(session);
-        
+
         if (!transporter) {
           throw new ErrorHandler("Transporter profile not found for this user", 404);
         }
-        
+
         // // Check if transporter is already assigned to another vehicle
         // if (transporter.currentVehicleId) {
         //   throw new ErrorHandler(`Transporter already has an assigned vehicle: ${transporter.currentVehicleId}`, 400);
         // }
-        
+
         transporter.currentVehicleId = vehicle._id;
         transporter.lastActiveAt = new Date();
-        
+
         // If transporter is available, set to on_route
         // if (transporter.availabilityStatus === "available") {
         //   transporter.availabilityStatus = "on_route";
         // }
-        
+
         await transporter.save({ session });
-        
+
       } else {
         throw new ErrorHandler(`Cannot assign vehicle to user role: ${userRole}. Only deliverers and transporters can be assigned vehicles.`, 400);
       }
@@ -1498,7 +1496,7 @@ export const assignVehicle = catchAsyncError(
           },
         },
       });
-      
+
     } catch (error: any) {
       if (error.name === "ValidationError") {
         return next(new ErrorHandler(
@@ -1507,10 +1505,10 @@ export const assignVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -1576,19 +1574,19 @@ export const releaseVehicle = catchAsyncError(
           );
           // console.log("Deliverer after release:", updated?.currentVehicleId);
         } else if (assignedRole === "transporter") {
-            const updated = await TransporterModel.findOneAndUpdate(
-              { userId: vehicle.assignedUserId },
-              {
-                $unset: { currentVehicleId: "" },
-                $set: {
-                  availabilityStatus: "available",
-                  lastActiveAt: new Date(),
-                },
+          const updated = await TransporterModel.findOneAndUpdate(
+            { userId: vehicle.assignedUserId },
+            {
+              $unset: { currentVehicleId: "" },
+              $set: {
+                availabilityStatus: "available",
+                lastActiveAt: new Date(),
               },
-              { new: true, session },
-            );
-            // console.log("Transporter after release:", updated?.currentVehicleId);
-          }
+            },
+            { new: true, session },
+          );
+          // console.log("Transporter after release:", updated?.currentVehicleId);
+        }
       }
 
       // ── Release the vehicle ─────────────────────────────────────────────
@@ -1618,10 +1616,10 @@ export const releaseVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
