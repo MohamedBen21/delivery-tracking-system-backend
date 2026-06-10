@@ -462,10 +462,10 @@ export const createCompany = catchAsyncError(
       return next(error);
 
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -669,10 +669,10 @@ export const updateCompany = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
 
   },
@@ -768,10 +768,10 @@ export const toggleBlockCompany = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -838,9 +838,7 @@ export const getMyCompany = catchAsyncError(
     const userId = req.user?._id;
 
     if (!userId) {
-      return next(
-        new ErrorHandler("Unauthorized, you are not authenticated.", 401),
-      );
+      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
 
     const manager = await ManagerModel.findOne({ userId })
@@ -848,29 +846,84 @@ export const getMyCompany = catchAsyncError(
         path: "userId",
         select: "firstName lastName email phone",
       })
-      .populate("companyId")
+      .populate({
+        path: "companyId",
+      })
       .lean();
 
     if (!manager) {
-      return next(
-        new ErrorHandler("You are not a manager of any company", 404),
-      );
+      return next(new ErrorHandler("You are not a manager of any company", 404));
     }
+
+    // ✅ Fetch branches separately (IMPORTANT FIX)
+    const BranchModel = mongoose.model("Branch");
+
+    const branches = await BranchModel.find({
+      companyId: manager.companyId,
+    })
+      .select("name address status createdAt")
+      .lean();
+
+    const company = manager.companyId as any;
+
+    const permissions = manager.permissions || [];
+
+    const permissionMap = permissions.reduce((acc: any, perm: string) => {
+      acc[perm] = true;
+      return acc;
+    }, {});
+
+    const branchAccess = {
+      allBranches: manager.branchAccess?.allBranches ?? false,
+      specificBranches: manager.branchAccess?.specificBranches ?? [],
+      count: manager.branchAccess?.allBranches
+        ? branches.length
+        : manager.branchAccess?.specificBranches?.length || 0,
+    };
+
+    const capabilities = {
+      canManageUsers: permissionMap.can_manage_users || false,
+      canManageBranches: permissionMap.can_manage_branches || false,
+      canViewFinancials: permissionMap.can_view_financials || false,
+      canViewAnalytics: permissionMap.can_view_analytics || false,
+      canExportData: permissionMap.can_export_data || false,
+      canManageVehicles: permissionMap.can_manage_vehicles || false,
+      canManageDeliverers: permissionMap.can_manage_deliverers || false,
+      canManageReports: permissionMap.can_manage_reports || false,
+    };
 
     return res.status(200).json({
       success: true,
       data: {
-        company: manager.companyId,
-        managerProfile: {
-          accessLevel: manager.accessLevel,
-          permissions: manager.permissions,
-          branchAccess: manager.branchAccess,
-          isActive: manager.isActive,
+        company: {
+          ...company,
+          branches, // ✅ FIXED HERE
+          branchCount: branches.length,
         },
+
+        manager: {
+          accessLevel: manager.accessLevel,
+          permissions,
+          branchAccess,
+
+          hasFullAccess: manager.accessLevel === "full",
+          hasLimitedAccess: manager.accessLevel === "limited",
+          hasViewOnlyAccess: manager.accessLevel === "view_only",
+
+          isActive: manager.isActive,
+          capabilities,
+        },
+
         user: manager.userId,
+
+        summary: {
+          role: manager.accessLevel,
+          totalPermissions: permissions.length,
+          accessibleBranchCount: branchAccess.count,
+        },
       },
     });
-  },
+  }
 );
 
 export const getAllCompanies = catchAsyncError(
@@ -1482,10 +1535,10 @@ export const updateBranch = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();;
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();;
 
     }
   },
@@ -1600,10 +1653,10 @@ export const toggleBlockBranch = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
 
   },
@@ -1781,10 +1834,10 @@ export const switchBranchHub = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -2099,10 +2152,10 @@ export const createSupervisor = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -2259,10 +2312,10 @@ export const updateSupervisor = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
 
     }
   },
@@ -2380,10 +2433,10 @@ export const toggleBlockSupervisor = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
 
     }
   },
@@ -4653,10 +4706,10 @@ export const upsertTariff = catchAsyncError(
       return next(error);
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -4775,10 +4828,10 @@ export const bulkUpsertTariffs = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -4862,10 +4915,10 @@ export const deleteTariff = catchAsyncError(
     } catch (error: any) {
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -6079,10 +6132,10 @@ export const getManagerPerformance = catchAsyncError(
 
 //     } finally {
 
-        // if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-        //   await session.abortTransaction().catch(() => {});
-        // }
-        // await session.endSession();
+// if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+//   await session.abortTransaction().catch(() => {});
+// }
+// await session.endSession();
 //     }
 //   },
 // );

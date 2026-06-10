@@ -104,7 +104,7 @@ export const createDeliverer = catchAsyncError(
         documents,
       } = req.body as ICreateDeliverer;
 
-      if (!email || !phone  || !password || !firstName || !lastName) {
+      if (!email || !phone || !password || !firstName || !lastName) {
 
         return next(
           new ErrorHandler("email, phone, password, firstName, and lastName are required", 400)
@@ -149,21 +149,21 @@ export const createDeliverer = catchAsyncError(
       if (!supervisor || !supervisor.isActive) {
 
         // throw new ErrorHandler("You are not an active supervisor of this branch", 403);
-        return next( new ErrorHandler("You are not an active supervisor of this branch", 403));
+        return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
       if (!supervisor.hasPermission("can_manage_deliverers")) {
-        return next( new ErrorHandler("You don't have permission to manage deliverers", 403));
+        return next(new ErrorHandler("You don't have permission to manage deliverers", 403));
       }
 
       if (!branch) {
 
-        return next( new ErrorHandler("Branch not found", 404));
+        return next(new ErrorHandler("Branch not found", 404));
       }
 
       if (branch.status !== "active") {
 
-        return next( new ErrorHandler("Cannot create deliverer for an inactive branch", 400));
+        return next(new ErrorHandler("Cannot create deliverer for an inactive branch", 400));
       }
 
       const normalizedPhone = userModel.normalizePhone(phone);
@@ -178,11 +178,11 @@ export const createDeliverer = catchAsyncError(
 
       if (existingEmail) {
 
-        return next( new ErrorHandler("Email already exists", 400));
+        return next(new ErrorHandler("Email already exists", 400));
       }
 
       if (existingPhone) {
-        return next( new ErrorHandler("Phone number already exists", 400));
+        return next(new ErrorHandler("Phone number already exists", 400));
       }
 
       // if (existingUsername) {
@@ -274,7 +274,7 @@ export const createDeliverer = catchAsyncError(
 
       return next(error);
 
-    } 
+    }
     // finally {
 
     //   if (!transactionCommitted) {
@@ -382,7 +382,7 @@ export const updateDeliverer = catchAsyncError(
       if (body.phone) {
 
         const normalizedPhone = userModel.normalizePhone(body.phone);
-        
+
         duplicateChecks.push(
           userModel.findOne({ phone: normalizedPhone, _id: { $ne: deliverer.userId } }).session(session)
         );
@@ -458,10 +458,10 @@ export const updateDeliverer = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
 
     }
   }
@@ -579,10 +579,10 @@ export const toggleBlockDeliverer = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
 
     }
   }
@@ -691,9 +691,9 @@ export const getMyDeliverers = catchAsyncError(
           { email: { $regex: search, $options: "i" } },
         ],
       }).select("_id").lean();
-      
+
       const matchingUserIds = matchingUsers.map(user => user._id);
-      
+
       if (matchingUserIds.length > 0) {
         delivererQuery.userId = { $in: matchingUserIds };
       } else {
@@ -944,10 +944,10 @@ export const createTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -1088,7 +1088,7 @@ export const updateTransporter = catchAsyncError(
       }
 
       if (body.availabilityStatus) transporterUpdates.availabilityStatus = body.availabilityStatus;
-      
+
       // Only managers and admins can change branch assignment
       if (body.currentBranchId !== undefined && (userRole === "admin" || userRole === "manager")) {
         transporterUpdates.currentBranchId = body.currentBranchId
@@ -1125,10 +1125,10 @@ export const updateTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -1261,10 +1261,10 @@ export const toggleBlockTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -1408,9 +1408,9 @@ export const getMyTransporters = catchAsyncError(
           { email: { $regex: search, $options: "i" } },
         ],
       }).select("_id").lean();
-      
+
       const matchingUserIds = matchingUsers.map(user => user._id);
-      
+
       if (matchingUserIds.length > 0) {
         transporterQuery.userId = { $in: matchingUserIds };
       } else {
@@ -1472,7 +1472,7 @@ interface ICreatePackage {
     phone?: string;
     email?: string;
   };
-  
+
   weight: number;
   dimensions?: IDimensionsBody;
   isFragile?: boolean;
@@ -1530,55 +1530,55 @@ async function getOrCreateClient(
   destination: IDestinationBody,
   session: mongoose.ClientSession
 ): Promise<mongoose.Types.ObjectId> {
-  
+
   if (recipientInfo.clientId) {
     if (!mongoose.Types.ObjectId.isValid(recipientInfo.clientId)) {
       throw new Error("Invalid client id format");
     }
-    
+
     const existingClient = await userModel.findOne({
       _id: recipientInfo.clientId,
       role: "client"
     }).session(session);
-    
+
     if (!existingClient) {
       throw new Error("Client not found");
     }
-    
+
     return existingClient._id;
   }
-  
+
 
   if (!recipientInfo.phone) {
     throw new Error("Either clientId or recipient phone is required");
   }
-  
+
 
   const normalizedPhone = userModel.normalizePhone(recipientInfo.phone);
 
-  let client = await userModel.findOne({ 
+  let client = await userModel.findOne({
 
     phone: normalizedPhone,
-    role: "client" 
+    role: "client"
   }).session(session);
-  
+
   if (client) {
     return client._id;
   }
-  
+
 
   const recipientName = recipientInfo.name || destination.recipientName;
-  
+
   if (!recipientName) {
     throw new Error("Recipient name is required to create new client");
   }
-  
+
   const [firstName, ...lastNameParts] = recipientName.trim().split(' ');
   const lastName = lastNameParts.join(' ') || 'Client';
-  
+
 
   const email = recipientInfo.email;
-  
+
   const [newUser] = await userModel.create([{
     email,
     phone: normalizedPhone,
@@ -1587,7 +1587,7 @@ async function getOrCreateClient(
     role: 'client',
     status: 'active',
   }], { session });
-  
+
 
   await clientModel.create([{
     userId: newUser._id,
@@ -1606,7 +1606,7 @@ async function getOrCreateClient(
       }
     }),
   }], { session });
-  
+
   return newUser._id;
 }
 
@@ -1906,8 +1906,8 @@ export const createPackage = catchAsyncError(
       }
 
 
-      if(sender.role !== "freelancer"){
-          throw new ErrorHandler("Freelancer not found", 404);
+      if (sender.role !== "freelancer") {
+        throw new ErrorHandler("Freelancer not found", 404);
       }
 
       if (!freelancer) {
@@ -1923,7 +1923,7 @@ export const createPackage = catchAsyncError(
 
         throw new ErrorHandler("Package origin must be freelancer's default branch", 400);
       }
-      
+
 
       if (deliveryType === "branch_pickup" && !destinationBranchId) {
 
@@ -1958,7 +1958,7 @@ export const createPackage = catchAsyncError(
             companyId: branch.companyId,
             senderId,
             senderType,
-            clientId,           
+            clientId,
             weight,
             dimensions,
             isFragile: isFragile || false,
@@ -2103,10 +2103,10 @@ export const createPackage = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -2119,7 +2119,7 @@ export const updatePackage = catchAsyncError(
 
     const session = await mongoose.startSession();
     session.startTransaction();
-    
+
     let transactionCommitted = false;
 
     try {
@@ -2210,7 +2210,7 @@ export const updatePackage = catchAsyncError(
       // // ADDED , Handle freelancer statistics updates based on status changes --- we will use it later
       // if (body.status && body.status !== packageDoc.status && packageDoc.senderType === 'freelancer') {
       //   const freelancer = await FreelancerModel.findOne({ userId: packageDoc.senderId }).session(session);
-        
+
       //   if (freelancer) {
       //     const statsUpdate: any = {};
 
@@ -2223,7 +2223,7 @@ export const updatePackage = catchAsyncError(
       //         statsUpdate.$inc['statistics.packagesInTransit'] = -1;
       //       }
       //     }
-          
+
       //     if (body.status === 'failed_delivery') {
       //       statsUpdate.$inc = {
       //         ...statsUpdate.$inc,
@@ -2233,7 +2233,7 @@ export const updatePackage = catchAsyncError(
       //         statsUpdate.$inc['statistics.packagesInTransit'] = -1;
       //       }
       //     }
-          
+
 
       //     if (body.status === 'cancelled') {
       //       statsUpdate.$inc = {
@@ -2244,7 +2244,7 @@ export const updatePackage = catchAsyncError(
       //         statsUpdate.$inc['statistics.packagesInTransit'] = -1;
       //       }
       //     }
-          
+
       //     if (Object.keys(statsUpdate).length > 0) {
       //       await FreelancerModel.findByIdAndUpdate(freelancer._id, statsUpdate, { session });
       //     }
@@ -2254,7 +2254,7 @@ export const updatePackage = catchAsyncError(
       // Update payment record when payment status changes
       if (body.paymentStatus && body.paymentStatus !== packageDoc.paymentStatus) {
         const payment = await PaymentModel.findOne({ packageId: packageDoc._id }).session(session);
-        
+
         if (payment) {
           switch (body.paymentStatus) {
             case 'paid':
@@ -2356,10 +2356,10 @@ export const updatePackage = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -2448,7 +2448,7 @@ export const toggleCancelPackage = catchAsyncError(
 
 
       const payment = await PaymentModel.findOne({ packageId: packageDoc._id }).session(session);
-      
+
       if (payment) {
         if (newStatus === "cancelled") {
           payment.status = 'cancelled';
@@ -2480,7 +2480,7 @@ export const toggleCancelPackage = catchAsyncError(
       if (newStatus === "cancelled") {
 
         sendPackageCancelledNotification(
-          
+
           packageDoc.senderId.toString(),
           packageDoc.senderType,
           packageId.toString(),
@@ -2517,10 +2517,10 @@ export const toggleCancelPackage = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -2842,14 +2842,16 @@ export const addPackageIssue = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
 
   }
 );
+
+
 
 //RESOLVE PACKAGE PROBLEM
 export const resolvePackageIssue = catchAsyncError(
@@ -2915,7 +2917,7 @@ export const resolvePackageIssue = catchAsyncError(
 
 
       const index = parseInt(issueIndex as string, 10);
-      
+
       if (!packageDoc.issues || index >= packageDoc.issues.length) {
 
         throw new ErrorHandler("Issue not found", 404);
@@ -2944,7 +2946,7 @@ export const resolvePackageIssue = catchAsyncError(
         },
       };
 
-      const allIssuesResolved = packageDoc.issues.every((iss: any, i: number) => 
+      const allIssuesResolved = packageDoc.issues.every((iss: any, i: number) =>
         i === index ? true : iss.resolved
       );
 
@@ -2992,10 +2994,10 @@ export const resolvePackageIssue = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
 
   }
@@ -3179,7 +3181,7 @@ export const createFreelancer = catchAsyncError(
 
 
       Promise.allSettled([
-        
+
         sendFreelancerAccountCreatedNotification(
           user[0]._id.toString(),
           firstName,
@@ -3220,15 +3222,13 @@ export const createFreelancer = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
-
-
 
 //  UPDATE FREELANCER
 export const updateFreelancer = catchAsyncError(
@@ -3377,16 +3377,14 @@ export const updateFreelancer = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
 
     }
   }
 );
-
-
 
 //  TOGGLE BLOCK / ACTIVATE FREELANCER
 export const toggleBlockFreelancer = catchAsyncError(
@@ -3437,7 +3435,7 @@ export const toggleBlockFreelancer = catchAsyncError(
 
 
       let newStatus: 'active' | 'suspended';
-      
+
       if (freelancer.status === 'active') {
         newStatus = 'suspended';
       } else if (freelancer.status === 'suspended' || freelancer.status === 'pending_verification') {
@@ -3497,16 +3495,14 @@ export const toggleBlockFreelancer = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
 
   }
 );
-
-
 
 //  GET FREELANCER BY ID
 export const getFreelancer = catchAsyncError(
@@ -3553,8 +3549,6 @@ export const getFreelancer = catchAsyncError(
     });
   }
 );
-
-
 
 //  GET ALL FREELANCERS IN MY BRANCH
 export const getMyFreelancers = catchAsyncError(
@@ -3604,14 +3598,14 @@ export const getMyFreelancers = catchAsyncError(
         select: "firstName lastName email phone imageUrl role status",
         ...(search && typeof search === "string"
           ? {
-              match: {
-                $or: [
-                  { firstName: { $regex: search, $options: "i" } },
-                  { lastName: { $regex: search, $options: "i" } },
-                  { email: { $regex: search, $options: "i" } },
-                ],
-              },
-            }
+            match: {
+              $or: [
+                { firstName: { $regex: search, $options: "i" } },
+                { lastName: { $regex: search, $options: "i" } },
+                { email: { $regex: search, $options: "i" } },
+              ],
+            },
+          }
           : {}),
       })
       .populate("defaultOriginBranchId", "name code address status")
@@ -3723,9 +3717,9 @@ export const assignDeliverer = catchAsyncError(
         throw new ErrorHandler("User not found", 404);
       }
 
-      if(["admin", "manager", "supervisor", "transporter","freelancer"].includes(userToAssign.role) === true){
-              return next(new ErrorHandler(`User cannot be assigned because he is already a ${userToAssign.role}`, 400));
-        }
+      if (["admin", "manager", "supervisor", "transporter", "freelancer"].includes(userToAssign.role) === true) {
+        return next(new ErrorHandler(`User cannot be assigned because he is already a ${userToAssign.role}`, 400));
+      }
 
       if (existingDeliverer) {
         throw new ErrorHandler("User is already a deliverer", 400);
@@ -3792,10 +3786,10 @@ export const assignDeliverer = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -3938,10 +3932,10 @@ export const assignTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -4072,10 +4066,10 @@ export const assignFreelancer = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -4753,8 +4747,8 @@ interface IBranchPackagesQuery {
   packageType?: string;     // single  OR  comma-separated: "fragile,heavy"
   paymentStatus?: string;
   deliveryPriority?: string;
-  fromDate?: string;       
-  toDate?: string;         
+  fromDate?: string;
+  toDate?: string;
   search?: string;          // trackingNumber prefix OR recipient name/phone
   needsAttention?: string;  // "true" → status ∈ {failed_delivery, damaged, lost, on_hold}
   isOverdue?: string;       // "true" → estimatedDeliveryTime < now AND not terminal
@@ -4824,17 +4818,17 @@ const COMPUTED_FIELDS_STAGE: mongoose.PipelineStage = {
     deliveryProgress: {
       $switch: {
         branches: [
-          { case: { $eq: ["$status", "pending"] },               then: 0   },
-          { case: { $eq: ["$status", "accepted"] },              then: 10  },
-          { case: { $eq: ["$status", "at_origin_branch"] },      then: 20  },
-          { case: { $eq: ["$status", "in_transit_to_branch"] },  then: 40  },
-          { case: { $eq: ["$status", "at_destination_branch"] }, then: 60  },
-          { case: { $eq: ["$status", "out_for_delivery"] },      then: 80  },
-          { case: { $eq: ["$status", "delivered"] },             then: 100 },
-          { case: { $eq: ["$status", "failed_delivery"] },       then: 80  },
-          { case: { $eq: ["$status", "rescheduled"] },           then: 70  },
-          { case: { $eq: ["$status", "returned"] },              then: 100 },
-          { case: { $eq: ["$status", "on_hold"] },               then: 50  },
+          { case: { $eq: ["$status", "pending"] }, then: 0 },
+          { case: { $eq: ["$status", "accepted"] }, then: 10 },
+          { case: { $eq: ["$status", "at_origin_branch"] }, then: 20 },
+          { case: { $eq: ["$status", "in_transit_to_branch"] }, then: 40 },
+          { case: { $eq: ["$status", "at_destination_branch"] }, then: 60 },
+          { case: { $eq: ["$status", "out_for_delivery"] }, then: 80 },
+          { case: { $eq: ["$status", "delivered"] }, then: 100 },
+          { case: { $eq: ["$status", "failed_delivery"] }, then: 80 },
+          { case: { $eq: ["$status", "rescheduled"] }, then: 70 },
+          { case: { $eq: ["$status", "returned"] }, then: 100 },
+          { case: { $eq: ["$status", "on_hold"] }, then: 50 },
         ],
         default: 0,
       },
@@ -4901,338 +4895,431 @@ const PROJECT_STRIP_HISTORY: mongoose.PipelineStage.Project = {
 export const getBranchPackages = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      
+
       const supervisorUserId = req.user?._id;
-    const { branchId } = req.params;
+      const { branchId } = req.params;
 
 
-    if (!supervisorUserId) {
-      return next(
-        new ErrorHandler("Unauthorized, you are not authenticated.", 401),
-      );
-    }
+      if (!supervisorUserId) {
+        return next(
+          new ErrorHandler("Unauthorized, you are not authenticated.", 401),
+        );
+      }
 
 
-    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
-      return next(new ErrorHandler("Invalid branch ID", 400));
-    }
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
 
 
-    const {
-      deliveryType,
-      status,
-      packageType,
-      paymentStatus,
-      deliveryPriority,
-      fromDate,
-      toDate,
-      search,
-      needsAttention,
-      isOverdue,
-      page = "1",
-      limit = "20",
-      sortBy = "createdAt",
-      sortOrder = "desc",
-    } = req.query as IBranchPackagesQuery;
+      const {
+        deliveryType,
+        status,
+        packageType,
+        paymentStatus,
+        deliveryPriority,
+        fromDate,
+        toDate,
+        search,
+        needsAttention,
+        isOverdue,
+        page = "1",
+        limit = "20",
+        sortBy = "createdAt",
+        sortOrder = "desc",
+      } = req.query as IBranchPackagesQuery;
 
 
-    const pageNum = parseInt(page, 10);
-    const limitNum = parseInt(limit, 10);
+      const pageNum = parseInt(page, 10);
+      const limitNum = parseInt(limit, 10);
 
-    if (isNaN(pageNum) || pageNum < 1) {
-      return next(new ErrorHandler("page must be a positive integer", 400));
-    }
-    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
-      return next(new ErrorHandler("limit must be between 1 and 100", 400));
-    }
-    if (!ALLOWED_SORT_FIELDS.includes(sortBy as any)) {
-      return next(
-        new ErrorHandler(
-          `sortBy must be one of: ${ALLOWED_SORT_FIELDS.join(", ")}`,
-          400,
-        ),
-      );
-    }
-    if (sortOrder && !["asc", "desc"].includes(sortOrder)) {
-      return next(new ErrorHandler("sortOrder must be 'asc' or 'desc'", 400));
-    }
-
-
-    if (
-      deliveryType !== undefined &&
-      !DELIVERY_TYPES.includes(deliveryType as DeliveryType)
-    ) {
-      return next(
-        new ErrorHandler(
-          `Invalid deliveryType. Must be one of: ${DELIVERY_TYPES.join(", ")}`,
-          400,
-        ),
-      );
-    }
-
-    let statusFilter: PackageStatus[] | undefined;
-    if (status !== undefined) {
-      const raw = status.split(",").map((s) => s.trim());
-      const invalid = raw.filter(
-        (s) => !PACKAGE_STATUSES.includes(s as PackageStatus),
-      );
-      if (invalid.length) {
+      if (isNaN(pageNum) || pageNum < 1) {
+        return next(new ErrorHandler("page must be a positive integer", 400));
+      }
+      if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
+        return next(new ErrorHandler("limit must be between 1 and 100", 400));
+      }
+      if (!ALLOWED_SORT_FIELDS.includes(sortBy as any)) {
         return next(
           new ErrorHandler(
-            `Invalid status value(s): ${invalid.join(", ")}. Allowed: ${PACKAGE_STATUSES.join(", ")}`,
+            `sortBy must be one of: ${ALLOWED_SORT_FIELDS.join(", ")}`,
             400,
           ),
         );
       }
-      statusFilter = raw as PackageStatus[];
-    }
+      if (sortOrder && !["asc", "desc"].includes(sortOrder)) {
+        return next(new ErrorHandler("sortOrder must be 'asc' or 'desc'", 400));
+      }
 
-    let packageTypeFilter: PackageType[] | undefined;
-    if (packageType !== undefined) {
-      const raw = packageType.split(",").map((t) => t.trim());
-      const invalid = raw.filter(
-        (t) => !PACKAGE_TYPES.includes(t as PackageType),
-      );
-      if (invalid.length) {
+
+      if (
+        deliveryType !== undefined &&
+        !DELIVERY_TYPES.includes(deliveryType as DeliveryType)
+      ) {
         return next(
           new ErrorHandler(
-            `Invalid packageType value(s): ${invalid.join(", ")}. Allowed: ${PACKAGE_TYPES.join(", ")}`,
+            `Invalid deliveryType. Must be one of: ${DELIVERY_TYPES.join(", ")}`,
             400,
           ),
         );
       }
-      packageTypeFilter = raw as PackageType[];
-    }
 
-    if (
-      paymentStatus !== undefined &&
-      !PAYMENT_STATUSES.includes(paymentStatus as PaymentStatus)
-    ) {
-      return next(
-        new ErrorHandler(
-          `Invalid paymentStatus. Must be one of: ${PAYMENT_STATUSES.join(", ")}`,
-          400,
-        ),
-      );
-    }
-
-    if (
-      deliveryPriority !== undefined &&
-      !DELIVERY_PRIORITIES.includes(deliveryPriority as any)
-    ) {
-      return next(
-        new ErrorHandler(
-          `Invalid deliveryPriority. Must be one of: ${DELIVERY_PRIORITIES.join(", ")}`,
-          400,
-        ),
-      );
-    }
-
-    let fromDateParsed: Date | undefined;
-    let toDateParsed: Date | undefined;
-
-    if (fromDate !== undefined) {
-      fromDateParsed = new Date(fromDate);
-      if (isNaN(fromDateParsed.getTime())) {
-        return next(new ErrorHandler("fromDate is not a valid date", 400));
+      let statusFilter: PackageStatus[] | undefined;
+      if (status !== undefined) {
+        const raw = status.split(",").map((s) => s.trim());
+        const invalid = raw.filter(
+          (s) => !PACKAGE_STATUSES.includes(s as PackageStatus),
+        );
+        if (invalid.length) {
+          return next(
+            new ErrorHandler(
+              `Invalid status value(s): ${invalid.join(", ")}. Allowed: ${PACKAGE_STATUSES.join(", ")}`,
+              400,
+            ),
+          );
+        }
+        statusFilter = raw as PackageStatus[];
       }
-    }
-    if (toDate !== undefined) {
-      toDateParsed = new Date(toDate);
-      if (isNaN(toDateParsed.getTime())) {
-        return next(new ErrorHandler("toDate is not a valid date", 400));
+
+      let packageTypeFilter: PackageType[] | undefined;
+      if (packageType !== undefined) {
+        const raw = packageType.split(",").map((t) => t.trim());
+        const invalid = raw.filter(
+          (t) => !PACKAGE_TYPES.includes(t as PackageType),
+        );
+        if (invalid.length) {
+          return next(
+            new ErrorHandler(
+              `Invalid packageType value(s): ${invalid.join(", ")}. Allowed: ${PACKAGE_TYPES.join(", ")}`,
+              400,
+            ),
+          );
+        }
+        packageTypeFilter = raw as PackageType[];
       }
-    }
-    if (fromDateParsed && toDateParsed && fromDateParsed > toDateParsed) {
-      return next(new ErrorHandler("fromDate must be before toDate", 400));
-    }
 
-    // ── Authorization ─────────────────────────────────────────────────────
-    const [branch, supervisor] = await Promise.all([
-      BranchModel.findById(branchId).lean(),
-      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
-    ]);
+      if (
+        paymentStatus !== undefined &&
+        !PAYMENT_STATUSES.includes(paymentStatus as PaymentStatus)
+      ) {
+        return next(
+          new ErrorHandler(
+            `Invalid paymentStatus. Must be one of: ${PAYMENT_STATUSES.join(", ")}`,
+            400,
+          ),
+        );
+      }
 
-    if (!branch) {
-      return next(new ErrorHandler("Branch not found", 404));
-    }
+      if (
+        deliveryPriority !== undefined &&
+        !DELIVERY_PRIORITIES.includes(deliveryPriority as any)
+      ) {
+        return next(
+          new ErrorHandler(
+            `Invalid deliveryPriority. Must be one of: ${DELIVERY_PRIORITIES.join(", ")}`,
+            400,
+          ),
+        );
+      }
 
-    if (!supervisor || !(supervisor as any).isActive) {
-      return next(
-        new ErrorHandler(
-          "You are not an active supervisor of this branch",
-          403,
-        ),
-      );
-    }
+      let fromDateParsed: Date | undefined;
+      let toDateParsed: Date | undefined;
+
+      if (fromDate !== undefined) {
+        fromDateParsed = new Date(fromDate);
+        if (isNaN(fromDateParsed.getTime())) {
+          return next(new ErrorHandler("fromDate is not a valid date", 400));
+        }
+      }
+      if (toDate !== undefined) {
+        toDateParsed = new Date(toDate);
+        if (isNaN(toDateParsed.getTime())) {
+          return next(new ErrorHandler("toDate is not a valid date", 400));
+        }
+      }
+      if (fromDateParsed && toDateParsed && fromDateParsed > toDateParsed) {
+        return next(new ErrorHandler("fromDate must be before toDate", 400));
+      }
+
+      // ── Authorization ─────────────────────────────────────────────────────
+      const [branch, supervisor] = await Promise.all([
+        BranchModel.findById(branchId).lean(),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+      ]);
+
+      if (!branch) {
+        return next(new ErrorHandler("Branch not found", 404));
+      }
+
+      if (!supervisor || !(supervisor as any).isActive) {
+        return next(
+          new ErrorHandler(
+            "You are not an active supervisor of this branch",
+            403,
+          ),
+        );
+      }
 
 
-    const baseMatch: Record<string, any> = {
-      currentBranchId: new mongoose.Types.ObjectId(branchId.toString()),
-    };
-
-    if (deliveryType) baseMatch.deliveryType = deliveryType;
-
-    if (statusFilter) {
-      baseMatch.status =
-        statusFilter.length === 1 ? statusFilter[0] : { $in: statusFilter };
-    }
-
-    if (packageTypeFilter) {
-      baseMatch.type =
-        packageTypeFilter.length === 1
-          ? packageTypeFilter[0]
-          : { $in: packageTypeFilter };
-    }
-
-    if (paymentStatus) baseMatch.paymentStatus = paymentStatus;
-    if (deliveryPriority) baseMatch.deliveryPriority = deliveryPriority;
-
-    if (fromDateParsed || toDateParsed) {
-      baseMatch.createdAt = {
-        ...(fromDateParsed && { $gte: fromDateParsed }),
-        ...(toDateParsed && { $lte: toDateParsed }),
+      const baseMatch: Record<string, any> = {
+        currentBranchId: new mongoose.Types.ObjectId(branchId.toString()),
       };
-    }
 
-    // needsAttention and isOverdue override any explicit status filter
-    if (needsAttention === "true") {
-      baseMatch.status = {
-        $in: ["failed_delivery", "failed_delivery_attempt", "damaged", "lost", "on_hold"],
-      };
-    }
+      if (deliveryType) baseMatch.deliveryType = deliveryType;
 
-    if (isOverdue === "true") {
-      baseMatch.estimatedDeliveryTime = { $lt: new Date() };
-      baseMatch.status = { $nin: ["delivered", "cancelled", "returned"] };
-    }
+      if (statusFilter) {
+        baseMatch.status =
+          statusFilter.length === 1 ? statusFilter[0] : { $in: statusFilter };
+      }
 
-    if (search && search.trim().length > 0) {
-      const searchRegex = { $regex: search.trim(), $options: "i" };
-      baseMatch.$or = [
-        { trackingNumber: searchRegex },
-        { "destination.recipientName": searchRegex },
-        { "destination.recipientPhone": searchRegex },
-      ];
-    }
+      if (packageTypeFilter) {
+        baseMatch.type =
+          packageTypeFilter.length === 1
+            ? packageTypeFilter[0]
+            : { $in: packageTypeFilter };
+      }
 
-    const sortDirection = sortOrder === "asc" ? 1 : -1;
-    const skip = (pageNum - 1) * limitNum;
+      if (paymentStatus) baseMatch.paymentStatus = paymentStatus;
+      if (deliveryPriority) baseMatch.deliveryPriority = deliveryPriority;
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  PATH A — home delivery: split response
-    //
-    //  Groups packages by lifecycle stage:
-    //    pendingPackages   → pending, accepted, at_origin_branch
-    //    inTransit         → in_transit_to_branch, manifested
-    //    atBranch          → at_destination_branch
-    //    outForDelivery    → out_for_delivery, failed_delivery, failed_delivery_attempt, rescheduled
-    //    terminal          → delivered, cancelled, returned, lost, damaged, on_hold
-    // ─────────────────────────────────────────────────────────────────────
-    const isHomePath =
-      deliveryType === "home" || deliveryType === undefined;
+      if (fromDateParsed || toDateParsed) {
+        baseMatch.createdAt = {
+          ...(fromDateParsed && { $gte: fromDateParsed }),
+          ...(toDateParsed && { $lte: toDateParsed }),
+        };
+      }
 
-    if (isHomePath) {
-      const callerStatuses: string[] | null = baseMatch.status
-        ? baseMatch.status.$in
+      // needsAttention and isOverdue override any explicit status filter
+      if (needsAttention === "true") {
+        baseMatch.status = {
+          $in: ["failed_delivery", "failed_delivery_attempt", "damaged", "lost", "on_hold"],
+        };
+      }
+
+      if (isOverdue === "true") {
+        baseMatch.estimatedDeliveryTime = { $lt: new Date() };
+        baseMatch.status = { $nin: ["delivered", "cancelled", "returned"] };
+      }
+
+      if (search && search.trim().length > 0) {
+        const searchRegex = { $regex: search.trim(), $options: "i" };
+        baseMatch.$or = [
+          { trackingNumber: searchRegex },
+          { "destination.recipientName": searchRegex },
+          { "destination.recipientPhone": searchRegex },
+        ];
+      }
+
+      const sortDirection = sortOrder === "asc" ? 1 : -1;
+      const skip = (pageNum - 1) * limitNum;
+
+      // ─────────────────────────────────────────────────────────────────────
+      //  PATH A — home delivery: split response
+      //
+      //  Groups packages by lifecycle stage:
+      //    pendingPackages   → pending, accepted, at_origin_branch
+      //    inTransit         → in_transit_to_branch, manifested
+      //    atBranch          → at_destination_branch
+      //    outForDelivery    → out_for_delivery, failed_delivery, failed_delivery_attempt, rescheduled
+      //    terminal          → delivered, cancelled, returned, lost, damaged, on_hold
+      // ─────────────────────────────────────────────────────────────────────
+      const isHomePath =
+        deliveryType === "home" || deliveryType === undefined;
+
+      if (isHomePath) {
+        const callerStatuses: string[] | null = baseMatch.status
           ? baseMatch.status.$in
-          : [baseMatch.status]
-        : null;
+            ? baseMatch.status.$in
+            : [baseMatch.status]
+          : null;
 
-      const sharedMatch: Record<string, any> = { ...baseMatch, deliveryType: "home" };
-      delete sharedMatch.status;
+        const sharedMatch: Record<string, any> = { ...baseMatch, deliveryType: "home" };
+        delete sharedMatch.status;
 
-      /**
-       * Returns a $match stage for the given target statuses.
-       * If the caller requested specific statuses, only matching ones pass.
-       * If no caller filter, all target statuses pass.
-       */
-      const multiStatusMatch = (targetStatuses: string[]): mongoose.PipelineStage.Match => {
-        if (callerStatuses === null) {
-          return { $match: { status: { $in: targetStatuses } } };
-        }
-        const allowed = targetStatuses.filter((s) => callerStatuses.includes(s));
-        if (allowed.length === 0) {
+        /**
+         * Returns a $match stage for the given target statuses.
+         * If the caller requested specific statuses, only matching ones pass.
+         * If no caller filter, all target statuses pass.
+         */
+        const multiStatusMatch = (targetStatuses: string[]): mongoose.PipelineStage.Match => {
+          if (callerStatuses === null) {
+            return { $match: { status: { $in: targetStatuses } } };
+          }
+          const allowed = targetStatuses.filter((s) => callerStatuses.includes(s));
+          if (allowed.length === 0) {
+            return { $match: { status: "__no_match__" } };
+          }
+          return { $match: { status: allowed.length === 1 ? allowed[0] : { $in: allowed } } };
+        };
+
+        const singleStatusMatch = (targetStatus: string): mongoose.PipelineStage.Match => {
+          if (callerStatuses === null || callerStatuses.includes(targetStatus)) {
+            return { $match: { status: targetStatus } };
+          }
           return { $match: { status: "__no_match__" } };
-        }
-        return { $match: { status: allowed.length === 1 ? allowed[0] : { $in: allowed } } };
-      };
+        };
 
-      const singleStatusMatch = (targetStatus: string): mongoose.PipelineStage.Match => {
-        if (callerStatuses === null || callerStatuses.includes(targetStatus)) {
-          return { $match: { status: targetStatus } };
-        }
-        return { $match: { status: "__no_match__" } };
-      };
+        const splitPipeline: mongoose.PipelineStage[] = [
+          { $match: sharedMatch },
+          COMPUTED_FIELDS_STAGE,
+          ...LOOKUP_STAGES,
+          { $sort: { [sortBy]: sortDirection } },
+          {
+            $facet: {
+              // ── Stage 1: At Origin (pending, accepted, at_origin_branch) ──────
+              pendingPackages: [
+                multiStatusMatch(["pending", "accepted", "at_origin_branch"]),
+                { $skip: skip },
+                { $limit: limitNum },
+                PROJECT_STRIP_HISTORY,
+              ],
+              pendingCount: [
+                multiStatusMatch(["pending", "accepted", "at_origin_branch"]),
+                { $count: "count" },
+              ],
 
-      const splitPipeline: mongoose.PipelineStage[] = [
-        { $match: sharedMatch },
+              // ── Stage 2: In Transit ──────────────────────────────────────────
+              inTransit: [
+                multiStatusMatch(["in_transit_to_branch", "manifested"]),
+                { $skip: skip },
+                { $limit: limitNum },
+                PROJECT_STRIP_HISTORY,
+              ],
+              inTransitCount: [
+                multiStatusMatch(["in_transit_to_branch", "manifested"]),
+                { $count: "count" },
+              ],
+
+              // ── Stage 3: At Destination Branch ───────────────────────────────
+              atBranch: [
+                singleStatusMatch("at_destination_branch"),
+                { $skip: skip },
+                { $limit: limitNum },
+                PROJECT_STRIP_HISTORY,
+              ],
+              atBranchCount: [
+                singleStatusMatch("at_destination_branch"),
+                { $count: "count" },
+              ],
+
+              // ── Stage 4: Out for Delivery + Failed Attempts ──────────────────
+              outForDelivery: [
+                multiStatusMatch(["out_for_delivery", "failed_delivery", "failed_delivery_attempt", "rescheduled"]),
+                { $skip: skip },
+                { $limit: limitNum },
+                PROJECT_STRIP_HISTORY,
+              ],
+              outForDeliveryCount: [
+                multiStatusMatch(["out_for_delivery", "failed_delivery", "failed_delivery_attempt", "rescheduled"]),
+                { $count: "count" },
+              ],
+
+              // ── Stage 5: Terminal (completed/finished) ───────────────────────
+              terminal: [
+                multiStatusMatch(["delivered", "cancelled", "returned", "lost", "damaged", "on_hold"]),
+                { $skip: skip },
+                { $limit: limitNum },
+                PROJECT_STRIP_HISTORY,
+              ],
+              terminalCount: [
+                multiStatusMatch(["delivered", "cancelled", "returned", "lost", "damaged", "on_hold"]),
+                { $count: "count" },
+              ],
+
+              // ── Summary ──────────────────────────────────────────────────────
+              statusBreakdown: [
+                { $group: { _id: "$status", count: { $sum: 1 } } },
+              ],
+              actionableCounters: [
+                {
+                  $group: {
+                    _id: null,
+                    readyForDispatch: {
+                      $sum: { $cond: ["$isReadyForDispatch", 1, 0] },
+                    },
+                    needsAttention: {
+                      $sum: { $cond: ["$needsAttentionFlag", 1, 0] },
+                    },
+                    overdue: {
+                      $sum: { $cond: ["$isOverdueFlag", 1, 0] },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        ];
+
+        const [result] = await PackageModel.aggregate(splitPipeline);
+
+        const pendingTotal = result.pendingCount[0]?.count ?? 0;
+        const inTransitTotal = result.inTransitCount[0]?.count ?? 0;
+        const atBranchTotal = result.atBranchCount[0]?.count ?? 0;
+        const outForDeliveryTotal = result.outForDeliveryCount[0]?.count ?? 0;
+        const terminalTotal = result.terminalCount[0]?.count ?? 0;
+
+        const statusBreakdown = Object.fromEntries(
+          (result.statusBreakdown as { _id: string; count: number }[]).map(
+            ({ _id, count }) => [_id, count],
+          ),
+        );
+
+        const counters = result.actionableCounters[0] ?? {
+          readyForDispatch: 0,
+          needsAttention: 0,
+          overdue: 0,
+        };
+        delete counters._id;
+
+        return res.status(200).json({
+          success: true,
+          deliveryType: "home",
+          data: {
+            pending: {
+              packages: result.pendingPackages,
+              pagination: paginationMeta(pendingTotal, pageNum, limitNum),
+            },
+            inTransit: {
+              packages: result.inTransit,
+              pagination: paginationMeta(inTransitTotal, pageNum, limitNum),
+            },
+            atBranch: {
+              packages: result.atBranch,
+              pagination: paginationMeta(atBranchTotal, pageNum, limitNum),
+            },
+            outForDelivery: {
+              packages: result.outForDelivery,
+              pagination: paginationMeta(outForDeliveryTotal, pageNum, limitNum),
+            },
+            terminal: {
+              packages: result.terminal,
+              pagination: paginationMeta(terminalTotal, pageNum, limitNum),
+            },
+          },
+          summary: {
+            byStatus: statusBreakdown,
+            actionable: counters,
+          },
+        });
+      }
+
+      // ─────────────────────────────────────────────────────────────────────
+      //  PATH B — branch_pickup: flat paginated response
+      // ─────────────────────────────────────────────────────────────────────
+
+      const flatPipeline: mongoose.PipelineStage[] = [
+        { $match: baseMatch },
         COMPUTED_FIELDS_STAGE,
         ...LOOKUP_STAGES,
         { $sort: { [sortBy]: sortDirection } },
         {
           $facet: {
-            // ── Stage 1: At Origin (pending, accepted, at_origin_branch) ──────
-            pendingPackages: [
-              multiStatusMatch(["pending", "accepted", "at_origin_branch"]),
+            data: [
               { $skip: skip },
               { $limit: limitNum },
               PROJECT_STRIP_HISTORY,
             ],
-            pendingCount: [
-              multiStatusMatch(["pending", "accepted", "at_origin_branch"]),
-              { $count: "count" },
-            ],
-
-            // ── Stage 2: In Transit ──────────────────────────────────────────
-            inTransit: [
-              multiStatusMatch(["in_transit_to_branch", "manifested"]),
-              { $skip: skip },
-              { $limit: limitNum },
-              PROJECT_STRIP_HISTORY,
-            ],
-            inTransitCount: [
-              multiStatusMatch(["in_transit_to_branch", "manifested"]),
-              { $count: "count" },
-            ],
-
-            // ── Stage 3: At Destination Branch ───────────────────────────────
-            atBranch: [
-              singleStatusMatch("at_destination_branch"),
-              { $skip: skip },
-              { $limit: limitNum },
-              PROJECT_STRIP_HISTORY,
-            ],
-            atBranchCount: [
-              singleStatusMatch("at_destination_branch"),
-              { $count: "count" },
-            ],
-
-            // ── Stage 4: Out for Delivery + Failed Attempts ──────────────────
-            outForDelivery: [
-              multiStatusMatch(["out_for_delivery", "failed_delivery", "failed_delivery_attempt", "rescheduled"]),
-              { $skip: skip },
-              { $limit: limitNum },
-              PROJECT_STRIP_HISTORY,
-            ],
-            outForDeliveryCount: [
-              multiStatusMatch(["out_for_delivery", "failed_delivery", "failed_delivery_attempt", "rescheduled"]),
-              { $count: "count" },
-            ],
-
-            // ── Stage 5: Terminal (completed/finished) ───────────────────────
-            terminal: [
-              multiStatusMatch(["delivered", "cancelled", "returned", "lost", "damaged", "on_hold"]),
-              { $skip: skip },
-              { $limit: limitNum },
-              PROJECT_STRIP_HISTORY,
-            ],
-            terminalCount: [
-              multiStatusMatch(["delivered", "cancelled", "returned", "lost", "damaged", "on_hold"]),
-              { $count: "count" },
-            ],
-
-            // ── Summary ──────────────────────────────────────────────────────
+            totalCount: [{ $count: "count" }],
             statusBreakdown: [
               { $group: { _id: "$status", count: { $sum: 1 } } },
             ],
@@ -5240,15 +5327,13 @@ export const getBranchPackages = catchAsyncError(
               {
                 $group: {
                   _id: null,
-                  readyForDispatch: {
-                    $sum: { $cond: ["$isReadyForDispatch", 1, 0] },
+                  readyForPickup: {
+                    $sum: { $cond: ["$isReadyForPickup", 1, 0] },
                   },
                   needsAttention: {
                     $sum: { $cond: ["$needsAttentionFlag", 1, 0] },
                   },
-                  overdue: {
-                    $sum: { $cond: ["$isOverdueFlag", 1, 0] },
-                  },
+                  overdue: { $sum: { $cond: ["$isOverdueFlag", 1, 0] } },
                 },
               },
             ],
@@ -5256,13 +5341,10 @@ export const getBranchPackages = catchAsyncError(
         },
       ];
 
-      const [result] = await PackageModel.aggregate(splitPipeline);
+      const [result] = await PackageModel.aggregate(flatPipeline);
 
-      const pendingTotal     = result.pendingCount[0]?.count ?? 0;
-      const inTransitTotal   = result.inTransitCount[0]?.count ?? 0;
-      const atBranchTotal    = result.atBranchCount[0]?.count ?? 0;
-      const outForDeliveryTotal = result.outForDeliveryCount[0]?.count ?? 0;
-      const terminalTotal    = result.terminalCount[0]?.count ?? 0;
+      const total: number = result.totalCount[0]?.count ?? 0;
+      const totalPages = Math.ceil(total / limitNum);
 
       const statusBreakdown = Object.fromEntries(
         (result.statusBreakdown as { _id: string; count: number }[]).map(
@@ -5271,7 +5353,7 @@ export const getBranchPackages = catchAsyncError(
       );
 
       const counters = result.actionableCounters[0] ?? {
-        readyForDispatch: 0,
+        readyForPickup: 0,
         needsAttention: 0,
         overdue: 0,
       };
@@ -5279,105 +5361,17 @@ export const getBranchPackages = catchAsyncError(
 
       return res.status(200).json({
         success: true,
-        deliveryType: "home",
-        data: {
-          pending: {
-            packages: result.pendingPackages,
-            pagination: paginationMeta(pendingTotal, pageNum, limitNum),
-          },
-          inTransit: {
-            packages: result.inTransit,
-            pagination: paginationMeta(inTransitTotal, pageNum, limitNum),
-          },
-          atBranch: {
-            packages: result.atBranch,
-            pagination: paginationMeta(atBranchTotal, pageNum, limitNum),
-          },
-          outForDelivery: {
-            packages: result.outForDelivery,
-            pagination: paginationMeta(outForDeliveryTotal, pageNum, limitNum),
-          },
-          terminal: {
-            packages: result.terminal,
-            pagination: paginationMeta(terminalTotal, pageNum, limitNum),
-          },
-        },
+        deliveryType: "branch_pickup",
+        data: result.data,
+        pagination: paginationMeta(total, pageNum, limitNum),
         summary: {
           byStatus: statusBreakdown,
           actionable: counters,
         },
       });
-    }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  PATH B — branch_pickup: flat paginated response
-    // ─────────────────────────────────────────────────────────────────────
 
-    const flatPipeline: mongoose.PipelineStage[] = [
-      { $match: baseMatch },
-      COMPUTED_FIELDS_STAGE,
-      ...LOOKUP_STAGES,
-      { $sort: { [sortBy]: sortDirection } },
-      {
-        $facet: {
-          data: [
-            { $skip: skip },
-            { $limit: limitNum },
-            PROJECT_STRIP_HISTORY,
-          ],
-          totalCount: [{ $count: "count" }],
-          statusBreakdown: [
-            { $group: { _id: "$status", count: { $sum: 1 } } },
-          ],
-          actionableCounters: [
-            {
-              $group: {
-                _id: null,
-                readyForPickup: {
-                  $sum: { $cond: ["$isReadyForPickup", 1, 0] },
-                },
-                needsAttention: {
-                  $sum: { $cond: ["$needsAttentionFlag", 1, 0] },
-                },
-                overdue: { $sum: { $cond: ["$isOverdueFlag", 1, 0] } },
-              },
-            },
-          ],
-        },
-      },
-    ];
-
-    const [result] = await PackageModel.aggregate(flatPipeline);
-
-    const total: number = result.totalCount[0]?.count ?? 0;
-    const totalPages = Math.ceil(total / limitNum);
-
-    const statusBreakdown = Object.fromEntries(
-      (result.statusBreakdown as { _id: string; count: number }[]).map(
-        ({ _id, count }) => [_id, count],
-      ),
-    );
-
-    const counters = result.actionableCounters[0] ?? {
-      readyForPickup: 0,
-      needsAttention: 0,
-      overdue: 0,
-    };
-    delete counters._id;
-
-    return res.status(200).json({
-      success: true,
-      deliveryType: "branch_pickup",
-      data: result.data,
-      pagination: paginationMeta(total, pageNum, limitNum),
-      summary: {
-        byStatus: statusBreakdown,
-        actionable: counters,
-      },
-    });
-  
-
-    } catch (error:any) {
+    } catch (error: any) {
 
       if (error.name === "ValidationError") {
         return next(
@@ -5391,10 +5385,10 @@ export const getBranchPackages = catchAsyncError(
       }
 
       return next(new ErrorHandler("Failed to fetch branch packages", 500));
-      
-      
+
+
     }
-});
+  });
 
 
 
@@ -5630,11 +5624,11 @@ export const cancelPackage = catchAsyncError(
       return next(error);
 
     } finally {
-    
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -5649,110 +5643,110 @@ export const getPackagesByStatus = catchAsyncError(
     try {
 
       const supervisorUserId = req.user?._id;
-    const { branchId } = req.params;
+      const { branchId } = req.params;
 
-    if (!supervisorUserId) {
-      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
-    }
+      if (!supervisorUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
 
-    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
-      return next(new ErrorHandler("Invalid branch ID", 400));
-    }
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
 
-    const { status, deliveryType, page, limit } = req.query as {
-      status?: string;
-      deliveryType?: string;
-      page?: string;
-      limit?: string;
-    };
+      const { status, deliveryType, page, limit } = req.query as {
+        status?: string;
+        deliveryType?: string;
+        page?: string;
+        limit?: string;
+      };
 
-   
-    if (!status) {
-      return next(
-        new ErrorHandler(
-          `status is required. Allowed values: ${PACKAGE_STATUSES.join(", ")}`,
-          400,
-        ),
+
+      if (!status) {
+        return next(
+          new ErrorHandler(
+            `status is required. Allowed values: ${PACKAGE_STATUSES.join(", ")}`,
+            400,
+          ),
+        );
+      }
+
+      const rawStatuses = status.split(",").map((s) => s.trim());
+      const invalidStatuses = rawStatuses.filter(
+        (s) => !PACKAGE_STATUSES.includes(s as PackageStatus),
       );
-    }
 
-    const rawStatuses = status.split(",").map((s) => s.trim());
-    const invalidStatuses = rawStatuses.filter(
-      (s) => !PACKAGE_STATUSES.includes(s as PackageStatus),
-    );
+      if (invalidStatuses.length) {
+        return next(
+          new ErrorHandler(
+            `Invalid status value(s): ${invalidStatuses.join(", ")}. Allowed: ${PACKAGE_STATUSES.join(", ")}`,
+            400,
+          ),
+        );
+      }
 
-    if (invalidStatuses.length) {
-      return next(
-        new ErrorHandler(
-          `Invalid status value(s): ${invalidStatuses.join(", ")}. Allowed: ${PACKAGE_STATUSES.join(", ")}`,
-          400,
-        ),
-      );
-    }
+      if (
+        deliveryType !== undefined &&
+        !["home", "branch_pickup"].includes(deliveryType)
+      ) {
+        return next(
+          new ErrorHandler(
+            "deliveryType must be 'home' or 'branch_pickup'",
+            400,
+          ),
+        );
+      }
 
-    if (
-      deliveryType !== undefined &&
-      !["home", "branch_pickup"].includes(deliveryType)
-    ) {
-      return next(
-        new ErrorHandler(
-          "deliveryType must be 'home' or 'branch_pickup'",
-          400,
-        ),
-      );
-    }
-
-    const pagination = parsePagination(page, limit, next);
-    if (!pagination) return;
-    const { pageNum, limitNum, skip } = pagination;
+      const pagination = parsePagination(page, limit, next);
+      if (!pagination) return;
+      const { pageNum, limitNum, skip } = pagination;
 
 
-    const [branch, supervisor] = await Promise.all([
-      BranchModel.findById(branchId).lean(),
-      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
-    ]);
+      const [branch, supervisor] = await Promise.all([
+        BranchModel.findById(branchId).lean(),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+      ]);
 
-    if (!branch) return next(new ErrorHandler("Branch not found", 404));
+      if (!branch) return next(new ErrorHandler("Branch not found", 404));
 
-    if (!supervisor || !supervisor.isActive || supervisor.branchId.toString() !== branchId.toString()) {
-      return next(
-        new ErrorHandler("You are not an active supervisor of this branch", 403),
-      );
-    }
+      if (!supervisor || !supervisor.isActive || supervisor.branchId.toString() !== branchId.toString()) {
+        return next(
+          new ErrorHandler("You are not an active supervisor of this branch", 403),
+        );
+      }
 
 
-    const matchStage: Record<string, any> = {
-      $or: [
-        { originBranchId: new mongoose.Types.ObjectId(branchId.toString()) },
-        { currentBranchId: new mongoose.Types.ObjectId(branchId.toString()) },
-      ],
-      status: rawStatuses.length === 1 ? rawStatuses[0] : { $in: rawStatuses },
-    };
+      const matchStage: Record<string, any> = {
+        $or: [
+          { originBranchId: new mongoose.Types.ObjectId(branchId.toString()) },
+          { currentBranchId: new mongoose.Types.ObjectId(branchId.toString()) },
+        ],
+        status: rawStatuses.length === 1 ? rawStatuses[0] : { $in: rawStatuses },
+      };
 
-    if (deliveryType) matchStage.deliveryType = deliveryType;
+      if (deliveryType) matchStage.deliveryType = deliveryType;
 
-    const [result] = await PackageModel.aggregate([
-      { $match: matchStage },
-      ...PACKAGE_LOOKUP_STAGES,
-      { $sort: { createdAt: -1 } },
-      {
-        $facet: {
-          data: [{ $skip: skip }, { $limit: limitNum }],
-          totalCount: [{ $count: "count" }],
+      const [result] = await PackageModel.aggregate([
+        { $match: matchStage },
+        ...PACKAGE_LOOKUP_STAGES,
+        { $sort: { createdAt: -1 } },
+        {
+          $facet: {
+            data: [{ $skip: skip }, { $limit: limitNum }],
+            totalCount: [{ $count: "count" }],
+          },
         },
-      },
-    ]);
+      ]);
 
-    const total: number = result.totalCount[0]?.count ?? 0;
+      const total: number = result.totalCount[0]?.count ?? 0;
 
-    return res.status(200).json({
-      success: true,
-      data: result.data,
-      pagination: paginationMeta(total, pageNum, limitNum),
-    });
- 
-      
-    } catch (error:any) {
+      return res.status(200).json({
+        success: true,
+        data: result.data,
+        pagination: paginationMeta(total, pageNum, limitNum),
+      });
+
+
+    } catch (error: any) {
 
       if (error.name === "ValidationError") {
         return next(
@@ -5768,7 +5762,7 @@ export const getPackagesByStatus = catchAsyncError(
       return next(new ErrorHandler("Failed to fetch packages by status", 500));
 
     }
- });
+  });
 
 
 
@@ -5777,106 +5771,106 @@ export const getPackagesByBranch = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
 
-    const supervisorUserId = req.user?._id;
-    const { branchId } = req.params;
+      const supervisorUserId = req.user?._id;
+      const { branchId } = req.params;
 
-    if (!supervisorUserId) {
-      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
-    }
+      if (!supervisorUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
 
-    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
-      return next(new ErrorHandler("Invalid branch ID", 400));
-    }
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
 
-    const { isDestination, status, page, limit } = req.query as {
-      isDestination?: string;
-      status?: string;
-      page?: string;
-      limit?: string;
-    };
+      const { isDestination, status, page, limit } = req.query as {
+        isDestination?: string;
+        status?: string;
+        page?: string;
+        limit?: string;
+      };
 
-    if (isDestination !== undefined && !["true", "false"].includes(isDestination)) {
-      return next(new ErrorHandler("isDestination must be 'true' or 'false'", 400));
-    }
+      if (isDestination !== undefined && !["true", "false"].includes(isDestination)) {
+        return next(new ErrorHandler("isDestination must be 'true' or 'false'", 400));
+      }
 
-    const queryByDestination = isDestination === "true";
+      const queryByDestination = isDestination === "true";
 
-    let statusFilter: string[] | undefined;
-    if (status !== undefined) {
-      const raw = status.split(",").map((s) => s.trim());
-      const invalid = raw.filter((s) => !PACKAGE_STATUSES.includes(s as PackageStatus));
-      if (invalid.length) {
+      let statusFilter: string[] | undefined;
+      if (status !== undefined) {
+        const raw = status.split(",").map((s) => s.trim());
+        const invalid = raw.filter((s) => !PACKAGE_STATUSES.includes(s as PackageStatus));
+        if (invalid.length) {
+          return next(
+            new ErrorHandler(
+              `Invalid status value(s): ${invalid.join(", ")}`,
+              400,
+            ),
+          );
+        }
+        statusFilter = raw;
+      }
+
+      const pagination = parsePagination(page, limit, next);
+      if (!pagination) return;
+      const { pageNum, limitNum, skip } = pagination;
+
+
+      const [branch, supervisor] = await Promise.all([
+        BranchModel.findById(branchId).lean(),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+      ]);
+
+      if (!branch) return next(new ErrorHandler("Branch not found", 404));
+
+      if ((!supervisor || !supervisor.isActive) || (supervisor.branchId.toString() !== branchId.toString())) {
         return next(
-          new ErrorHandler(
-            `Invalid status value(s): ${invalid.join(", ")}`,
-            400,
-          ),
+          new ErrorHandler("You are not an active supervisor of this branch", 403),
         );
       }
-      statusFilter = raw;
-    }
 
-    const pagination = parsePagination(page, limit, next);
-    if (!pagination) return;
-    const { pageNum, limitNum, skip } = pagination;
+      const branchOid = new mongoose.Types.ObjectId(branchId.toString());
 
+      const matchStage: Record<string, any> = queryByDestination
+        ? { destinationBranchId: branchOid }
+        : { currentBranchId: branchOid };
 
-    const [branch, supervisor] = await Promise.all([
-      BranchModel.findById(branchId).lean(),
-      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
-    ]);
+      if (statusFilter) {
+        matchStage.status =
+          statusFilter.length === 1 ? statusFilter[0] : { $in: statusFilter };
+      }
 
-    if (!branch) return next(new ErrorHandler("Branch not found", 404));
-
-    if ((!supervisor || !supervisor.isActive) || (supervisor.branchId.toString() !== branchId.toString())) {
-      return next(
-        new ErrorHandler("You are not an active supervisor of this branch", 403),
-      );
-    }
-
-    const branchOid = new mongoose.Types.ObjectId(branchId.toString());
-
-    const matchStage: Record<string, any> = queryByDestination
-      ? { destinationBranchId: branchOid }   
-      : { currentBranchId: branchOid };
-
-    if (statusFilter) {
-      matchStage.status =
-        statusFilter.length === 1 ? statusFilter[0] : { $in: statusFilter };
-    }
-
-    const [result] = await PackageModel.aggregate([
-      { $match: matchStage },
-      ...PACKAGE_LOOKUP_STAGES,
-      { $sort: { createdAt: -1 } },
-      {
-        $facet: {
-          data: [{ $skip: skip }, { $limit: limitNum }],
-          totalCount: [{ $count: "count" }],
-          statusBreakdown: [
-            { $group: { _id: "$status", count: { $sum: 1 } } },
-          ],
+      const [result] = await PackageModel.aggregate([
+        { $match: matchStage },
+        ...PACKAGE_LOOKUP_STAGES,
+        { $sort: { createdAt: -1 } },
+        {
+          $facet: {
+            data: [{ $skip: skip }, { $limit: limitNum }],
+            totalCount: [{ $count: "count" }],
+            statusBreakdown: [
+              { $group: { _id: "$status", count: { $sum: 1 } } },
+            ],
+          },
         },
-      },
-    ]);
+      ]);
 
-    const total: number = result.totalCount[0]?.count ?? 0;
+      const total: number = result.totalCount[0]?.count ?? 0;
 
-    const statusBreakdown = Object.fromEntries(
-      (result.statusBreakdown as { _id: string; count: number }[]).map(
-        ({ _id, count }) => [_id, count],
-      ),
-    );
+      const statusBreakdown = Object.fromEntries(
+        (result.statusBreakdown as { _id: string; count: number }[]).map(
+          ({ _id, count }) => [_id, count],
+        ),
+      );
 
-    return res.status(200).json({
-      success: true,
-      data: result.data,
-      pagination: paginationMeta(total, pageNum, limitNum),
-      summary: { byStatus: statusBreakdown },
-    });
+      return res.status(200).json({
+        success: true,
+        data: result.data,
+        pagination: paginationMeta(total, pageNum, limitNum),
+        summary: { byStatus: statusBreakdown },
+      });
 
-      
-    } catch (error:any) {
+
+    } catch (error: any) {
 
       if (error.name === "ValidationError") {
         return next(
@@ -5890,7 +5884,7 @@ export const getPackagesByBranch = catchAsyncError(
       }
 
       return next(new ErrorHandler("Failed to fetch packages by branch", 500));
-      
+
     }
   }
 );
@@ -5901,122 +5895,122 @@ export const getPackagesBySender = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
 
-    const supervisorUserId = req.user?._id;
-    const { branchId } = req.params;
+      const supervisorUserId = req.user?._id;
+      const { branchId } = req.params;
 
-    if (!supervisorUserId) {
-      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
-    }
+      if (!supervisorUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
 
-    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
-      return next(new ErrorHandler("Invalid branch ID", 400));
-    }
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
 
-    const { senderId, senderType, status, page, limit } = req.query as {
-      senderId?: string;
-      senderType?: string;
-      status?: string;
-      page?: string;
-      limit?: string;
-    };
+      const { senderId, senderType, status, page, limit } = req.query as {
+        senderId?: string;
+        senderType?: string;
+        status?: string;
+        page?: string;
+        limit?: string;
+      };
 
-    if (!senderId) {
-      return next(new ErrorHandler("senderId is required", 400));
-    }
+      if (!senderId) {
+        return next(new ErrorHandler("senderId is required", 400));
+      }
 
-    if (!mongoose.Types.ObjectId.isValid(senderId)) {
-      return next(new ErrorHandler("Invalid senderId", 400));
-    }
+      if (!mongoose.Types.ObjectId.isValid(senderId)) {
+        return next(new ErrorHandler("Invalid senderId", 400));
+      }
 
-    const senderUser = await userModel.findById(senderId).select("firstName lastName email phone role").lean();
+      const senderUser = await userModel.findById(senderId).select("firstName lastName email phone role").lean();
 
-    if (
-     !senderUser || senderUser.role !== "freelancer"
-    ) {
-      return next(
-        new ErrorHandler("sender not found or is not a freelancer", 400),
-      );
-    }
-
-    let statusFilter: string[] | undefined;
-    if (status !== undefined) {
-      const raw = status.split(",").map((s) => s.trim());
-      const invalid = raw.filter((s) => !PACKAGE_STATUSES.includes(s as PackageStatus));
-      if (invalid.length) {
+      if (
+        !senderUser || senderUser.role !== "freelancer"
+      ) {
         return next(
-          new ErrorHandler(`Invalid status value(s): ${invalid.join(", ")}`, 400),
+          new ErrorHandler("sender not found or is not a freelancer", 400),
         );
       }
-      statusFilter = raw;
-    }
 
-    const pagination = parsePagination(page, limit, next);
-    if (!pagination) return;
-    const { pageNum, limitNum, skip } = pagination;
+      let statusFilter: string[] | undefined;
+      if (status !== undefined) {
+        const raw = status.split(",").map((s) => s.trim());
+        const invalid = raw.filter((s) => !PACKAGE_STATUSES.includes(s as PackageStatus));
+        if (invalid.length) {
+          return next(
+            new ErrorHandler(`Invalid status value(s): ${invalid.join(", ")}`, 400),
+          );
+        }
+        statusFilter = raw;
+      }
 
-
-    const senderOid = new mongoose.Types.ObjectId(senderId);
-    const branchOid = new mongoose.Types.ObjectId(branchId.toString());
-
-    const [branch, supervisor] = await Promise.all([
-      BranchModel.findById(branchId).lean(),
-      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
-    ]);
-
-    if (!branch) return next(new ErrorHandler("Branch not found", 404));
-
-    if (!supervisor || !supervisor.isActive) {
-      return next(
-        new ErrorHandler("You are not an active supervisor of this branch", 403),
-      );
-    }
+      const pagination = parsePagination(page, limit, next);
+      if (!pagination) return;
+      const { pageNum, limitNum, skip } = pagination;
 
 
-    const matchStage: Record<string, any> = {
-      senderId: senderOid,
-      $or: [{ originBranchId: branchOid }, { currentBranchId: branchOid }],
-    };
+      const senderOid = new mongoose.Types.ObjectId(senderId);
+      const branchOid = new mongoose.Types.ObjectId(branchId.toString());
 
-    if (senderType) matchStage.senderType = senderType;
+      const [branch, supervisor] = await Promise.all([
+        BranchModel.findById(branchId).lean(),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+      ]);
 
-    if (statusFilter) {
-      matchStage.status =
-        statusFilter.length === 1 ? statusFilter[0] : { $in: statusFilter };
-    }
+      if (!branch) return next(new ErrorHandler("Branch not found", 404));
 
-    const [result] = await PackageModel.aggregate([
-      { $match: matchStage },
-      ...PACKAGE_LOOKUP_STAGES,
-      { $sort: { createdAt: -1 } },
-      {
-        $facet: {
-          data: [{ $skip: skip }, { $limit: limitNum }],
-          totalCount: [{ $count: "count" }],
-          statusBreakdown: [
-            { $group: { _id: "$status", count: { $sum: 1 } } },
-          ],
+      if (!supervisor || !supervisor.isActive) {
+        return next(
+          new ErrorHandler("You are not an active supervisor of this branch", 403),
+        );
+      }
+
+
+      const matchStage: Record<string, any> = {
+        senderId: senderOid,
+        $or: [{ originBranchId: branchOid }, { currentBranchId: branchOid }],
+      };
+
+      if (senderType) matchStage.senderType = senderType;
+
+      if (statusFilter) {
+        matchStage.status =
+          statusFilter.length === 1 ? statusFilter[0] : { $in: statusFilter };
+      }
+
+      const [result] = await PackageModel.aggregate([
+        { $match: matchStage },
+        ...PACKAGE_LOOKUP_STAGES,
+        { $sort: { createdAt: -1 } },
+        {
+          $facet: {
+            data: [{ $skip: skip }, { $limit: limitNum }],
+            totalCount: [{ $count: "count" }],
+            statusBreakdown: [
+              { $group: { _id: "$status", count: { $sum: 1 } } },
+            ],
+          },
         },
-      },
-    ]);
+      ]);
 
-    const total: number = result.totalCount[0]?.count ?? 0;
+      const total: number = result.totalCount[0]?.count ?? 0;
 
-    const statusBreakdown = Object.fromEntries(
-      (result.statusBreakdown as { _id: string; count: number }[]).map(
-        ({ _id, count }) => [_id, count],
-      ),
-    );
+      const statusBreakdown = Object.fromEntries(
+        (result.statusBreakdown as { _id: string; count: number }[]).map(
+          ({ _id, count }) => [_id, count],
+        ),
+      );
 
-    return res.status(200).json({
-      success: true,
-      sender: senderUser,
-      data: result.data,
-      pagination: paginationMeta(total, pageNum, limitNum),
-      summary: { byStatus: statusBreakdown },
-    });
+      return res.status(200).json({
+        success: true,
+        sender: senderUser,
+        data: result.data,
+        pagination: paginationMeta(total, pageNum, limitNum),
+        summary: { byStatus: statusBreakdown },
+      });
 
-      
-    } catch (error:any) {
+
+    } catch (error: any) {
 
       if (error.name === "ValidationError") {
         return next(
@@ -6031,7 +6025,7 @@ export const getPackagesBySender = catchAsyncError(
 
       return next(new ErrorHandler("Failed to fetch packages by sender", 500));
 
-      
+
     }
   }
 );
@@ -6043,136 +6037,136 @@ const phoneRegex: RegExp = /^(\+213|0)(5|6|7)[0-9]{8}$/;
 export const getPackagesByReceiver = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      
-    const supervisorUserId = req.user?._id;
-    const { branchId } = req.params;
 
-    if (!supervisorUserId) {
-      return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
-    }
+      const supervisorUserId = req.user?._id;
+      const { branchId } = req.params;
 
-    if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
-      return next(new ErrorHandler("Invalid branch ID", 400));
-    }
+      if (!supervisorUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
 
-    const { recipientPhone, recipientName, status, page, limit } = req.query as {
-      recipientPhone?: string;
-      recipientName?: string;
-      status?: string;
-      page?: string;
-      limit?: string;
-    };
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
 
-    if (!recipientPhone && !recipientName) {
-      return next(
-        new ErrorHandler(
-          "At least one of recipientPhone or recipientName is required",
-          400,
-        ),
-      );
-    }
+      const { recipientPhone, recipientName, status, page, limit } = req.query as {
+        recipientPhone?: string;
+        recipientName?: string;
+        status?: string;
+        page?: string;
+        limit?: string;
+      };
 
-    if (recipientPhone !== undefined && (typeof recipientPhone !== "string" ||  recipientPhone.trim().length === 0 || !phoneRegex.test(recipientPhone.trim()))) {
-      return next(new ErrorHandler("recipientPhone is not valid", 400));
-    }
-
-    if ((recipientName !== undefined && ( typeof recipientName !== "string" || recipientName.trim().length === 0 || recipientName.trim().length > 50))) {
-      return next(new ErrorHandler("recipientName is not valid", 400));
-    }
-
-    let statusFilter: string[] | undefined;
-    if (status !== undefined) {
-      const raw = status.split(",").map((s) => s.trim());
-      const invalid = raw.filter((s) => !PACKAGE_STATUSES.includes(s as PackageStatus));
-      if (invalid.length) {
+      if (!recipientPhone && !recipientName) {
         return next(
-          new ErrorHandler(`Invalid status value(s): ${invalid.join(", ")}`, 400),
+          new ErrorHandler(
+            "At least one of recipientPhone or recipientName is required",
+            400,
+          ),
         );
       }
-      statusFilter = raw;
-    }
 
-    const pagination = parsePagination(page, limit, next);
-    if (!pagination) return;
-    const { pageNum, limitNum, skip } = pagination;
+      if (recipientPhone !== undefined && (typeof recipientPhone !== "string" || recipientPhone.trim().length === 0 || !phoneRegex.test(recipientPhone.trim()))) {
+        return next(new ErrorHandler("recipientPhone is not valid", 400));
+      }
+
+      if ((recipientName !== undefined && (typeof recipientName !== "string" || recipientName.trim().length === 0 || recipientName.trim().length > 50))) {
+        return next(new ErrorHandler("recipientName is not valid", 400));
+      }
+
+      let statusFilter: string[] | undefined;
+      if (status !== undefined) {
+        const raw = status.split(",").map((s) => s.trim());
+        const invalid = raw.filter((s) => !PACKAGE_STATUSES.includes(s as PackageStatus));
+        if (invalid.length) {
+          return next(
+            new ErrorHandler(`Invalid status value(s): ${invalid.join(", ")}`, 400),
+          );
+        }
+        statusFilter = raw;
+      }
+
+      const pagination = parsePagination(page, limit, next);
+      if (!pagination) return;
+      const { pageNum, limitNum, skip } = pagination;
 
 
-    const [branch, supervisor] = await Promise.all([
-      BranchModel.findById(branchId).lean(),
-      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
-    ]);
+      const [branch, supervisor] = await Promise.all([
+        BranchModel.findById(branchId).lean(),
+        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
+      ]);
 
-    if (!branch) return next(new ErrorHandler("Branch not found", 404));
+      if (!branch) return next(new ErrorHandler("Branch not found", 404));
 
-    if (!supervisor || !supervisor.isActive) {
-      return next(
-        new ErrorHandler("You are not an active supervisor of this branch", 403),
-      );
-    }
+      if (!supervisor || !supervisor.isActive) {
+        return next(
+          new ErrorHandler("You are not an active supervisor of this branch", 403),
+        );
+      }
 
 
-    const branchOid = new mongoose.Types.ObjectId(branchId.toString());
+      const branchOid = new mongoose.Types.ObjectId(branchId.toString());
 
-    const matchStage: Record<string, any> = {
-      $or: [{ originBranchId: branchOid }, { currentBranchId: branchOid }],
-    };
+      const matchStage: Record<string, any> = {
+        $or: [{ originBranchId: branchOid }, { currentBranchId: branchOid }],
+      };
 
-    if (recipientPhone && recipientName) {
-      matchStage.$and = [
-        { "destination.recipientPhone": recipientPhone.trim() },
+      if (recipientPhone && recipientName) {
+        matchStage.$and = [
+          { "destination.recipientPhone": recipientPhone.trim() },
+          {
+            "destination.recipientName": {
+              $regex: recipientName.trim(),
+              $options: "i",
+            },
+          },
+        ];
+      } else if (recipientPhone) {
+        matchStage["destination.recipientPhone"] = recipientPhone.trim();
+      } else if (recipientName) {
+        matchStage["destination.recipientName"] = {
+          $regex: recipientName.trim(),
+          $options: "i",
+        };
+      }
+
+      if (statusFilter) {
+        matchStage.status =
+          statusFilter.length === 1 ? statusFilter[0] : { $in: statusFilter };
+      }
+
+      const [result] = await PackageModel.aggregate([
+        { $match: matchStage },
+        ...PACKAGE_LOOKUP_STAGES,
+        { $sort: { createdAt: -1 } },
         {
-          "destination.recipientName": {
-            $regex: recipientName.trim(),
-            $options: "i",
+          $facet: {
+            data: [{ $skip: skip }, { $limit: limitNum }],
+            totalCount: [{ $count: "count" }],
+            statusBreakdown: [
+              { $group: { _id: "$status", count: { $sum: 1 } } },
+            ],
           },
         },
-      ];
-    } else if (recipientPhone) {
-      matchStage["destination.recipientPhone"] = recipientPhone.trim();
-    } else if (recipientName) {
-      matchStage["destination.recipientName"] = {
-        $regex: recipientName.trim(),
-        $options: "i",
-      };
-    }
+      ]);
 
-    if (statusFilter) {
-      matchStage.status =
-        statusFilter.length === 1 ? statusFilter[0] : { $in: statusFilter };
-    }
+      const total: number = result.totalCount[0]?.count ?? 0;
 
-    const [result] = await PackageModel.aggregate([
-      { $match: matchStage },
-      ...PACKAGE_LOOKUP_STAGES,
-      { $sort: { createdAt: -1 } },
-      {
-        $facet: {
-          data: [{ $skip: skip }, { $limit: limitNum }],
-          totalCount: [{ $count: "count" }],
-          statusBreakdown: [
-            { $group: { _id: "$status", count: { $sum: 1 } } },
-          ],
-        },
-      },
-    ]);
+      const statusBreakdown = Object.fromEntries(
+        (result.statusBreakdown as { _id: string; count: number }[]).map(
+          ({ _id, count }) => [_id, count],
+        ),
+      );
 
-    const total: number = result.totalCount[0]?.count ?? 0;
+      return res.status(200).json({
+        success: true,
+        data: result.data,
+        pagination: paginationMeta(total, pageNum, limitNum),
+        summary: { byStatus: statusBreakdown },
+      });
 
-    const statusBreakdown = Object.fromEntries(
-      (result.statusBreakdown as { _id: string; count: number }[]).map(
-        ({ _id, count }) => [_id, count],
-      ),
-    );
+    } catch (error: any) {
 
-    return res.status(200).json({
-      success: true,
-      data: result.data,
-      pagination: paginationMeta(total, pageNum, limitNum),
-      summary: { byStatus: statusBreakdown },
-    });
-
-    } catch (error:any) {
-      
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -6193,25 +6187,25 @@ export const getPackagesByReceiver = catchAsyncError(
 
 
 const READABLE_STATUS: Record<PackageStatus, string> = {
-  pending:                "Created",
-  accepted:               "Accepted",
-  at_origin_branch:       "Arrived at Origin Branch",
-  in_transit_to_branch:   "In Transit",
-  at_destination_branch:  "Arrived at Destination Branch",
-  out_for_delivery:       "Out for Delivery",
-  delivered:              "Delivered",
-  failed_delivery:        "Delivery Failed",
-  
+  pending: "Created",
+  accepted: "Accepted",
+  at_origin_branch: "Arrived at Origin Branch",
+  in_transit_to_branch: "In Transit",
+  at_destination_branch: "Arrived at Destination Branch",
+  out_for_delivery: "Out for Delivery",
+  delivered: "Delivered",
+  failed_delivery: "Delivery Failed",
+
   cashier_claimed: 'Claimed at Counter',
-  manifested:      'Assigned to Manifest',
-  
+  manifested: 'Assigned to Manifest',
+
   failed_delivery_attempt: "Failed Delivery Attempt",
-  rescheduled:            "Rescheduled",
-  returned:               "Returned",
-  cancelled:              "Cancelled",
-  lost:                   "Lost",
-  damaged:                "Damaged",
-  on_hold:                "On Hold",
+  rescheduled: "Rescheduled",
+  returned: "Returned",
+  cancelled: "Cancelled",
+  lost: "Lost",
+  damaged: "Damaged",
+  on_hold: "On Hold",
 };
 
 
@@ -6231,12 +6225,12 @@ function deliveryProgress(status: PackageStatus): number {
 
   const exceptionMap: Partial<Record<PackageStatus, number>> = {
     failed_delivery: 80,
-    rescheduled:     70,
-    on_hold:         50,
-    returned:        100,
-    damaged:         100,
-    lost:            0,
-    cancelled:       0,
+    rescheduled: 70,
+    on_hold: 50,
+    returned: 100,
+    damaged: 100,
+    lost: 0,
+    cancelled: 0,
   };
   return exceptionMap[status] ?? 0;
 }
@@ -6314,7 +6308,7 @@ export const getPackageHistory = catchAsyncError(
     }
 
     const skip = (pageNum - 1) * limitNum;
-    
+
     // CRITICAL: Use .lean() on the find and also ensure populate returns lean objects
     const entries = await PackageHistoryModel.find(historyMatch)
       .sort({ timestamp: -1 })
@@ -6326,12 +6320,12 @@ export const getPackageHistory = catchAsyncError(
         options: { lean: true } // Force populate to return lean objects
       })
       .populate({
-        path: "branchId", 
+        path: "branchId",
         select: "name code",
         options: { lean: true }
       })
       .lean(); // Convert the main documents to plain objects
-    
+
     const total = await PackageHistoryModel.countDocuments(historyMatch);
 
     const totalPages = Math.ceil(total / limitNum);
@@ -6400,7 +6394,7 @@ export const getPackageTracking = catchAsyncError(
       return next(new ErrorHandler("Invalid package ID", 400));
     }
 
-    const branchOid  = new mongoose.Types.ObjectId(branchId.toString());
+    const branchOid = new mongoose.Types.ObjectId(branchId.toString());
     const packageOid = new mongoose.Types.ObjectId(packageId.toString());
 
 
@@ -6412,8 +6406,8 @@ export const getPackageTracking = catchAsyncError(
           "estimatedDeliveryTime deliveredAt attemptCount maxAttempts " +
           "returnInfo trackingHistory createdAt"
         )
-        .populate("originBranchId",      "name code")
-        .populate("currentBranchId",     "name code")
+        .populate("originBranchId", "name code")
+        .populate("currentBranchId", "name code")
         .populate("destinationBranchId", "name code")
         .lean(),
       SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
@@ -6442,7 +6436,7 @@ export const getPackageTracking = catchAsyncError(
     ]);
 
     const history: any[] = (packageDoc.trackingHistory ?? [])
-      .slice()                                  
+      .slice()
       .sort((a: any, b: any) =>
         new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
       );
@@ -6451,19 +6445,19 @@ export const getPackageTracking = catchAsyncError(
 
     const timeline = history.map((event: any, idx: number) => {
       const status = event.status as PackageStatus;
-      const isLast  = idx === history.length - 1;
+      const isLast = idx === history.length - 1;
 
       return {
         status,
         readableStatus: READABLE_STATUS[status] ?? status,
-        isException:    EXCEPTION_STATUSES.has(status),
+        isException: EXCEPTION_STATUSES.has(status),
 
         stepState: isLast ? "active" : "completed",
         timestamp: event.timestamp,
-        notes:     event.notes   ?? null,
-        location:  event.location ?? null,
-        branchId:  event.branchId ?? null,
-        handledBy: event.userId   ?? null,
+        notes: event.notes ?? null,
+        location: event.location ?? null,
+        branchId: event.branchId ?? null,
+        handledBy: event.userId ?? null,
       };
     });
 
@@ -6490,41 +6484,41 @@ export const getPackageTracking = catchAsyncError(
       const seconds = Math.floor(
         (Date.now() - new Date(latestEvent.timestamp).getTime()) / 1000,
       );
-      if      (seconds < 60)   lastUpdatedAgo = "just now";
+      if (seconds < 60) lastUpdatedAgo = "just now";
       else if (seconds < 3600) lastUpdatedAgo = `${Math.floor(seconds / 60)}m ago`;
-      else if (seconds < 86400)lastUpdatedAgo = `${Math.floor(seconds / 3600)}h ago`;
-      else                     lastUpdatedAgo = `${Math.floor(seconds / 86400)}d ago`;
+      else if (seconds < 86400) lastUpdatedAgo = `${Math.floor(seconds / 3600)}h ago`;
+      else lastUpdatedAgo = `${Math.floor(seconds / 86400)}d ago`;
     }
 
     return res.status(200).json({
       success: true,
 
       currentState: {
-        status:           currentStatus,
-        readableStatus:   READABLE_STATUS[currentStatus] ?? currentStatus,
-        isException:      EXCEPTION_STATUSES.has(currentStatus),
-        progress:         deliveryProgress(currentStatus),   // 0–100
+        status: currentStatus,
+        readableStatus: READABLE_STATUS[currentStatus] ?? currentStatus,
+        isException: EXCEPTION_STATUSES.has(currentStatus),
+        progress: deliveryProgress(currentStatus),   // 0–100
         lastUpdatedAgo,
       },
 
       // ── Package summary ────────────────────────────────────────────────
       package: {
-        trackingNumber:        packageDoc.trackingNumber,
-        deliveryType:          packageDoc.deliveryType,
-        deliveryPriority:      packageDoc.deliveryPriority,
+        trackingNumber: packageDoc.trackingNumber,
+        deliveryType: packageDoc.deliveryType,
+        deliveryPriority: packageDoc.deliveryPriority,
         estimatedDeliveryTime: packageDoc.estimatedDeliveryTime ?? null,
-        deliveredAt:           packageDoc.deliveredAt           ?? null,
-        attemptCount:          packageDoc.attemptCount,
-        maxAttempts:           packageDoc.maxAttempts,
-        isReturn:              packageDoc.returnInfo?.isReturn  ?? false,
+        deliveredAt: packageDoc.deliveredAt ?? null,
+        attemptCount: packageDoc.attemptCount,
+        maxAttempts: packageDoc.maxAttempts,
+        isReturn: packageDoc.returnInfo?.isReturn ?? false,
         recipient: {
-          name:  packageDoc.destination.recipientName,
+          name: packageDoc.destination.recipientName,
           phone: packageDoc.destination.recipientPhone,
-          city:  packageDoc.destination.city,
+          city: packageDoc.destination.city,
           state: packageDoc.destination.state,
         },
-        originBranch:      packageDoc.originBranchId,
-        currentBranch:     packageDoc.currentBranchId,
+        originBranch: packageDoc.originBranchId,
+        currentBranch: packageDoc.currentBranchId,
         destinationBranch: packageDoc.destinationBranchId ?? null,
       },
       timeline,
@@ -6623,8 +6617,8 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
 
     try {
       const transporterUserId = req.user?._id;
-      const { routeId }       = req.params;
-      const { notes }         = req.body as { notes?: string };
+      const { routeId } = req.params;
+      const { notes } = req.body as { notes?: string };
 
       if (!transporterUserId) {
         return next(new ErrorHandler('Unauthorized, you are not authenticated.', 401));
@@ -6682,7 +6676,7 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
         if (notReady.length > 0) {
           throw new ErrorHandler(
             `${notReady.length} manifest(s) are not sealed/loaded yet: ` +
-              notReady.map((m) => m.manifestCode).join(', '),
+            notReady.map((m) => m.manifestCode).join(', '),
             400,
           );
         }
@@ -6700,8 +6694,8 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
             routeId,
             {
               $set: {
-                status:           'active',
-                actualStart:      now,
+                status: 'active',
+                actualStart: now,
                 currentStopIndex: 0,
               },
             },
@@ -6712,8 +6706,8 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
             {
               $set: {
                 availabilityStatus: 'on_route',
-                currentRouteId:     route._id,
-                lastActiveAt:       now,
+                currentRouteId: route._id,
+                lastActiveAt: now,
               },
             },
             { session },
@@ -6727,12 +6721,12 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
           success: true,
           message: `Trip started — ${allManifestIds.length} manifest(s) now in transit`,
           data: {
-            routeId:        route._id,
-            routeNumber:    route.routeNumber,
-            routeType:      route.type,
+            routeId: route._id,
+            routeNumber: route.routeNumber,
+            routeType: route.type,
             totalManifests: allManifestIds.length,
-            status:         'in_transit',
-            startedAt:      now,
+            status: 'in_transit',
+            startedAt: now,
           },
         });
 
@@ -6756,15 +6750,15 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
           { _id: { $in: allPackageIds } },
           {
             $set: {
-              status:               'in_transit_to_branch',
+              status: 'in_transit_to_branch',
               assignedTransporterId: transporter._id,
-              currentRouteId:        route._id,
+              currentRouteId: route._id,
             },
             $push: {
               trackingHistory: {
-                status:    'in_transit_to_branch',
-                userId:    transporterUserId,
-                notes:     notes || 'Transporter started route — packages in transit',
+                status: 'in_transit_to_branch',
+                userId: transporterUserId,
+                notes: notes || 'Transporter started route — packages in transit',
                 timestamp: now,
               },
             },
@@ -6774,11 +6768,11 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
 
         await writeHistory(
           allPackageIds.map((pid) => ({
-            packageId:    pid,
-            status:       'in_transit_to_branch' as PackageStatus,
-            handledBy:    new mongoose.Types.ObjectId(transporterUserId.toString()),
-            handlerRole:  'transporter' as const,
-            notes:        notes || 'Transporter started route — packages in transit',
+            packageId: pid,
+            status: 'in_transit_to_branch' as PackageStatus,
+            handledBy: new mongoose.Types.ObjectId(transporterUserId.toString()),
+            handlerRole: 'transporter' as const,
+            notes: notes || 'Transporter started route — packages in transit',
           })),
           session,
         );
@@ -6788,8 +6782,8 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
             routeId,
             {
               $set: {
-                status:           'active',
-                actualStart:      now,
+                status: 'active',
+                actualStart: now,
                 currentStopIndex: 0,
               },
             },
@@ -6800,8 +6794,8 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
             {
               $set: {
                 availabilityStatus: 'on_route',
-                currentRouteId:     route._id,
-                lastActiveAt:       now,
+                currentRouteId: route._id,
+                lastActiveAt: now,
               },
             },
             { session },
@@ -6815,11 +6809,11 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
           success: true,
           message: `Route started — ${allPackageIds.length} package(s) marked in transit`,
           data: {
-            routeId:        route._id,
-            routeNumber:    route.routeNumber,
-            totalPackages:  allPackageIds.length,
-            status:         'in_transit_to_branch',
-            startedAt:      now,
+            routeId: route._id,
+            routeNumber: route.routeNumber,
+            totalPackages: allPackageIds.length,
+            status: 'in_transit_to_branch',
+            startedAt: now,
           },
         });
       }
@@ -6835,10 +6829,10 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -6857,7 +6851,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
     try {
       const transporterUserId = req.user?._id;
       const { routeId, stopId } = req.params;
-      const { notes }           = req.body as { notes?: string };
+      const { notes } = req.body as { notes?: string };
 
       if (!transporterUserId) {
         return next(new ErrorHandler('Unauthorized, you are not authenticated.', 401));
@@ -6933,12 +6927,12 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
 
         resultMessage = `Arrived at stop — ${stopManifestIds.length} manifest(s) marked arrived`;
         resultData = {
-          routeId:          route._id,
-          stopId:           stop._id,
-          branchId:         stopBranchOid,
-          arrivedAt:        now,
+          routeId: route._id,
+          stopId: stop._id,
+          branchId: stopBranchOid,
+          arrivedAt: now,
           manifestsArrived: stopManifestIds.length,
-          routeCompleted:   isLastStop,
+          routeCompleted: isLastStop,
         };
 
       } else {
@@ -6950,9 +6944,9 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
           throw new ErrorHandler('No packages assigned to this stop', 400);
         }
 
-        const PackageModel   = (await import('../models/package.model')).default;
-        const stopBranchOid  = new mongoose.Types.ObjectId(stop.branchId.toString());
-        const packageIds     = (stop.packageIds || []).map(
+        const PackageModel = (await import('../models/package.model')).default;
+        const stopBranchOid = new mongoose.Types.ObjectId(stop.branchId.toString());
+        const packageIds = (stop.packageIds || []).map(
           (id: any) => new mongoose.Types.ObjectId(id.toString()),
         );
 
@@ -6963,7 +6957,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
           .session(session)
           .lean();
 
-        const finalPackageIds:        mongoose.Types.ObjectId[] = [];
+        const finalPackageIds: mongoose.Types.ObjectId[] = [];
         const intermediatePackageIds: mongoose.Types.ObjectId[] = [];
 
         for (const pkg of packages) {
@@ -6986,15 +6980,15 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
             { _id: { $in: finalPackageIds } },
             {
               $set: {
-                status:          'at_destination_branch',
+                status: 'at_destination_branch',
                 currentBranchId: stopBranchOid,
               },
               $push: {
                 trackingHistory: {
-                  status:    'at_destination_branch',
-                  branchId:  stopBranchOid,
-                  userId:    transporterUserId,
-                  notes:     notes || 'Package arrived at destination branch — ready for delivery',
+                  status: 'at_destination_branch',
+                  branchId: stopBranchOid,
+                  userId: transporterUserId,
+                  notes: notes || 'Package arrived at destination branch — ready for delivery',
                   timestamp: now,
                 },
               },
@@ -7003,12 +6997,12 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
           );
           finalPackageIds.forEach((pid) =>
             historyEntries.push({
-              packageId:   pid,
-              status:      'at_destination_branch',
-              handledBy:   new mongoose.Types.ObjectId(transporterUserId.toString()),
+              packageId: pid,
+              status: 'at_destination_branch',
+              handledBy: new mongoose.Types.ObjectId(transporterUserId.toString()),
               handlerRole: 'transporter',
-              branchId:    stopBranchOid,
-              notes:       notes || 'Package arrived at destination branch — ready for delivery',
+              branchId: stopBranchOid,
+              notes: notes || 'Package arrived at destination branch — ready for delivery',
             }),
           );
         }
@@ -7018,15 +7012,15 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
             { _id: { $in: intermediatePackageIds } },
             {
               $set: {
-                status:          'in_transit_to_branch',
+                status: 'in_transit_to_branch',
                 currentBranchId: stopBranchOid,
               },
               $push: {
                 trackingHistory: {
-                  status:    'in_transit_to_branch',
-                  branchId:  stopBranchOid,
-                  userId:    transporterUserId,
-                  notes:     notes || 'Package arrived at intermediate branch — will continue to destination',
+                  status: 'in_transit_to_branch',
+                  branchId: stopBranchOid,
+                  userId: transporterUserId,
+                  notes: notes || 'Package arrived at intermediate branch — will continue to destination',
                   timestamp: now,
                 },
               },
@@ -7035,12 +7029,12 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
           );
           intermediatePackageIds.forEach((pid) =>
             historyEntries.push({
-              packageId:   pid,
-              status:      'in_transit_to_branch',
-              handledBy:   new mongoose.Types.ObjectId(transporterUserId.toString()),
+              packageId: pid,
+              status: 'in_transit_to_branch',
+              handledBy: new mongoose.Types.ObjectId(transporterUserId.toString()),
               handlerRole: 'transporter',
-              branchId:    stopBranchOid,
-              notes:       notes || 'Package arrived at intermediate branch — will continue to destination',
+              branchId: stopBranchOid,
+              notes: notes || 'Package arrived at intermediate branch — will continue to destination',
             }),
           );
         }
@@ -7050,20 +7044,20 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
         resultMessage = `Arrived at branch — ${finalPackageIds.length} package(s) at destination, ` +
           `${intermediatePackageIds.length} intermediate`;
         resultData = {
-          routeId:  route._id,
-          stopId:   stop._id,
+          routeId: route._id,
+          stopId: stop._id,
           branchId: stopBranchOid,
           arrivedAt: now,
           packages: {
             atDestination: {
-              count:  finalPackageIds.length,
+              count: finalPackageIds.length,
               status: 'at_destination_branch',
-              ids:    finalPackageIds,
+              ids: finalPackageIds,
             },
             intermediate: {
-              count:  intermediatePackageIds.length,
+              count: intermediatePackageIds.length,
               status: 'in_transit_to_branch',
-              ids:    intermediatePackageIds,
+              ids: intermediatePackageIds,
             },
           },
           routeCompleted: isLastStop,
@@ -7075,20 +7069,20 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
         routeId,
         {
           $set: {
-            [`stops.${stopIndex}.status`]:          'completed',
-            [`stops.${stopIndex}.actualArrival`]:   now,
+            [`stops.${stopIndex}.status`]: 'completed',
+            [`stops.${stopIndex}.actualArrival`]: now,
             [`stops.${stopIndex}.actualDeparture`]: now,
             currentStopIndex: stopIndex + 1,
-            completedStops:   route.completedStops + 1,
+            completedStops: route.completedStops + 1,
 
             ...(isLastStop && {
-              status:     'completed',
-              actualEnd:  now,
+              status: 'completed',
+              actualEnd: now,
               actualTime: route.actualStart
                 ? Math.round(
-                    (now.getTime() - new Date(route.actualStart).getTime()) /
-                      60000,
-                  )
+                  (now.getTime() - new Date(route.actualStart).getTime()) /
+                  60000,
+                )
                 : undefined,
             }),
           },
@@ -7100,8 +7094,8 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
       if (isLastStop) {
         const releaseUpdate: Record<string, any> = {
           availabilityStatus: 'available',
-          currentRouteId:     undefined,
-          lastActiveAt:       now,
+          currentRouteId: undefined,
+          lastActiveAt: now,
         };
 
         // For hub_to_hub routes: place transporter at the destination hub
@@ -7116,7 +7110,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
           {
             $set: releaseUpdate,
             $inc: {
-              totalTrips:     1,
+              totalTrips: 1,
               completedTrips: 1,
             },
           },
@@ -7144,10 +7138,10 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -7166,8 +7160,8 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
 
     try {
       const transporterUserId = req.user?._id;
-      const { routeId }       = req.params;
-      const { notes }         = req.body as { notes?: string };
+      const { routeId } = req.params;
+      const { notes } = req.body as { notes?: string };
 
       if (!transporterUserId) {
         return next(new ErrorHandler('Unauthorized, you are not authenticated.', 401));
@@ -7220,15 +7214,15 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
         { _id: { $in: allPackageIds } },
         {
           $set: {
-            status:               'in_transit_to_branch',
+            status: 'in_transit_to_branch',
             assignedTransporterId: transporter._id,
-            currentRouteId:        route._id,
+            currentRouteId: route._id,
           },
           $push: {
             trackingHistory: {
-              status:    'in_transit_to_branch',
-              userId:    transporterUserId,
-              notes:     notes || 'Transporter started route — packages in transit',
+              status: 'in_transit_to_branch',
+              userId: transporterUserId,
+              notes: notes || 'Transporter started route — packages in transit',
               timestamp: now,
             },
           },
@@ -7238,11 +7232,11 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
 
       await writeHistory(
         allPackageIds.map((pid) => ({
-          packageId:    pid,
-          status:       'in_transit_to_branch' as PackageStatus,
-          handledBy:    new mongoose.Types.ObjectId(transporterUserId.toString()),
-          handlerRole:  'transporter' as const,
-          notes:        notes || 'Transporter started route — packages in transit',
+          packageId: pid,
+          status: 'in_transit_to_branch' as PackageStatus,
+          handledBy: new mongoose.Types.ObjectId(transporterUserId.toString()),
+          handlerRole: 'transporter' as const,
+          notes: notes || 'Transporter started route — packages in transit',
         })),
         session,
       );
@@ -7252,8 +7246,8 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
           routeId,
           {
             $set: {
-              status:           'active',
-              actualStart:      now,
+              status: 'active',
+              actualStart: now,
               currentStopIndex: 0,
             },
           },
@@ -7264,8 +7258,8 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
           {
             $set: {
               availabilityStatus: 'on_route',
-              currentRouteId:     route._id,
-              lastActiveAt:       now,
+              currentRouteId: route._id,
+              lastActiveAt: now,
             },
           },
           { session },
@@ -7279,11 +7273,11 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
         success: true,
         message: `Route started — ${allPackageIds.length} package(s) marked in transit`,
         data: {
-          routeId:        route._id,
-          routeNumber:    route.routeNumber,
-          totalPackages:  allPackageIds.length,
-          status:         'in_transit_to_branch',
-          startedAt:      now,
+          routeId: route._id,
+          routeNumber: route.routeNumber,
+          totalPackages: allPackageIds.length,
+          status: 'in_transit_to_branch',
+          startedAt: now,
         },
       });
 
@@ -7298,10 +7292,10 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -7314,9 +7308,9 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
     let transactionCommitted = false;
 
     try {
-      const transporterUserId       = req.user?._id;
-      const { routeId, stopId }     = req.params;
-      const { notes }               = req.body as { notes?: string };
+      const transporterUserId = req.user?._id;
+      const { routeId, stopId } = req.params;
+      const { notes } = req.body as { notes?: string };
 
       if (!transporterUserId) {
         return next(new ErrorHandler('Unauthorized, you are not authenticated.', 401));
@@ -7368,9 +7362,9 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
         throw new ErrorHandler('No packages assigned to this stop', 400);
       }
 
-      const PackageModel   = (await import('../models/package.model')).default;
-      const stopBranchOid  = new mongoose.Types.ObjectId(stop.branchId.toString());
-      const packageIds     = (stop.packageIds || []).map(
+      const PackageModel = (await import('../models/package.model')).default;
+      const stopBranchOid = new mongoose.Types.ObjectId(stop.branchId.toString());
+      const packageIds = (stop.packageIds || []).map(
         (id: any) => new mongoose.Types.ObjectId(id.toString()),
       );
       const now = new Date();
@@ -7382,7 +7376,7 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
         .session(session)
         .lean();
 
-      const finalPackageIds:        mongoose.Types.ObjectId[] = [];
+      const finalPackageIds: mongoose.Types.ObjectId[] = [];
       const intermediatePackageIds: mongoose.Types.ObjectId[] = [];
 
       for (const pkg of packages) {
@@ -7405,15 +7399,15 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
           { _id: { $in: finalPackageIds } },
           {
             $set: {
-              status:          'at_destination_branch',
+              status: 'at_destination_branch',
               currentBranchId: stopBranchOid,
             },
             $push: {
               trackingHistory: {
-                status:    'at_destination_branch',
-                branchId:  stopBranchOid,
-                userId:    transporterUserId,
-                notes:     notes || 'Package arrived at destination branch — ready for delivery',
+                status: 'at_destination_branch',
+                branchId: stopBranchOid,
+                userId: transporterUserId,
+                notes: notes || 'Package arrived at destination branch — ready for delivery',
                 timestamp: now,
               },
             },
@@ -7422,12 +7416,12 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
         );
         finalPackageIds.forEach((pid) =>
           historyEntries.push({
-            packageId:   pid,
-            status:      'at_destination_branch',
-            handledBy:   new mongoose.Types.ObjectId(transporterUserId.toString()),
+            packageId: pid,
+            status: 'at_destination_branch',
+            handledBy: new mongoose.Types.ObjectId(transporterUserId.toString()),
             handlerRole: 'transporter',
-            branchId:    stopBranchOid,
-            notes:       notes || 'Package arrived at destination branch — ready for delivery',
+            branchId: stopBranchOid,
+            notes: notes || 'Package arrived at destination branch — ready for delivery',
           }),
         );
       }
@@ -7437,15 +7431,15 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
           { _id: { $in: intermediatePackageIds } },
           {
             $set: {
-              status:          'in_transit_to_branch',
+              status: 'in_transit_to_branch',
               currentBranchId: stopBranchOid,
             },
             $push: {
               trackingHistory: {
-                status:    'in_transit_to_branch',
-                branchId:  stopBranchOid,
-                userId:    transporterUserId,
-                notes:     notes || 'Package arrived at intermediate branch — will continue to destination',
+                status: 'in_transit_to_branch',
+                branchId: stopBranchOid,
+                userId: transporterUserId,
+                notes: notes || 'Package arrived at intermediate branch — will continue to destination',
                 timestamp: now,
               },
             },
@@ -7454,12 +7448,12 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
         );
         intermediatePackageIds.forEach((pid) =>
           historyEntries.push({
-            packageId:   pid,
-            status:      'in_transit_to_branch',
-            handledBy:   new mongoose.Types.ObjectId(transporterUserId.toString()),
+            packageId: pid,
+            status: 'in_transit_to_branch',
+            handledBy: new mongoose.Types.ObjectId(transporterUserId.toString()),
             handlerRole: 'transporter',
-            branchId:    stopBranchOid,
-            notes:       notes || 'Package arrived at intermediate branch — will continue to destination',
+            branchId: stopBranchOid,
+            notes: notes || 'Package arrived at intermediate branch — will continue to destination',
           }),
         );
       }
@@ -7472,19 +7466,19 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
         routeId,
         {
           $set: {
-            [`stops.${stopIndex}.status`]:          'completed',
-            [`stops.${stopIndex}.actualArrival`]:   now,
+            [`stops.${stopIndex}.status`]: 'completed',
+            [`stops.${stopIndex}.actualArrival`]: now,
             [`stops.${stopIndex}.actualDeparture`]: now,
             currentStopIndex: stopIndex + 1,
-            completedStops:   route.completedStops + 1,
+            completedStops: route.completedStops + 1,
             ...(isLastStop && {
-              status:     'completed',
-              actualEnd:  now,
+              status: 'completed',
+              actualEnd: now,
               actualTime: route.actualStart
                 ? Math.round(
-                    (now.getTime() - new Date(route.actualStart).getTime()) /
-                      60000,
-                  )
+                  (now.getTime() - new Date(route.actualStart).getTime()) /
+                  60000,
+                )
                 : undefined,
             }),
           },
@@ -7498,11 +7492,11 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
           {
             $set: {
               availabilityStatus: 'available',
-              currentRouteId:     undefined,
-              lastActiveAt:       now,
+              currentRouteId: undefined,
+              lastActiveAt: now,
             },
             $inc: {
-              totalTrips:     1,
+              totalTrips: 1,
               completedTrips: 1,
             },
           },
@@ -7519,20 +7513,20 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
           `Arrived at branch — ${finalPackageIds.length} package(s) at destination, ` +
           `${intermediatePackageIds.length} intermediate`,
         data: {
-          routeId:  route._id,
-          stopId:   stop._id,
+          routeId: route._id,
+          stopId: stop._id,
           branchId: stopBranchOid,
           arrivedAt: now,
           packages: {
             atDestination: {
-              count:  finalPackageIds.length,
+              count: finalPackageIds.length,
               status: 'at_destination_branch',
-              ids:    finalPackageIds,
+              ids: finalPackageIds,
             },
             intermediate: {
-              count:  intermediatePackageIds.length,
+              count: intermediatePackageIds.length,
               status: 'in_transit_to_branch',
-              ids:    intermediatePackageIds,
+              ids: intermediatePackageIds,
             },
           },
           routeCompleted: isLastStop,
@@ -7550,10 +7544,10 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -7756,10 +7750,10 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -7812,7 +7806,7 @@ export const deliverPackageFail = catchAsyncError(
 
       const branchOid = new mongoose.Types.ObjectId(branchId.toString());
 
- 
+
       const [deliverer, packageDoc] = await Promise.all([
         DelivererModel.findOne({ userId: delivererUserId, branchId }).session(session),
         PackageModel.findOne({
@@ -7974,10 +7968,10 @@ export const deliverPackageFail = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
 
     }
   },
@@ -8051,7 +8045,7 @@ export const deliveryReturnPackage = catchAsyncError(
 
         throw new ErrorHandler(
           `Cannot return a package with status '${packageDoc.status}'. ` +
-            `Only packages that are 'out_for_delivery' or 'failed_delivery' can be returned.`,
+          `Only packages that are 'out_for_delivery' or 'failed_delivery' can be returned.`,
           400,
         );
       }
@@ -8074,7 +8068,7 @@ export const deliveryReturnPackage = catchAsyncError(
 
       const noteText = [returnReason, notes?.trim()].filter(Boolean).join(" | ");
 
-            await Promise.all([
+      await Promise.all([
         PackageModel.findByIdAndUpdate(
           packageId,
           {
@@ -8170,10 +8164,10 @@ export const deliveryReturnPackage = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
 
     }
   },
@@ -8187,9 +8181,9 @@ const LOCKED_STATUSES: RouteStatus[] = ["active", "paused", "completed", "cancel
 
 
 const ROUTE_POPULATE = [
-  { path: "originBranchId",      select: "name code address wilaya" },
+  { path: "originBranchId", select: "name code address wilaya" },
   { path: "destinationBranchId", select: "name code address wilaya" },
-  { path: "assignedVehicleId",   select: "type registrationNumber brand modelName maxWeight maxVolume" },
+  { path: "assignedVehicleId", select: "type registrationNumber brand modelName maxWeight maxVolume" },
   {
     path: "assignedTransporterId",
     populate: { path: "userId", select: "firstName lastName phone" },
@@ -8248,15 +8242,15 @@ export const updateRoute = catchAsyncError(
 
 
       const body = req.body as {
-        name?:          string;
+        name?: string;
         scheduledStart?: string;
-        scheduledEnd?:   string;
+        scheduledEnd?: string;
         completionNotes?: string;
         stops?: {
-          stopId:           string;
-          notes?:           string;
-          contactPerson?:   string;
-          contactPhone?:    string;
+          stopId: string;
+          notes?: string;
+          contactPerson?: string;
+          contactPhone?: string;
           expectedArrival?: string;
         }[];
       };
@@ -8290,7 +8284,7 @@ export const updateRoute = catchAsyncError(
       }
 
       let parsedStart: Date | undefined;
-      let parsedEnd:   Date | undefined;
+      let parsedEnd: Date | undefined;
 
       if (body.scheduledStart !== undefined) {
         parsedStart = new Date(body.scheduledStart);
@@ -8345,16 +8339,16 @@ export const updateRoute = catchAsyncError(
 
       const $set: Record<string, any> = {};
 
-      if (body.name?.trim())        $set.name           = body.name.trim();
-      if (parsedStart)              $set.scheduledStart = parsedStart;
-      if (parsedEnd)                $set.scheduledEnd   = parsedEnd;
+      if (body.name?.trim()) $set.name = body.name.trim();
+      if (parsedStart) $set.scheduledStart = parsedStart;
+      if (parsedEnd) $set.scheduledEnd = parsedEnd;
       if (body.completionNotes !== undefined) {
         $set.completionNotes = body.completionNotes?.trim() ?? null;
       }
 
 
       const effectiveStart = parsedStart ?? route.scheduledStart;
-      const effectiveEnd   = parsedEnd   ?? route.scheduledEnd;
+      const effectiveEnd = parsedEnd ?? route.scheduledEnd;
       if (effectiveStart >= effectiveEnd) {
         throw new ErrorHandler("scheduledStart must be before scheduledEnd", 400);
       }
@@ -8419,10 +8413,10 @@ export const updateRoute = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
 
     }
   },
@@ -8505,7 +8499,7 @@ export const getRoutes = catchAsyncError(
       fromDate,
       toDate,
       search,
-      sortBy    = "scheduledStart",
+      sortBy = "scheduledStart",
       sortOrder = "desc",
       page,
       limit,
@@ -8552,9 +8546,9 @@ export const getRoutes = catchAsyncError(
       return next(new ErrorHandler("sortOrder must be 'asc' or 'desc'", 400));
     }
 
-    const pageNum  = parseInt(page  ?? "1",  10);
+    const pageNum = parseInt(page ?? "1", 10);
     const limitNum = parseInt(limit ?? "20", 10);
-    if (isNaN(pageNum)  || pageNum  < 1)               return next(new ErrorHandler("page must be a positive integer", 400));
+    if (isNaN(pageNum) || pageNum < 1) return next(new ErrorHandler("page must be a positive integer", 400));
     if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
 
     // ── Authorize: supervisor / deliverer / transporter ───────────────────────
@@ -8660,7 +8654,7 @@ export const getRoutes = catchAsyncError(
       matchStage.assignedTransporterId = transporterId;
     } else {
       matchStage.$or = [
-        { originBranchId:      branchOid },
+        { originBranchId: branchOid },
         { destinationBranchId: branchOid },
       ];
     }
@@ -8679,7 +8673,7 @@ export const getRoutes = catchAsyncError(
         {
           $or: [
             { assignedTransporterId: workerOid },
-            { assignedDelivererId:   workerOid },
+            { assignedDelivererId: workerOid },
           ],
         },
       ];
@@ -8688,7 +8682,7 @@ export const getRoutes = catchAsyncError(
     if (fromDateParsed || toDateParsed) {
       matchStage.scheduledStart = {
         ...(fromDateParsed && { $gte: fromDateParsed }),
-        ...(toDateParsed   && { $lte: toDateParsed   }),
+        ...(toDateParsed && { $lte: toDateParsed }),
       };
     }
 
@@ -8719,21 +8713,21 @@ export const getRoutes = catchAsyncError(
             // ── Branch lookups ────────────────────────────────────────────────
             {
               $lookup: {
-                from:         "branches",
-                localField:   "originBranchId",
+                from: "branches",
+                localField: "originBranchId",
                 foreignField: "_id",
-                as:           "originBranch",
-                pipeline:     [{ $project: { name: 1, code: 1, wilaya: 1 } }],
+                as: "originBranch",
+                pipeline: [{ $project: { name: 1, code: 1, wilaya: 1 } }],
               },
             },
             { $unwind: { path: "$originBranch", preserveNullAndEmptyArrays: true } },
             {
               $lookup: {
-                from:         "branches",
-                localField:   "destinationBranchId",
+                from: "branches",
+                localField: "destinationBranchId",
                 foreignField: "_id",
-                as:           "destinationBranch",
-                pipeline:     [{ $project: { name: 1, code: 1, wilaya: 1 } }],
+                as: "destinationBranch",
+                pipeline: [{ $project: { name: 1, code: 1, wilaya: 1 } }],
               },
             },
             { $unwind: { path: "$destinationBranch", preserveNullAndEmptyArrays: true } },
@@ -8741,11 +8735,11 @@ export const getRoutes = catchAsyncError(
             // ── Vehicle lookup ────────────────────────────────────────────────
             {
               $lookup: {
-                from:         "vehicles",
-                localField:   "assignedVehicleId",
+                from: "vehicles",
+                localField: "assignedVehicleId",
                 foreignField: "_id",
-                as:           "assignedVehicle",
-                pipeline:     [{ $project: { type: 1, registrationNumber: 1 } }],
+                as: "assignedVehicle",
+                pipeline: [{ $project: { type: 1, registrationNumber: 1 } }],
               },
             },
             { $unwind: { path: "$assignedVehicle", preserveNullAndEmptyArrays: true } },
@@ -8753,21 +8747,21 @@ export const getRoutes = catchAsyncError(
             // ── Deliverer info lookup ─────────────────────────────────────────
             {
               $lookup: {
-                from:         "deliverers",
-                localField:   "assignedDelivererId",
+                from: "deliverers",
+                localField: "assignedDelivererId",
                 foreignField: "_id",
-                as:           "assignedDeliverer",
-                pipeline:     [{ $project: { userId: 1, rating: 1, availabilityStatus: 1 } }],
+                as: "assignedDeliverer",
+                pipeline: [{ $project: { userId: 1, rating: 1, availabilityStatus: 1 } }],
               },
             },
             { $unwind: { path: "$assignedDeliverer", preserveNullAndEmptyArrays: true } },
             {
               $lookup: {
-                from:         "users",
-                localField:   "assignedDeliverer.userId",
+                from: "users",
+                localField: "assignedDeliverer.userId",
                 foreignField: "_id",
-                as:           "assignedDelivererUser",
-                pipeline:     [{ $project: { firstName: 1, lastName: 1, phone: 1, avatar: 1 } }],
+                as: "assignedDelivererUser",
+                pipeline: [{ $project: { firstName: 1, lastName: 1, phone: 1, avatar: 1 } }],
               },
             },
             { $unwind: { path: "$assignedDelivererUser", preserveNullAndEmptyArrays: true } },
@@ -8775,34 +8769,34 @@ export const getRoutes = catchAsyncError(
             // ── Transporter info lookup ───────────────────────────────────────
             {
               $lookup: {
-                from:         "transporters",
-                localField:   "assignedTransporterId",
+                from: "transporters",
+                localField: "assignedTransporterId",
                 foreignField: "_id",
-                as:           "assignedTransporter",
-                pipeline:     [{ $project: { userId: 1, rating: 1, availabilityStatus: 1, transporterType: 1 } }],
+                as: "assignedTransporter",
+                pipeline: [{ $project: { userId: 1, rating: 1, availabilityStatus: 1, transporterType: 1 } }],
               },
             },
             { $unwind: { path: "$assignedTransporter", preserveNullAndEmptyArrays: true } },
             {
               $lookup: {
-                from:         "users",
-                localField:   "assignedTransporter.userId",
+                from: "users",
+                localField: "assignedTransporter.userId",
                 foreignField: "_id",
-                as:           "assignedTransporterUser",
-                pipeline:     [{ $project: { firstName: 1, lastName: 1, phone: 1, avatar: 1 } }],
+                as: "assignedTransporterUser",
+                pipeline: [{ $project: { firstName: 1, lastName: 1, phone: 1, avatar: 1 } }],
               },
             },
             { $unwind: { path: "$assignedTransporterUser", preserveNullAndEmptyArrays: true } },
 
             // ── Projection (remove heavy fields) ──────────────────────────────
-            { 
-              $project: { 
-                "stops.completedPackages": 0, 
-                "stops.failedPackages": 0, 
-                "stops.skippedPackages": 0, 
-                "stops.issues": 0, 
-                optimizedPath: 0 
-              } 
+            {
+              $project: {
+                "stops.completedPackages": 0,
+                "stops.failedPackages": 0,
+                "stops.skippedPackages": 0,
+                "stops.issues": 0,
+                optimizedPath: 0
+              }
             },
           ],
           totalCount: [{ $count: "count" }],
@@ -8835,15 +8829,15 @@ export const getRoutes = catchAsyncError(
       data: result.data,
       pagination: {
         total,
-        page:        pageNum,
-        limit:       limitNum,
+        page: pageNum,
+        limit: limitNum,
         totalPages,
         hasNextPage: pageNum < totalPages,
         hasPrevPage: pageNum > 1,
       },
       summary: {
         byStatus: statusSummary,
-        byType:   typeSummary,
+        byType: typeSummary,
       },
     });
   },
@@ -9049,11 +9043,11 @@ export const toggleCancelRoute = catchAsyncError(
 
     } finally {
 
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
-      
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
+
     }
   },
 );
@@ -9066,37 +9060,37 @@ const LIST_LOOKUP_STAGES: (
   | mongoose.PipelineStage.Unwind
   | mongoose.PipelineStage.Project
 )[] = [
-  {
-    $lookup: {
-      from: "branches", localField: "originBranchId", foreignField: "_id",
-      as: "originBranch", pipeline: [{ $project: { name: 1, code: 1, wilaya: 1 } }],
+    {
+      $lookup: {
+        from: "branches", localField: "originBranchId", foreignField: "_id",
+        as: "originBranch", pipeline: [{ $project: { name: 1, code: 1, wilaya: 1 } }],
+      },
     },
-  },
-  { $unwind: { path: "$originBranch", preserveNullAndEmptyArrays: true } },
-  {
-    $lookup: {
-      from: "branches", localField: "destinationBranchId", foreignField: "_id",
-      as: "destinationBranch", pipeline: [{ $project: { name: 1, code: 1, wilaya: 1 } }],
+    { $unwind: { path: "$originBranch", preserveNullAndEmptyArrays: true } },
+    {
+      $lookup: {
+        from: "branches", localField: "destinationBranchId", foreignField: "_id",
+        as: "destinationBranch", pipeline: [{ $project: { name: 1, code: 1, wilaya: 1 } }],
+      },
     },
-  },
-  { $unwind: { path: "$destinationBranch", preserveNullAndEmptyArrays: true } },
-  {
-    $lookup: {
-      from: "vehicles", localField: "assignedVehicleId", foreignField: "_id",
-      as: "assignedVehicle", pipeline: [{ $project: { type: 1, registrationNumber: 1 } }],
+    { $unwind: { path: "$destinationBranch", preserveNullAndEmptyArrays: true } },
+    {
+      $lookup: {
+        from: "vehicles", localField: "assignedVehicleId", foreignField: "_id",
+        as: "assignedVehicle", pipeline: [{ $project: { type: 1, registrationNumber: 1 } }],
+      },
     },
-  },
-  { $unwind: { path: "$assignedVehicle", preserveNullAndEmptyArrays: true } },
-  {
-    $project: {
-      "stops.completedPackages": 0,
-      "stops.failedPackages":    0,
-      "stops.skippedPackages":   0,
-      "stops.issues":            0,
-      optimizedPath:             0,
+    { $unwind: { path: "$assignedVehicle", preserveNullAndEmptyArrays: true } },
+    {
+      $project: {
+        "stops.completedPackages": 0,
+        "stops.failedPackages": 0,
+        "stops.skippedPackages": 0,
+        "stops.issues": 0,
+        optimizedPath: 0,
+      },
     },
-  },
-];
+  ];
 
 
 
@@ -9113,69 +9107,69 @@ const LIST_LOOKUP_STAGES: (
 //    workerId      optional — filter to one specific driver
 //    branchSearch  optional — partial match on origin/destination branch name or code
 //                             e.g. "Constantine" shows all active routes going there
- 
+
 export const getActiveRoutes = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const supervisorUserId = req.user?._id;
     const { branchId } = req.params;
- 
+
     if (!supervisorUserId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
     if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
       return next(new ErrorHandler("Invalid branch ID", 400));
     }
- 
+
     //query params
     // type to filter by route type
     // workerId  to filter to one specific driver (transporter or deliverer doc _id)
     // branchSearch to filter by origin/destination branch name or code (partial, case-insensitive)
     // and useful when a supervisor wants to see "all active routes going to Constantine"
     const { type, workerId, branchSearch } = req.query as {
-      type?:         string;
-      workerId?:     string;
+      type?: string;
+      workerId?: string;
       branchSearch?: string;
     };
- 
+
     const VALID_TYPES: RouteType[] = ["inter_branch", "local_delivery", "pickup_route", "return_route"];
- 
+
     if (type && !VALID_TYPES.includes(type as RouteType)) {
       return next(new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400));
     }
     if (workerId && !mongoose.Types.ObjectId.isValid(workerId)) {
       return next(new ErrorHandler("Invalid workerId", 400));
     }
- 
+
 
     const supervisor = await SupervisorModel.findOne({
       userId: supervisorUserId,
       branchId,
     }).lean();
- 
+
     if (!supervisor || !supervisor.isActive || supervisor.branchId.toString() !== branchId.toString()) {
       return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
     }
- 
+
 
     const branchOid = new mongoose.Types.ObjectId(branchId.toString());
- 
+
     const matchStage: Record<string, any> = {
       status: { $in: ["active", "paused"] },
       $or: [
-        { originBranchId:      branchOid },
+        { originBranchId: branchOid },
         { destinationBranchId: branchOid },
       ],
     };
- 
+
     if (type) matchStage.type = type;
- 
+
     if (workerId) {
       const workerOid = new mongoose.Types.ObjectId(workerId);
       matchStage.$and = [
         {
           $or: [
             { assignedTransporterId: workerOid },
-            { assignedDelivererId:   workerOid },
+            { assignedDelivererId: workerOid },
           ],
         },
       ];
@@ -9184,29 +9178,31 @@ export const getActiveRoutes = catchAsyncError(
     if (branchSearch?.trim()) {
       const query = mongoose.Types.ObjectId.isValid(branchSearch.trim())
         ? { _id: new mongoose.Types.ObjectId(branchSearch.trim()) }
-        : { $or: [
-              { name: { $regex: branchSearch.trim(), $options: "i" } },
-              { code: { $regex: branchSearch.trim(), $options: "i" } },
-          ] };
- 
+        : {
+          $or: [
+            { name: { $regex: branchSearch.trim(), $options: "i" } },
+            { code: { $regex: branchSearch.trim(), $options: "i" } },
+          ]
+        };
+
       const matchedBranch = await BranchModel.findOne(query).select("_id").lean();
- 
+
       if (!matchedBranch) {
         return next(new ErrorHandler("No branch found matching the provided branchSearch", 404));
       }
- 
+
       const searchOid = matchedBranch._id as mongoose.Types.ObjectId;
       matchStage.$and = [
         ...(matchStage.$and ?? []),
         {
           $or: [
-            { originBranchId:      searchOid },
+            { originBranchId: searchOid },
             { destinationBranchId: searchOid },
           ],
         },
       ];
     }
- 
+
 
     const routes = await RouteModel.aggregate([
       { $match: matchStage },
@@ -9217,7 +9213,7 @@ export const getActiveRoutes = catchAsyncError(
 
           currentStop: {
             $cond: {
-              if:   { $lt: ["$currentStopIndex", { $size: "$stops" }] },
+              if: { $lt: ["$currentStopIndex", { $size: "$stops" }] },
               then: { $arrayElemAt: ["$stops", "$currentStopIndex"] },
               else: null,
             },
@@ -9225,7 +9221,7 @@ export const getActiveRoutes = catchAsyncError(
 
           nextStop: {
             $cond: {
-              if:   { $lt: [{ $add: ["$currentStopIndex", 1] }, { $size: "$stops" }] },
+              if: { $lt: [{ $add: ["$currentStopIndex", 1] }, { $size: "$stops" }] },
               then: { $arrayElemAt: ["$stops", { $add: ["$currentStopIndex", 1] }] },
               else: null,
             },
@@ -9246,7 +9242,7 @@ export const getActiveRoutes = catchAsyncError(
           // 0-100 progress based on stops completed
           progressPercentage: {
             $cond: {
-              if:   { $gt: [{ $size: "$stops" }, 0] },
+              if: { $gt: [{ $size: "$stops" }, 0] },
               then: {
                 $multiply: [
                   { $divide: ["$currentStopIndex", { $size: "$stops" }] },
@@ -9259,15 +9255,15 @@ export const getActiveRoutes = catchAsyncError(
         },
       },
     ]);
- 
+
     return res.status(200).json({
       success: true,
       count: routes.length,
-      data:  routes,
+      data: routes,
     });
   },
 );
- 
+
 
 
 
@@ -9287,15 +9283,15 @@ export const getActiveRoutes = catchAsyncError(
 // capped at end of tomorrow (no routes exist beyond that bcz they are generated at midnight by a cron job)
 // page, limit optional  — default 1 / 20, max 100
 
- 
+
 export const getRoutesByBranch = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const supervisorUserId = req.user?._id;
- 
+
     if (!supervisorUserId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
- 
+
     const {
       branchId,
       status,
@@ -9305,15 +9301,15 @@ export const getRoutesByBranch = catchAsyncError(
       page,
       limit,
     } = req.query as Record<string, string | undefined>;
- 
+
 
     if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
       return next(new ErrorHandler("branchId query param is required and must be a valid ID", 400));
     }
- 
+
     const VALID_STATUSES: RouteStatus[] = ["planned", "assigned", "active", "paused", "completed", "cancelled"];
-    const VALID_TYPES:    RouteType[]   = ["inter_branch", "local_delivery", "pickup_route", "return_route"];
- 
+    const VALID_TYPES: RouteType[] = ["inter_branch", "local_delivery", "pickup_route", "return_route"];
+
     let statusFilter: RouteStatus[] | undefined;
     if (status) {
       const raw = status.split(",").map((s) => s.trim());
@@ -9323,28 +9319,28 @@ export const getRoutesByBranch = catchAsyncError(
       }
       statusFilter = raw as RouteStatus[];
     }
- 
+
     if (type && !VALID_TYPES.includes(type as RouteType)) {
       return next(new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400));
     }
- 
+
 
     // Routes only exist up to tomorrow (scheduler generates one day ahead).
     // Cap toDate at end-of-tomorrow so querying future dates never returns
     // a confusing empty result when the user forgets this constraint.
     const now = new Date();
- 
+
     const endOfTomorrow = new Date(now);
     endOfTomorrow.setDate(endOfTomorrow.getDate() + 1);
     endOfTomorrow.setUTCHours(23, 59, 59, 999);
- 
+
     const defaultFromDate = new Date(now);
     defaultFromDate.setDate(defaultFromDate.getDate() - 30);
     defaultFromDate.setUTCHours(0, 0, 0, 0);
- 
+
     let fromDateParsed: Date;
-    let toDateParsed:   Date;
- 
+    let toDateParsed: Date;
+
     if (fromDate) {
       fromDateParsed = new Date(fromDate);
       if (isNaN(fromDateParsed.getTime())) {
@@ -9354,63 +9350,63 @@ export const getRoutesByBranch = catchAsyncError(
     } else {
       fromDateParsed = defaultFromDate;
     }
- 
+
     if (toDate) {
       toDateParsed = new Date(toDate);
       if (isNaN(toDateParsed.getTime())) {
         return next(new ErrorHandler("toDate is not a valid date", 400));
       }
       toDateParsed.setUTCHours(23, 59, 59, 999);
- 
+
       // rmake it to end-of-tomorrow if the user enters the toDate in the far future
       // no error printing (not needed)
-      
+
       if (toDateParsed > endOfTomorrow) {
         toDateParsed = endOfTomorrow;
       }
     } else {
       toDateParsed = endOfTomorrow;
     }
- 
+
     if (fromDateParsed > toDateParsed) {
       return next(new ErrorHandler("fromDate must be before toDate", 400));
     }
- 
-    const pageNum  = parseInt(page  ?? "1",  10);
+
+    const pageNum = parseInt(page ?? "1", 10);
     const limitNum = parseInt(limit ?? "20", 10);
-    if (isNaN(pageNum)  || pageNum  < 1)                   return next(new ErrorHandler("page must be a positive integer", 400));
+    if (isNaN(pageNum) || pageNum < 1) return next(new ErrorHandler("page must be a positive integer", 400));
     if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
- 
+
 
     const supervisor = await SupervisorModel.findOne({
-      userId:   supervisorUserId,
+      userId: supervisorUserId,
       isActive: true,
     }).lean();
- 
+
     if (!supervisor) {
       return next(new ErrorHandler("You are not an active supervisor", 403));
     }
 
     const branchOid = new mongoose.Types.ObjectId(branchId.toString());
- 
+
     const matchStage: Record<string, any> = {
       $or: [
-        { originBranchId:      branchOid },
+        { originBranchId: branchOid },
         { destinationBranchId: branchOid },
       ],
-      companyId:      supervisor.companyId,
+      companyId: supervisor.companyId,
       scheduledStart: { $gte: fromDateParsed, $lte: toDateParsed },
     };
- 
+
     if (statusFilter) {
       matchStage.status = statusFilter.length === 1
         ? statusFilter[0]
         : { $in: statusFilter };
     }
     if (type) matchStage.type = type;
- 
+
     const skip = (pageNum - 1) * limitNum;
- 
+
 
     const [result] = await RouteModel.aggregate([
       { $match: matchStage },
@@ -9422,16 +9418,16 @@ export const getRoutesByBranch = catchAsyncError(
             { $limit: limitNum },
             ...LIST_LOOKUP_STAGES,
           ],
-          totalCount:    [{ $count: "count" }],
+          totalCount: [{ $count: "count" }],
           statusSummary: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
-          typeSummary:   [{ $group: { _id: "$type",   count: { $sum: 1 } } }],
+          typeSummary: [{ $group: { _id: "$type", count: { $sum: 1 } } }],
         },
       },
     ]);
- 
-    const total      = result.totalCount[0]?.count ?? 0;
+
+    const total = result.totalCount[0]?.count ?? 0;
     const totalPages = Math.ceil(total / limitNum);
- 
+
     const statusSummary = Object.fromEntries(
       (result.statusSummary as { _id: string; count: number }[]).map(
         ({ _id, count }) => [_id, count],
@@ -9442,21 +9438,21 @@ export const getRoutesByBranch = catchAsyncError(
         ({ _id, count }) => [_id, count],
       ),
     );
- 
+
     return res.status(200).json({
       success: true,
-      data:    result.data,
+      data: result.data,
       pagination: {
         total,
-        page:        pageNum,
-        limit:       limitNum,
+        page: pageNum,
+        limit: limitNum,
         totalPages,
         hasNextPage: pageNum < totalPages,
         hasPrevPage: pageNum > 1,
       },
       summary: {
         byStatus: statusSummary,
-        byType:   typeSummary,
+        byType: typeSummary,
       },
     });
   },
@@ -9468,46 +9464,46 @@ export const getRoutesByBranch = catchAsyncError(
 export const getMeSupervisor = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?._id;
- 
+
     if (!userId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
- 
+
     const [user, supervisor] = await Promise.all([
       userModel.findById(userId)
         .select("firstName lastName email phone imageUrl role status createdAt")
         .lean(),
       SupervisorModel.findOne({ userId })
-        .populate("branchId",  "name code address wilaya")
+        .populate("branchId", "name code address wilaya")
         .populate("companyId", "name logo status")
         .lean(),
     ]);
- 
+
     if (!user) {
       return next(new ErrorHandler("User not found.", 404));
     }
     if (!supervisor || !supervisor.isActive) {
       return next(new ErrorHandler("Supervisor profile not found or inactive.", 404));
     }
- 
+
     return res.status(200).json({
       success: true,
       data: {
 
-        firstName:   user.firstName,
-        lastName:    user.lastName,
-        email:       user.email,
-        phone:       user.phone,
-        imageUrl:    user.imageUrl,
-        role:        user.role,
-        status:      user.status,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone,
+        imageUrl: user.imageUrl,
+        role: user.role,
+        status: user.status,
 
 
-        permissions:  supervisor.permissions,
+        permissions: supervisor.permissions,
         workSchedule: supervisor.workSchedule,
-        performance:  supervisor.performance,
-        branch:       supervisor.branchId,  
-        company:      supervisor.companyId,  
+        performance: supervisor.performance,
+        branch: supervisor.branchId,
+        company: supervisor.companyId,
       },
     });
   },
@@ -9527,18 +9523,18 @@ export const getMeSupervisor = catchAsyncError(
 
 //  Blocked: permissions, branchId, companyId, isActive, performance
 
- 
+
 const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
-type WeekDay   = typeof WEEKDAYS[number];
- 
+type WeekDay = typeof WEEKDAYS[number];
+
 export const updateMeSupervisor = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?._id;
- 
+
     if (!userId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
- 
+
     const blocked = ["permissions", "branchId", "companyId", "isActive", "performance"];
     const blockedFound = blocked.filter((f) => f in req.body);
     if (blockedFound.length) {
@@ -9549,58 +9545,58 @@ export const updateMeSupervisor = catchAsyncError(
         ),
       );
     }
- 
+
     const [user, supervisor] = await Promise.all([
       userModel.findById(userId).lean(),
       SupervisorModel.findOne({ userId }).lean(),
     ]);
- 
-    if (!user)       return next(new ErrorHandler("User not found.", 404));
+
+    if (!user) return next(new ErrorHandler("User not found.", 404));
     if (!supervisor || !supervisor.isActive) {
       return next(new ErrorHandler("Supervisor profile not found or inactive.", 404));
     }
- 
+
 
     const userUpdates = buildUserFieldUpdates(req.body, next);
 
     if (!userUpdates) return;
- 
+
 
     const scheduleUpdates: Record<string, any> = {};
     const scheduleInput = req.body.workSchedule as Record<string, any> | undefined;
- 
+
     if (scheduleInput !== undefined) {
       if (typeof scheduleInput !== "object" || Array.isArray(scheduleInput)) {
         return next(new ErrorHandler("workSchedule must be an object", 400));
       }
- 
+
       const TIME_REGEX = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
- 
+
       for (const day of Object.keys(scheduleInput)) {
         if (!WEEKDAYS.includes(day as WeekDay)) {
           return next(new ErrorHandler(`Invalid day: ${day}`, 400));
         }
- 
+
         const dayData = scheduleInput[day];
- 
+
         if (typeof dayData !== "object" || dayData === null) {
           return next(new ErrorHandler(`workSchedule.${day} must be an object`, 400));
         }
- 
+
         // dayOff = true → zero out times, no further validation needed
         if (dayData.dayOff === true) {
-          scheduleUpdates[`workSchedule.${day}.dayOff`]  = true;
-          scheduleUpdates[`workSchedule.${day}.start`]   = "00:00";
-          scheduleUpdates[`workSchedule.${day}.end`]     = "00:00";
+          scheduleUpdates[`workSchedule.${day}.dayOff`] = true;
+          scheduleUpdates[`workSchedule.${day}.start`] = "00:00";
+          scheduleUpdates[`workSchedule.${day}.end`] = "00:00";
           continue;
         }
- 
+
         if (dayData.dayOff === false || dayData.dayOff === undefined) {
           // Validate start / end if provided
           const current = (supervisor.workSchedule as any)[day] ?? {};
-          const start   = dayData.start ?? current.start;
-          const end     = dayData.end   ?? current.end;
- 
+          const start = dayData.start ?? current.start;
+          const end = dayData.end ?? current.end;
+
           if (dayData.start !== undefined && !TIME_REGEX.test(dayData.start)) {
             return next(new ErrorHandler(`workSchedule.${day}.start must be HH:MM`, 400));
           }
@@ -9610,28 +9606,28 @@ export const updateMeSupervisor = catchAsyncError(
           if (start >= end) {
             return next(new ErrorHandler(`${day}: start time must be before end time`, 400));
           }
- 
+
           if (dayData.start !== undefined) scheduleUpdates[`workSchedule.${day}.start`] = dayData.start;
-          if (dayData.end   !== undefined) scheduleUpdates[`workSchedule.${day}.end`]   = dayData.end;
-          if (dayData.dayOff === false)    scheduleUpdates[`workSchedule.${day}.dayOff`] = false;
+          if (dayData.end !== undefined) scheduleUpdates[`workSchedule.${day}.end`] = dayData.end;
+          if (dayData.dayOff === false) scheduleUpdates[`workSchedule.${day}.dayOff`] = false;
         }
       }
     }
- 
+
     const allUpdates = { ...userUpdates, ...scheduleUpdates };
- 
+
     if (Object.keys(allUpdates).length === 0) {
       return next(new ErrorHandler("No valid fields to update.", 400));
     }
- 
+
 
     await Promise.all([
       Object.keys(userUpdates).length > 0 &&
-        userModel.findByIdAndUpdate(userId, { $set: userUpdates }, { runValidators: true }),
+      userModel.findByIdAndUpdate(userId, { $set: userUpdates }, { runValidators: true }),
       Object.keys(scheduleUpdates).length > 0 &&
-        SupervisorModel.findByIdAndUpdate(supervisor._id, { $set: scheduleUpdates }, { runValidators: true }),
+      SupervisorModel.findByIdAndUpdate(supervisor._id, { $set: scheduleUpdates }, { runValidators: true }),
     ]);
- 
+
     // Fetch the refreshed profile to return
     const [updatedUser, updatedSupervisor] = await Promise.all([
       userModel.findById(userId)
@@ -9641,15 +9637,15 @@ export const updateMeSupervisor = catchAsyncError(
         .select("workSchedule permissions performance")
         .lean(),
     ]);
- 
+
     return res.status(200).json({
       success: true,
       message: "Profile updated successfully",
       data: {
         ...updatedUser,
         workSchedule: updatedSupervisor?.workSchedule,
-        permissions:  updatedSupervisor?.permissions,
-        performance:  updatedSupervisor?.performance,
+        permissions: updatedSupervisor?.permissions,
+        performance: updatedSupervisor?.performance,
       },
     });
   },
@@ -9698,7 +9694,7 @@ export const searchPackages = catchAsyncError(
 
       const VALID_STATUSES: PackageStatus[] = [
         "pending", "accepted", "at_origin_branch", "in_transit_to_branch",
-        "at_destination_branch", "out_for_delivery", "delivered",'failed_delivery_attempt',
+        "at_destination_branch", "out_for_delivery", "delivered", 'failed_delivery_attempt',
         "failed_delivery", "rescheduled", "returned", "cancelled",
         "lost", "damaged", "on_hold",
       ];
@@ -9725,7 +9721,7 @@ export const searchPackages = catchAsyncError(
         matchStage.type = t;
       }
 
-  
+
       const VALID_PAYMENT_STATUSES: PaymentStatus[] = [
         "pending", "paid", "partially_paid", "refunded", "failed",
       ];
@@ -9929,7 +9925,7 @@ export const searchPackages = catchAsyncError(
                                 new Date(),
                               ],
                             },
-                            3600000, 
+                            3600000,
                           ],
                         },
                         0,
@@ -9941,7 +9937,7 @@ export const searchPackages = catchAsyncError(
               },
             },
 
-            
+
             _isOverdue: {
               $cond: {
                 if: {
@@ -9961,107 +9957,107 @@ export const searchPackages = catchAsyncError(
         // isOverdue filter (post-computed)
         ...(req.query.isOverdue !== undefined
           ? [
-              {
-                $match: {
-                  _isOverdue: req.query.isOverdue === "true",
-                },
+            {
+              $match: {
+                _isOverdue: req.query.isOverdue === "true",
               },
-            ]
+            },
+          ]
           : []),
 
         // text search across tracking number, recipient name/phone
         ...(rawSearch
           ? [
-              {
-                $match: {
-                  $or: [
-                    // Exact tracking number match (most common lookup — fast)
-                    {
-                      trackingNumber: {
-                        $regex: rawSearch,
-                        $options: "i",
-                      },
+            {
+              $match: {
+                $or: [
+                  // Exact tracking number match (most common lookup — fast)
+                  {
+                    trackingNumber: {
+                      $regex: rawSearch,
+                      $options: "i",
                     },
-                    // Recipient name (partial match)
-                    {
-                      "destination.recipientName": {
-                        $regex: rawSearch,
-                        $options: "i",
-                      },
+                  },
+                  // Recipient name (partial match)
+                  {
+                    "destination.recipientName": {
+                      $regex: rawSearch,
+                      $options: "i",
                     },
-                    // Recipient phone (partial match — useful for +213 vs 0 prefix)
-                    {
-                      "destination.recipientPhone": {
-                        $regex: rawSearch,
-                        $options: "i",
-                      },
+                  },
+                  // Recipient phone (partial match — useful for +213 vs 0 prefix)
+                  {
+                    "destination.recipientPhone": {
+                      $regex: rawSearch,
+                      $options: "i",
                     },
-                    // Also check alternative phone
+                  },
+                  // Also check alternative phone
+                  {
+                    "destination.alternativePhone": {
+                      $regex: rawSearch,
+                      $options: "i",
+                    },
+                  },
+                ],
+              },
+            },
+
+            // ── Relevance scoring: exact tracking number > starts-with > partial
+            {
+              $addFields: {
+                _searchScore: {
+                  $add: [
+                    // Exact tracking number → highest priority
                     {
-                      "destination.alternativePhone": {
-                        $regex: rawSearch,
-                        $options: "i",
-                      },
+                      $cond: [
+                        {
+                          $regexMatch: {
+                            input: "$trackingNumber",
+                            regex: `^${rawSearch}$`,
+                            options: "i",
+                          },
+                        },
+                        10,
+                        0,
+                      ],
+                    },
+                    // Tracking number starts-with
+                    {
+                      $cond: [
+                        {
+                          $regexMatch: {
+                            input: "$trackingNumber",
+                            regex: `^${rawSearch}`,
+                            options: "i",
+                          },
+                        },
+                        5,
+                        0,
+                      ],
+                    },
+                    // Recipient name starts-with
+                    {
+                      $cond: [
+                        {
+                          $regexMatch: {
+                            input: { $toLower: "$destination.recipientName" },
+                            regex: `^${rawSearch.toLowerCase()}`,
+                          },
+                        },
+                        3,
+                        0,
+                      ],
                     },
                   ],
                 },
               },
-
-              // ── Relevance scoring: exact tracking number > starts-with > partial
-              {
-                $addFields: {
-                  _searchScore: {
-                    $add: [
-                      // Exact tracking number → highest priority
-                      {
-                        $cond: [
-                          {
-                            $regexMatch: {
-                              input: "$trackingNumber",
-                              regex: `^${rawSearch}$`,
-                              options: "i",
-                            },
-                          },
-                          10,
-                          0,
-                        ],
-                      },
-                      // Tracking number starts-with
-                      {
-                        $cond: [
-                          {
-                            $regexMatch: {
-                              input: "$trackingNumber",
-                              regex: `^${rawSearch}`,
-                              options: "i",
-                            },
-                          },
-                          5,
-                          0,
-                        ],
-                      },
-                      // Recipient name starts-with
-                      {
-                        $cond: [
-                          {
-                            $regexMatch: {
-                              input: { $toLower: "$destination.recipientName" },
-                              regex: `^${rawSearch.toLowerCase()}`,
-                            },
-                          },
-                          3,
-                          0,
-                        ],
-                      },
-                    ],
-                  },
-                },
-              },
-            ]
+            },
+          ]
           : [
-              // No search query — assign neutral score
-              { $addFields: { _searchScore: 0 } },
-            ]),
+            // No search query — assign neutral score
+            { $addFields: { _searchScore: 0 } },
+          ]),
 
         // sort
         //    Primary:   search relevance (desc)
@@ -10239,7 +10235,7 @@ export const getPackagesPaginated = catchAsyncError(
         if (!deliverer) {
           return next(new ErrorHandler("Deliverer profile not found.", 404));
         }
-        
+
         // STRICT: Only show packages explicitly assigned to this deliverer
         filter.assignedDelivererId = deliverer._id;
         assignedDelivererId = deliverer._id;
@@ -10601,9 +10597,9 @@ export const getPackagesPaginated = catchAsyncError(
           notes: pkg.destination.notes ?? null,
           coordinates: pkg.deliveryType === "home" && pkg.destination.location?.coordinates
             ? {
-                type: pkg.destination.location.type || "Point",
-                coordinates: pkg.destination.location.coordinates,
-              }
+              type: pkg.destination.location.type || "Point",
+              coordinates: pkg.destination.location.coordinates,
+            }
             : null,
         },
         deliveryType: pkg.deliveryType,
@@ -10754,7 +10750,7 @@ export const toggleOnlineStatus = catchAsyncError(
     return res.status(200).json({
       success: true,
       message: `Deliverer is now ${deliverer.isOnline ? "online" : "offline"}`,
-      isOnline: deliverer.isOnline ,
+      isOnline: deliverer.isOnline,
     });
   },
 );
@@ -10787,11 +10783,11 @@ export const getMyDeliveries = catchAsyncError(
 
     const userId = req.user._id;
     const delivererId = await resolveDelivererId(userId, next);
-    if (!delivererId) return; 
+    if (!delivererId) return;
 
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
-    const page  = Math.max(1, parseInt(req.query.page  as string) || 1);
-    const skip  = (page - 1) * limit;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const skip = (page - 1) * limit;
 
     const rawSearch = (req.query.q as string)?.trim() ?? "";
 
@@ -10810,7 +10806,7 @@ export const getMyDeliveries = catchAsyncError(
 
     if (req.query.status) {
       const s = req.query.status as string;
-      
+
 
       if (s.toLowerCase() === "failed") {
         matchStage.status = { $in: FAILED_STATUS_GROUP };
@@ -10827,7 +10823,7 @@ export const getMyDeliveries = catchAsyncError(
     if (req.query.statuses) {
       const rawStatuses = (req.query.statuses as string).split(",").map(s => s.trim());
       const expandedStatuses: string[] = [];
-      
+
       for (const status of rawStatuses) {
         if (status.toLowerCase() === "failed") {
           expandedStatuses.push(...FAILED_STATUS_GROUP);
@@ -10838,7 +10834,7 @@ export const getMyDeliveries = catchAsyncError(
           expandedStatuses.push(status);
         }
       }
-      
+
 
       const uniqueStatuses = [...new Set(expandedStatuses)];
       matchStage.status = uniqueStatuses.length === 1 ? uniqueStatuses[0] : { $in: uniqueStatuses };
@@ -10900,14 +10896,14 @@ export const getMyDeliveries = catchAsyncError(
     if (req.query.fromDate || req.query.toDate) {
       matchStage.createdAt = {
         ...(req.query.fromDate && { $gte: new Date(req.query.fromDate as string) }),
-        ...(req.query.toDate   && { $lte: new Date(req.query.toDate   as string) }),
+        ...(req.query.toDate && { $lte: new Date(req.query.toDate as string) }),
       };
     }
 
     if (req.query.deliveredFrom || req.query.deliveredTo) {
       matchStage.deliveredAt = {
         ...(req.query.deliveredFrom && { $gte: new Date(req.query.deliveredFrom as string) }),
-        ...(req.query.deliveredTo   && { $lte: new Date(req.query.deliveredTo   as string) }),
+        ...(req.query.deliveredTo && { $lte: new Date(req.query.deliveredTo as string) }),
       };
     }
 
@@ -10967,49 +10963,49 @@ export const getMyDeliveries = catchAsyncError(
 
       ...(rawSearch
         ? [
-            {
-              $match: {
-                $or: [
-                  { trackingNumber:                   { $regex: rawSearch, $options: "i" } },
-                  { "destination.recipientName":       { $regex: rawSearch, $options: "i" } },
-                  { "destination.recipientPhone":      { $regex: rawSearch, $options: "i" } },
-                  { "destination.alternativePhone":    { $regex: rawSearch, $options: "i" } },
+          {
+            $match: {
+              $or: [
+                { trackingNumber: { $regex: rawSearch, $options: "i" } },
+                { "destination.recipientName": { $regex: rawSearch, $options: "i" } },
+                { "destination.recipientPhone": { $regex: rawSearch, $options: "i" } },
+                { "destination.alternativePhone": { $regex: rawSearch, $options: "i" } },
+              ],
+            },
+          },
+
+          {
+            $addFields: {
+              _searchScore: {
+                $add: [
+                  {
+                    $cond: [
+                      { $regexMatch: { input: "$trackingNumber", regex: `^${rawSearch}$`, options: "i" } },
+                      10, 0,
+                    ],
+                  },
+                  {
+                    $cond: [
+                      { $regexMatch: { input: "$trackingNumber", regex: `^${rawSearch}`, options: "i" } },
+                      5, 0,
+                    ],
+                  },
+                  {
+                    $cond: [
+                      {
+                        $regexMatch: {
+                          input: { $toLower: "$destination.recipientName" },
+                          regex: `^${rawSearch.toLowerCase()}`,
+                        },
+                      },
+                      3, 0,
+                    ],
+                  },
                 ],
               },
             },
-
-            {
-              $addFields: {
-                _searchScore: {
-                  $add: [
-                    {
-                      $cond: [
-                        { $regexMatch: { input: "$trackingNumber", regex: `^${rawSearch}$`, options: "i" } },
-                        10, 0,
-                      ],
-                    },
-                    {
-                      $cond: [
-                        { $regexMatch: { input: "$trackingNumber", regex: `^${rawSearch}`, options: "i" } },
-                        5, 0,
-                      ],
-                    },
-                    {
-                      $cond: [
-                        {
-                          $regexMatch: {
-                            input: { $toLower: "$destination.recipientName" },
-                            regex: `^${rawSearch.toLowerCase()}`,
-                          },
-                        },
-                        3, 0,
-                      ],
-                    },
-                  ],
-                },
-              },
-            },
-          ]
+          },
+        ]
         : [{ $addFields: { _searchScore: 0 } }]),
 
       {
@@ -11041,8 +11037,8 @@ export const getMyDeliveries = catchAsyncError(
 
     const [result] = await PackageModel.aggregate(pipeline);
 
-    const total: number     = result.metadata[0]?.total ?? 0;
-    const packages: any[]   = result.data ?? [];
+    const total: number = result.metadata[0]?.total ?? 0;
+    const packages: any[] = result.data ?? [];
 
     const formattedDeliveries = packages.map((pkg) => ({
       id: pkg._id,
@@ -11052,35 +11048,35 @@ export const getMyDeliveries = catchAsyncError(
       isFragile: pkg.isFragile,
 
       destination: {
-        recipientName:    pkg.destination.recipientName,
-        recipientPhone:   pkg.destination.recipientPhone,
+        recipientName: pkg.destination.recipientName,
+        recipientPhone: pkg.destination.recipientPhone,
         alternativePhone: pkg.destination.alternativePhone ?? null,
-        address:          pkg.destination.address,
-        city:             pkg.destination.city,
-        state:            pkg.destination.state,
-        postalCode:       pkg.destination.postalCode ?? null,
-        coordinates:      pkg.destination.location?.coordinates ?? null,
-        notes:            pkg.destination.notes ?? null,
+        address: pkg.destination.address,
+        city: pkg.destination.city,
+        state: pkg.destination.state,
+        postalCode: pkg.destination.postalCode ?? null,
+        coordinates: pkg.destination.location?.coordinates ?? null,
+        notes: pkg.destination.notes ?? null,
       },
 
-      deliveryType:         pkg.deliveryType,
-      deliveryPriority:     pkg.deliveryPriority,
+      deliveryType: pkg.deliveryType,
+      deliveryPriority: pkg.deliveryPriority,
       estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
 
-      totalPrice:    pkg.totalPrice,
+      totalPrice: pkg.totalPrice,
       paymentStatus: pkg.paymentStatus,
       paymentMethod: pkg.paymentMethod ?? null,
 
-      attemptCount:    pkg.attemptCount,
-      maxAttempts:     pkg.maxAttempts,
+      attemptCount: pkg.attemptCount,
+      maxAttempts: pkg.maxAttempts,
       nextAttemptDate: pkg.nextAttemptDate ?? null,
 
       isReturn: pkg.returnInfo?.isReturn ?? false,
 
       unresolvedIssuesCount: (pkg.issues as any[]).filter((i) => !i.resolved).length,
 
-      createdAt:   pkg.createdAt,
-      updatedAt:   pkg.updatedAt,
+      createdAt: pkg.createdAt,
+      updatedAt: pkg.updatedAt,
       deliveredAt: pkg.deliveredAt ?? null,
     }));
 
@@ -11112,14 +11108,14 @@ export const getMyDeliveryById = catchAsyncError(
       return next(new ErrorHandler("Invalid package ID.", 400));
     }
 
-    const userId      = req.user?._id;
+    const userId = req.user?._id;
     const delivererId = await resolveDelivererId(userId, next);
     if (!delivererId) return;
 
 
 
     const pkg = await PackageModel.findOne({
-      _id:                 new mongoose.Types.ObjectId(packageId.toString()),
+      _id: new mongoose.Types.ObjectId(packageId.toString()),
       assignedDelivererId: delivererId,
     }).lean();
 
@@ -11134,77 +11130,77 @@ export const getMyDeliveryById = catchAsyncError(
 
 
     const detail = {
-      id:             pkg._id,
+      id: pkg._id,
       trackingNumber: pkg.trackingNumber,
-      status:         pkg.status,
-      type:           pkg.type,
-      isFragile:      pkg.isFragile,
-      description:    pkg.description ?? null,
-      images:         pkg.images ?? [],
+      status: pkg.status,
+      type: pkg.type,
+      isFragile: pkg.isFragile,
+      description: pkg.description ?? null,
+      images: pkg.images ?? [],
 
 
 
-      weight:     pkg.weight,
-      volume:     pkg.volume ?? null,
+      weight: pkg.weight,
+      volume: pkg.volume ?? null,
       dimensions: pkg.dimensions ?? null,
 
 
       destination: {
-        recipientName:    pkg.destination.recipientName,
-        recipientPhone:   pkg.destination.recipientPhone,
+        recipientName: pkg.destination.recipientName,
+        recipientPhone: pkg.destination.recipientPhone,
         alternativePhone: pkg.destination.alternativePhone ?? null,
-        address:          pkg.destination.address,
-        city:             pkg.destination.city,
-        state:            pkg.destination.state,
-        postalCode:       pkg.destination.postalCode ?? null,
-        coordinates:      pkg.destination.location?.coordinates ?? null,
-        notes:            pkg.destination.notes ?? null,
+        address: pkg.destination.address,
+        city: pkg.destination.city,
+        state: pkg.destination.state,
+        postalCode: pkg.destination.postalCode ?? null,
+        coordinates: pkg.destination.location?.coordinates ?? null,
+        notes: pkg.destination.notes ?? null,
       },
 
 
-      deliveryType:          pkg.deliveryType,
-      deliveryPriority:      pkg.deliveryPriority,
+      deliveryType: pkg.deliveryType,
+      deliveryPriority: pkg.deliveryPriority,
       estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
-      destinationBranchId:   pkg.destinationBranchId ?? null,
+      destinationBranchId: pkg.destinationBranchId ?? null,
 
 
-      totalPrice:    pkg.totalPrice,
+      totalPrice: pkg.totalPrice,
       paymentStatus: pkg.paymentStatus,
       paymentMethod: pkg.paymentMethod ?? null,
-      paidAt:        pkg.paidAt ?? null,
+      paidAt: pkg.paidAt ?? null,
 
 
-      assignedDelivererId:   pkg.assignedDelivererId,
+      assignedDelivererId: pkg.assignedDelivererId,
       assignedTransporterId: pkg.assignedTransporterId ?? null,
-      assignedVehicleId:     pkg.assignedVehicleId ?? null,
-      currentRouteId:        pkg.currentRouteId ?? null,
+      assignedVehicleId: pkg.assignedVehicleId ?? null,
+      currentRouteId: pkg.currentRouteId ?? null,
 
 
-      attemptCount:    pkg.attemptCount,
-      maxAttempts:     pkg.maxAttempts,
+      attemptCount: pkg.attemptCount,
+      maxAttempts: pkg.maxAttempts,
       lastAttemptDate: pkg.lastAttemptDate ?? null,
       nextAttemptDate: pkg.nextAttemptDate ?? null,
 
 
       returnInfo: {
-        isReturn:     pkg.returnInfo?.isReturn ?? false,
-        reason:       pkg.returnInfo?.reason ?? null,
-        returnDate:   pkg.returnInfo?.returnDate ?? null,
+        isReturn: pkg.returnInfo?.isReturn ?? false,
+        reason: pkg.returnInfo?.reason ?? null,
+        returnDate: pkg.returnInfo?.returnDate ?? null,
         refundAmount: pkg.returnInfo?.refundAmount ?? null,
         refundStatus: pkg.returnInfo?.refundStatus ?? null,
-        returnNotes:  pkg.returnInfo?.returnNotes ?? null,
+        returnNotes: pkg.returnInfo?.returnNotes ?? null,
       },
 
 
       issues: (pkg.issues ?? []).map((issue: any) => ({
-        type:        issue.type,
+        type: issue.type,
         description: issue.description,
-        reportedBy:  issue.reportedBy,
-        reportedAt:  issue.reportedAt,
-        resolved:    issue.resolved,
-        resolvedAt:  issue.resolvedAt ?? null,
-        resolution:  issue.resolution ?? null,
-        priority:    issue.priority ?? null,
+        reportedBy: issue.reportedBy,
+        reportedAt: issue.reportedAt,
+        resolved: issue.resolved,
+        resolvedAt: issue.resolvedAt ?? null,
+        resolution: issue.resolution ?? null,
+        priority: issue.priority ?? null,
       })),
       unresolvedIssuesCount: (pkg.issues ?? []).filter((i: any) => !i.resolved).length,
 
@@ -11216,26 +11212,26 @@ export const getMyDeliveryById = catchAsyncError(
             new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
         )
         .map((event: any) => ({
-          status:    event.status,
-          location:  event.location ?? null,
-          branchId:  event.branchId ?? null,
-          notes:     event.notes ?? null,
+          status: event.status,
+          location: event.location ?? null,
+          branchId: event.branchId ?? null,
+          notes: event.notes ?? null,
           timestamp: event.timestamp,
         })),
 
 
-        deliveryOtp: pkg.deliveryOtp
+      deliveryOtp: pkg.deliveryOtp
         ? {
-            code:        pkg.deliveryOtp.code,
-            expiresAt:   pkg.deliveryOtp.expiresAt,
-            verified:    pkg.deliveryOtp.verified,
-            verifiedAt:  pkg.deliveryOtp.verifiedAt ?? null,
-          }
+          code: pkg.deliveryOtp.code,
+          expiresAt: pkg.deliveryOtp.expiresAt,
+          verified: pkg.deliveryOtp.verified,
+          verifiedAt: pkg.deliveryOtp.verifiedAt ?? null,
+        }
         : null,
 
 
-        createdAt:   pkg.createdAt,
-      updatedAt:   pkg.updatedAt,
+      createdAt: pkg.createdAt,
+      updatedAt: pkg.updatedAt,
       deliveredAt: pkg.deliveredAt ?? null,
     };
 
@@ -11262,7 +11258,7 @@ export const getManifestsPaginated = catchAsyncError(
       const filter: Record<string, any> = {};
 
       const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
-      const isValidId  = (val: string) => mongoose.Types.ObjectId.isValid(val);
+      const isValidId = (val: string) => mongoose.Types.ObjectId.isValid(val);
 
 
       if (req.query.companyId) {
@@ -11399,7 +11395,7 @@ export const getManifestsPaginated = catchAsyncError(
       }
 
 
-      
+
       if (req.query.minWeight || req.query.maxWeight) {
         const min = req.query.minWeight ? parseFloat(req.query.minWeight as string) : null;
         const max = req.query.maxWeight ? parseFloat(req.query.maxWeight as string) : null;
@@ -11605,18 +11601,18 @@ export const getManifestsPaginated = catchAsyncError(
       }
 
       const sortBy = (req.query.sortBy as string) || "createdAt";
-      const order  = req.query.order === "asc" ? 1 : -1;
+      const order = req.query.order === "asc" ? 1 : -1;
 
       const sortMap: Record<string, any> = {
-        createdAt:           { createdAt: order },
-        updatedAt:           { updatedAt: order },
+        createdAt: { createdAt: order },
+        updatedAt: { updatedAt: order },
         totalDeclaredWeight: { totalDeclaredWeight: order },
-        packageCount:        { packageCount: order },
-        manifestCode:        { manifestCode: order },
-        departedAt:          { departedAt: order },
-        arrivedAt:           { arrivedAt: order },
-        status:              { status: order },
-        priority:            { priority: order },
+        packageCount: { packageCount: order },
+        manifestCode: { manifestCode: order },
+        departedAt: { departedAt: order },
+        arrivedAt: { arrivedAt: order },
+        status: { status: order },
+        priority: { priority: order },
       };
 
       const sort = sortMap[sortBy] || { createdAt: -1 };
@@ -11637,26 +11633,26 @@ export const getManifestsPaginated = catchAsyncError(
       ]);
 
 
-      
+
       const formattedManifests = manifests.map((m: any) => ({
         id: m._id,
         manifestCode: m.manifestCode,
         companyId: m.companyId,
         originBranch: m.originBranchId
           ? {
-              id: m.originBranchId._id,
-              name: m.originBranchId.name,
-              code: m.originBranchId.code,
-              city: m.originBranchId.address?.city,
-            }
+            id: m.originBranchId._id,
+            name: m.originBranchId.name,
+            code: m.originBranchId.code,
+            city: m.originBranchId.address?.city,
+          }
           : null,
         destinationBranch: m.destinationBranchId
           ? {
-              id: m.destinationBranchId._id,
-              name: m.destinationBranchId.name,
-              code: m.destinationBranchId.code,
-              city: m.destinationBranchId.address?.city,
-            }
+            id: m.destinationBranchId._id,
+            name: m.destinationBranchId.name,
+            code: m.destinationBranchId.code,
+            city: m.destinationBranchId.address?.city,
+          }
           : null,
         status: m.status,
         priority: m.priority,
@@ -11665,36 +11661,36 @@ export const getManifestsPaginated = catchAsyncError(
           : null,
         sealInfo: m.sealInfo
           ? {
-              sealedBy: m.sealInfo.sealedBy,
-              sealedAt: m.sealInfo.sealedAt,
-              sealNumber: m.sealInfo.sealNumber,
-              totalWeight: m.sealInfo.totalWeight,
-              packageCount: m.sealInfo.packageCount,
-              notes: m.sealInfo.notes ?? null,
-            }
+            sealedBy: m.sealInfo.sealedBy,
+            sealedAt: m.sealInfo.sealedAt,
+            sealNumber: m.sealInfo.sealNumber,
+            totalWeight: m.sealInfo.totalWeight,
+            packageCount: m.sealInfo.packageCount,
+            notes: m.sealInfo.notes ?? null,
+          }
           : null,
         transportLeg: m.transportLeg
           ? {
-              vehicle: m.transportLeg.vehicleId
-                ? {
-                    id: m.transportLeg.vehicleId._id,
-                    registrationNumber: m.transportLeg.vehicleId.registrationNumber,
-                    type: m.transportLeg.vehicleId.type,
-                  }
-                : null,
-              transporter: m.transportLeg.transporterId
-                ? {
-                    id: m.transportLeg.transporterId._id,
-                    name: m.transportLeg.transporterId.name,
-                    email: m.transportLeg.transporterId.email,
-                    phone: m.transportLeg.transporterId.phone,
-                  }
-                : null,
-              assignedAt: m.transportLeg.assignedAt,
-              departedAt: m.transportLeg.departedAt ?? null,
-              arrivedAt: m.transportLeg.arrivedAt ?? null,
-              estimatedArrival: m.transportLeg.estimatedArrival ?? null,
-            }
+            vehicle: m.transportLeg.vehicleId
+              ? {
+                id: m.transportLeg.vehicleId._id,
+                registrationNumber: m.transportLeg.vehicleId.registrationNumber,
+                type: m.transportLeg.vehicleId.type,
+              }
+              : null,
+            transporter: m.transportLeg.transporterId
+              ? {
+                id: m.transportLeg.transporterId._id,
+                name: m.transportLeg.transporterId.name,
+                email: m.transportLeg.transporterId.email,
+                phone: m.transportLeg.transporterId.phone,
+              }
+              : null,
+            assignedAt: m.transportLeg.assignedAt,
+            departedAt: m.transportLeg.departedAt ?? null,
+            arrivedAt: m.transportLeg.arrivedAt ?? null,
+            estimatedArrival: m.transportLeg.estimatedArrival ?? null,
+          }
           : null,
         totalDeclaredWeight: m.totalDeclaredWeight,
         packageCount: m.packageCount,
@@ -11712,17 +11708,17 @@ export const getManifestsPaginated = catchAsyncError(
         hasDiscrepancy: m.hasDiscrepancy,
         discrepancy: m.discrepancy
           ? {
-              reportedBy: m.discrepancy.reportedBy,
-              reportedAt: m.discrepancy.reportedAt,
-              expectedCount: m.discrepancy.expectedCount,
-              actualCount: m.discrepancy.actualCount,
-              missingPackageIds: m.discrepancy.missingPackageIds,
-              extraPackageIds: m.discrepancy.extraPackageIds,
-              notes: m.discrepancy.notes,
-              resolvedBy: m.discrepancy.resolvedBy ?? null,
-              resolvedAt: m.discrepancy.resolvedAt ?? null,
-              resolution: m.discrepancy.resolution ?? null,
-            }
+            reportedBy: m.discrepancy.reportedBy,
+            reportedAt: m.discrepancy.reportedAt,
+            expectedCount: m.discrepancy.expectedCount,
+            actualCount: m.discrepancy.actualCount,
+            missingPackageIds: m.discrepancy.missingPackageIds,
+            extraPackageIds: m.discrepancy.extraPackageIds,
+            notes: m.discrepancy.notes,
+            resolvedBy: m.discrepancy.resolvedBy ?? null,
+            resolvedAt: m.discrepancy.resolvedAt ?? null,
+            resolution: m.discrepancy.resolution ?? null,
+          }
           : null,
         isSealed: m.isSealed,
         isInTransit: m.isInTransit,
@@ -11752,34 +11748,34 @@ export const getManifestsPaginated = catchAsyncError(
           hasMore: page * limit < total,
         },
         filters: {
-          status:             req.query.status             ?? null,
-          statuses:           req.query.statuses           ?? null,
-          priority:           req.query.priority           ?? null,
-          isSealed:           req.query.isSealed           ?? null,
-          isInTransit:        req.query.isInTransit        ?? null,
-          hasDiscrepancy:     req.query.hasDiscrepancy     ?? null,
-          minWeight:          req.query.minWeight          ?? null,
-          maxWeight:          req.query.maxWeight          ?? null,
-          minPackageCount:    req.query.minPackageCount    ?? null,
-          maxPackageCount:    req.query.maxPackageCount    ?? null,
-          manifestCode:       req.query.manifestCode       ?? null,
-          search:             req.query.search             ?? null,
-          containsPackageId:  req.query.containsPackageId  ?? null,
-          companyId:          req.query.companyId          ?? null,
-          originBranchId:     req.query.originBranchId     ?? null,
+          status: req.query.status ?? null,
+          statuses: req.query.statuses ?? null,
+          priority: req.query.priority ?? null,
+          isSealed: req.query.isSealed ?? null,
+          isInTransit: req.query.isInTransit ?? null,
+          hasDiscrepancy: req.query.hasDiscrepancy ?? null,
+          minWeight: req.query.minWeight ?? null,
+          maxWeight: req.query.maxWeight ?? null,
+          minPackageCount: req.query.minPackageCount ?? null,
+          maxPackageCount: req.query.maxPackageCount ?? null,
+          manifestCode: req.query.manifestCode ?? null,
+          search: req.query.search ?? null,
+          containsPackageId: req.query.containsPackageId ?? null,
+          companyId: req.query.companyId ?? null,
+          originBranchId: req.query.originBranchId ?? null,
           destinationBranchId: req.query.destinationBranchId ?? null,
-          branchId:           req.query.branchId           ?? null,
-          createdBy:          req.query.createdBy          ?? null,
-          transporterId:      req.query.transporterId      ?? null,
-          vehicleId:          req.query.vehicleId          ?? null,
-          createdFrom:        req.query.createdFrom        ?? null,
-          createdTo:          req.query.createdTo          ?? null,
-          departedFrom:       req.query.departedFrom       ?? null,
-          departedTo:         req.query.departedTo         ?? null,
-          arrivedFrom:        req.query.arrivedFrom        ?? null,
-          arrivedTo:          req.query.arrivedTo          ?? null,
+          branchId: req.query.branchId ?? null,
+          createdBy: req.query.createdBy ?? null,
+          transporterId: req.query.transporterId ?? null,
+          vehicleId: req.query.vehicleId ?? null,
+          createdFrom: req.query.createdFrom ?? null,
+          createdTo: req.query.createdTo ?? null,
+          departedFrom: req.query.departedFrom ?? null,
+          departedTo: req.query.departedTo ?? null,
+          arrivedFrom: req.query.arrivedFrom ?? null,
+          arrivedTo: req.query.arrivedTo ?? null,
           sortBy,
-          order:              req.query.order              ?? "desc",
+          order: req.query.order ?? "desc",
         },
       };
 
@@ -11996,17 +11992,17 @@ export const getTodayDeliveries = catchAsyncError(
 
         currentRoute: pkg.currentRouteId
           ? {
-              id: pkg.currentRouteId._id,
-              routeNumber: pkg.currentRouteId.routeNumber,
-              status: pkg.currentRouteId.status,
-            }
+            id: pkg.currentRouteId._id,
+            routeNumber: pkg.currentRouteId.routeNumber,
+            status: pkg.currentRouteId.status,
+          }
           : null,
         currentBranch: pkg.currentBranchId
           ? {
-              id: pkg.currentBranchId._id,
-              name: pkg.currentBranchId.name,
-              code: pkg.currentBranchId.code,
-            }
+            id: pkg.currentBranchId._id,
+            name: pkg.currentBranchId.name,
+            code: pkg.currentBranchId.code,
+          }
           : null,
 
         deliveryProgress: (pkg as any).deliveryProgress,
@@ -12086,7 +12082,7 @@ export const getDeliveryHistory = catchAsyncError(
 
       type PeriodFilter = "today" | "yesterday" | "last7days" | "last30days" | "last6months" | "custom";
 
-      const period =  req.query.period ? (req.query.period as PeriodFilter) : "all";
+      const period = req.query.period ? (req.query.period as PeriodFilter) : "all";
 
       if (period !== "all") {
         const now = new Date();
@@ -12340,7 +12336,7 @@ export const getTodayManifests = catchAsyncError(
       };
 
       const VALID_STATUSES: ManifestStatus[] = [
-        'open', 'sealed', 'loaded', 'in_transit', 
+        'open', 'sealed', 'loaded', 'in_transit',
         'arrived', 'unloading', 'closed', 'discrepancy', 'cancelled'
       ];
 
@@ -12457,15 +12453,15 @@ export const getTodayManifests = catchAsyncError(
 
         packageCount: manifest.packageCount,
         totalDeclaredWeight: manifest.totalDeclaredWeight,
-        
+
         unloadedCount: manifest.unloadedCount,
         remainingCount: manifest.remainingCount,
-        
+
         sealedAt: manifest.sealedAt ?? null,
         departedAt: manifest.departedAt ?? null,
         arrivedAt: manifest.arrivedAt ?? null,
         closedAt: manifest.closedAt ?? null,
-        
+
         durationMinutes: manifest.durationMinutes ?? null,
         hasDiscrepancy: manifest.hasDiscrepancy,
         isSealed: manifest.isSealed,
@@ -12731,10 +12727,10 @@ export const getManifestHistory = catchAsyncError(
 
         packageCount: manifest.packageCount,
         totalDeclaredWeight: manifest.totalDeclaredWeight,
-        
+
         unloadedCount: manifest.unloadedCount,
         remainingCount: manifest.remainingCount,
-        
+
         sealInfo: manifest.sealInfo ? {
           sealedBy: manifest.sealInfo.sealedBy,
           sealedAt: manifest.sealInfo.sealedAt,
@@ -12753,7 +12749,7 @@ export const getManifestHistory = catchAsyncError(
         departedAt: manifest.departedAt ?? null,
         arrivedAt: manifest.arrivedAt ?? null,
         closedAt: manifest.closedAt ?? null,
-        
+
         durationMinutes: manifest.durationMinutes ?? null,
         hasDiscrepancy: manifest.hasDiscrepancy,
         isSealed: manifest.isSealed,
@@ -12809,55 +12805,55 @@ export const getManifestHistory = catchAsyncError(
 
 
 export const generateCashReturnQrCode = catchAsyncError(async (req: Request, res: Response, next: NextFunction) => {
-    const userId = (req as any).user._id;
-    const userRole = (req as any).user.role;
-    const { delivererId } = req.body;
+  const userId = (req as any).user._id;
+  const userRole = (req as any).user.role;
+  const { delivererId } = req.body;
 
-    if (!delivererId) {
-      return next(new ErrorHandler("delivererId is required.", 400));
+  if (!delivererId) {
+    return next(new ErrorHandler("delivererId is required.", 400));
+  }
+
+  // Get branch ID based on role
+  let branchId: string;
+
+  if (userRole === "supervisor") {
+    const supervisor = await SupervisorModel.findOne({ userId }).lean();
+    if (!supervisor) {
+      return next(new ErrorHandler("Supervisor profile not found.", 404));
     }
-
-    // Get branch ID based on role
-    let branchId: string;
-
-    if (userRole === "supervisor") {
-      const supervisor = await SupervisorModel.findOne({ userId }).lean();
-      if (!supervisor) {
-        return next(new ErrorHandler("Supervisor profile not found.", 404));
-      }
-      branchId = supervisor.branchId.toString();
-    } else {
-      // manager or admin — must provide branchId
-      branchId = req.body.branchId;
-      if (!branchId) {
-        return next(new ErrorHandler("branchId is required for managers/admins.", 400));
-      }
+    branchId = supervisor.branchId.toString();
+  } else {
+    // manager or admin — must provide branchId
+    branchId = req.body.branchId;
+    if (!branchId) {
+      return next(new ErrorHandler("branchId is required for managers/admins.", 400));
     }
+  }
 
-    const { code, qrUrl, session } = await generateCashReturnQr(
-      delivererId,
-      branchId,
-      userId,
-    );
+  const { code, qrUrl, session } = await generateCashReturnQr(
+    delivererId,
+    branchId,
+    userId,
+  );
 
-    res.status(200).json({
-      success: true,
-      message: "Cash return QR generated. Show this to the deliverer.",
-      data: {
-        qrCode: code,
-        qrUrl,
-        amount: session.amount,
-        todayEarnings: session.todayEarnings,
-        todayDeliveries: session.todayDeliveries,
-        expiresAt: session.expiresAt,
-      },
-    });
+  res.status(200).json({
+    success: true,
+    message: "Cash return QR generated. Show this to the deliverer.",
+    data: {
+      qrCode: code,
+      qrUrl,
+      amount: session.amount,
+      todayEarnings: session.todayEarnings,
+      todayDeliveries: session.todayDeliveries,
+      expiresAt: session.expiresAt,
+    },
   });
+});
 
 
 
-export const scanCashReturnQrCode =   catchAsyncError(
-    async (req: Request, res: Response, next: NextFunction) => {
+export const scanCashReturnQrCode = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
 
     const delivererUserId = (req as any).user._id;
     const { code } = req.body;
@@ -12935,9 +12931,9 @@ export const viewCashReturnQrPage = catchAsyncError(
   });
 
 
-  export const getPendingCashReturnSummary = catchAsyncError(
-    async (req: Request, res: Response, next: NextFunction) => {
-      
+export const getPendingCashReturnSummary = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+
     const userId = (req as any).user._id;
 
     const deliverer = await DelivererModel.findOne({ userId }).lean();
@@ -13139,7 +13135,7 @@ export const generateStopQr = catchAsyncError(
 
 
       const code = crypto.randomBytes(32).toString("hex");
-      const expiresAt = new Date(Date.now() + 30 * 60 * 1000); 
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
       const isLastStop = stopIndex === route.stops.length - 1;
 
       const isHubRoute = route.type === "hub_to_hub" || route.type === "hub_to_branch";
@@ -13188,10 +13184,10 @@ export const generateStopQr = catchAsyncError(
     } catch (error: any) {
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -13425,10 +13421,10 @@ export const scanStopQr = catchAsyncError(
     } catch (error: any) {
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   },
 );
@@ -13897,10 +13893,10 @@ async function generateEmployeeCode(
   const timestamp = Date.now().toString().slice(-6);
   const random = Math.floor(1000 + Math.random() * 9000);
   const fallbackCode = `${prefix}-${tag}-${timestamp}${random}`;
-  
+
   const existing = await (Model as any).findOne({ employeeCode: fallbackCode }).lean();
   if (!existing) return fallbackCode;
-  
+
   throw new ErrorHandler("Failed to generate a unique employee code, please try again", 500);
 }
 
@@ -13933,6 +13929,7 @@ interface IUpdateCashier {
 // ─────────────────────────────────────────────────────────────────────────────
 export const createCashier = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+    console.log("hello")
     const session = await mongoose.startSession();
     session.startTransaction();
     let transactionCommitted = false;
@@ -13968,7 +13965,8 @@ export const createCashier = catchAsyncError(
           )
         );
       }
-
+      console.log(req.body)
+console.log("hello 4")
       if (
         typeof email !== "string" ||
         typeof phone !== "string" ||
@@ -13979,15 +13977,15 @@ export const createCashier = catchAsyncError(
         return next(new ErrorHandler("All required fields must be strings", 400));
       }
 
-      if (counterNumber !== undefined && (typeof counterNumber !== "number" || counterNumber < 1 || counterNumber > 99)) {
-        return next(new ErrorHandler("counterNumber must be a number between 1 and 99", 400));
+      if (counterNumber !== undefined && (typeof counterNumber !== "number" || counterNumber < 1 || counterNumber > 999)) {
+        return next(new ErrorHandler("counterNumber must be a number between 1 and 999", 400));
       }
 
       // ── auth & branch checks ─────────────────────────────────────────────
       const branch = await BranchModel.findById(branchId).session(session);
 
       await assertSupervisorOrAdmin(requestingUserId, branchId.toString(), PERMISSIONS.MANAGE_DELIVERERS, session);
-
+console.log("hello 3")
       if (!branch) {
         throw new ErrorHandler("Branch not found", 404);
       }
@@ -14011,11 +14009,12 @@ export const createCashier = catchAsyncError(
 
       if (existingEmail) throw new ErrorHandler("Email already exists", 400);
       if (existingPhone) throw new ErrorHandler("Phone number already exists", 400);
-
+      console.log("hello 2")
       // ── employee code ────────────────────────────────────────────────────
       const employeeCode = await generateEmployeeCode("CSH", branch.code || branch.name, CashierModel);
 
       // ── create user + cashier ────────────────────────────────────────────
+      console.log("before create user")
       const [user] = await userModel.create(
         [
           {
@@ -14030,7 +14029,7 @@ export const createCashier = catchAsyncError(
         ],
         { session }
       );
-
+console.log("after create user")
       const [cashier] = await CashierModel.create(
         [
           {
@@ -14045,7 +14044,6 @@ export const createCashier = catchAsyncError(
         ],
         { session }
       );
-
       await session.commitTransaction();
       transactionCommitted = true;
 
@@ -14061,6 +14059,7 @@ export const createCashier = catchAsyncError(
         data: populated,
       });
     } catch (error: any) {
+      console.log(error)
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -14071,10 +14070,10 @@ export const createCashier = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -14212,10 +14211,10 @@ export const updateCashier = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -14326,10 +14325,10 @@ export const toggleBlockCashier = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -14667,10 +14666,10 @@ export const createLoader = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -14826,10 +14825,10 @@ export const updateLoader = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -14940,10 +14939,10 @@ export const toggleBlockLoader = catchAsyncError(
       }
       return next(error);
     } finally {
-        if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-          await session.abortTransaction().catch(() => {});
-        }
-        await session.endSession();
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
   }
 );
@@ -15131,6 +15130,218 @@ export const getMyLoaders = catchAsyncError(
       count: loaders.length,
       data: loaders,
     });
+  }
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DELETE CASHIER
+// ─────────────────────────────────────────────────────────────────────────────
+export const deleteCashier = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const requestingUserId = req.user?._id;
+      const { branchId, cashierId } = req.params;
+
+      if (!requestingUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!cashierId || !mongoose.Types.ObjectId.isValid(cashierId.toString())) {
+        return next(new ErrorHandler("Invalid cashier ID", 400));
+      }
+
+      const [cashier, branch, requestingUser] = await Promise.all([
+        CashierModel.findOne({ _id: cashierId, assignedBranchId: branchId }).session(session),
+        BranchModel.findById(branchId).session(session),
+        userModel.findById(requestingUserId).select("role").session(session),
+      ]);
+
+      if (!cashier) {
+        throw new ErrorHandler("Cashier not found", 404);
+      }
+
+      if (!branch) {
+        throw new ErrorHandler("Branch not found", 404);
+      }
+
+      const isAdmin = requestingUser?.role === "admin";
+      let isAuthorized = isAdmin;
+
+      if (!isAuthorized && requestingUser?.role === "supervisor") {
+        const supervisor = await SupervisorModel.findOne({ userId: requestingUserId, branchId }).session(session);
+        if (!supervisor || !supervisor.isActive) {
+          throw new ErrorHandler("You are not an active supervisor of this branch", 403);
+        }
+        isAuthorized = true;
+      }
+
+      if (!isAuthorized && requestingUser?.role === "manager") {
+        const manager = await ManagerModel.findOne({
+          userId: requestingUserId,
+          companyId: branch.companyId,
+        }).session(session);
+        if (!manager || !manager.isActive) {
+          throw new ErrorHandler("You are not an active manager of this company", 403);
+        }
+        isAuthorized = true;
+      }
+
+      if (!isAuthorized) {
+        throw new ErrorHandler("Not authorized to delete this cashier", 403);
+      }
+
+      // If the cashier is currently active, prevent deletion
+      if (cashier.currentShift && cashier.currentShift.status === "active") {
+        throw new ErrorHandler("Cannot delete a cashier that is currently checked in", 400);
+      }
+
+      // Perform deletion
+      await userModel.findByIdAndDelete(cashier.userId, { session });
+      await CashierModel.findByIdAndDelete(cashierId, { session });
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      return res.status(200).json({
+        success: true,
+        message: "Cashier deleted successfully",
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted && session.inTransaction()) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
+  }
+);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DELETE LOADER
+// ─────────────────────────────────────────────────────────────────────────────
+export const deleteLoader = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
+
+    try {
+      const requestingUserId = req.user?._id;
+      const { branchId, loaderId } = req.params;
+
+      if (!requestingUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
+        return next(new ErrorHandler("Invalid branch ID", 400));
+      }
+
+      if (!loaderId || !mongoose.Types.ObjectId.isValid(loaderId.toString())) {
+        return next(new ErrorHandler("Invalid loader ID", 400));
+      }
+
+      const [loader, branch, requestingUser] = await Promise.all([
+        LoaderModel.findOne({
+          _id: loaderId,
+          $or: [
+            { assignedBranchId: branchId },
+            { temporaryBranchId: branchId }
+          ]
+        }).session(session),
+        BranchModel.findById(branchId).session(session),
+        userModel.findById(requestingUserId).select("role").session(session),
+      ]);
+
+      if (!loader) {
+        throw new ErrorHandler("Loader not found in this branch", 404);
+      }
+
+      if (!branch) {
+        throw new ErrorHandler("Branch not found", 404);
+      }
+
+      const isAdmin = requestingUser?.role === "admin";
+      let isAuthorized = isAdmin;
+
+      if (!isAuthorized && requestingUser?.role === "supervisor") {
+        const supervisor = await SupervisorModel.findOne({ userId: requestingUserId, branchId }).session(session);
+        if (!supervisor || !supervisor.isActive) {
+          throw new ErrorHandler("You are not an active supervisor of this branch", 403);
+        }
+        isAuthorized = true;
+      }
+
+      if (!isAuthorized && requestingUser?.role === "manager") {
+        const manager = await ManagerModel.findOne({
+          userId: requestingUserId,
+          companyId: branch.companyId,
+        }).session(session);
+        if (!manager || !manager.isActive) {
+          throw new ErrorHandler("You are not an active manager of this company", 403);
+        }
+        isAuthorized = true;
+      }
+
+      if (!isAuthorized) {
+        throw new ErrorHandler("Not authorized to delete this loader", 403);
+      }
+
+      // If the loader is currently active, prevent deletion
+      if (loader.currentShift && loader.currentShift.status === "active") {
+        throw new ErrorHandler("Cannot delete a loader that is currently checked in", 400);
+      }
+
+      // Perform deletion
+      await userModel.findByIdAndDelete(loader.userId, { session });
+      await LoaderModel.findByIdAndDelete(loaderId, { session });
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+      return res.status(200).json({
+        success: true,
+        message: "Loader deleted successfully",
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400
+          )
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted && session.inTransaction()) {
+        await session.abortTransaction().catch(() => {});
+      }
+      await session.endSession();
+    }
   }
 );
 

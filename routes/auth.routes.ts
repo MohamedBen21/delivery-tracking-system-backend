@@ -2,10 +2,9 @@ import express from "express";
 import {
   activate,
   calculateETA,
-  changeEmail,
+  confirmChangeEmail,
   confirmContactChange,
   confirmPasswordReset,
-  createManager,
   deleteProfilePicture,
   googleLogin,
   login,
@@ -35,11 +34,13 @@ authRouter.post("/login", limiters.login, checkFailedLogins, login);
 
 authRouter.post("/register", limiters.register, register);
 authRouter.post("/activate", limiters.activate, activate);
+
 authRouter.post(
   "/resend-activation",
   limiters.resendActivation,
   resendActivation,
 );
+
 authRouter.post(
   "/password-recovery",
   limiters.passwordRecovery,
@@ -52,7 +53,7 @@ authRouter.post("/google", googleLogin);
 authRouter.post("/logout", isAuthenticated, logout);
 authRouter.put("/update", isAuthenticated, limiters.emailChange, updateUser);
 
-authRouter.post("/change-email", changeEmail);
+authRouter.post("/confirm-email", confirmChangeEmail);
 
 authRouter.put(
   "/profile-picture",
@@ -64,24 +65,16 @@ authRouter.put(
 authRouter.delete("/profile-picture", isAuthenticated, deleteProfilePicture);
 
 
-authRouter.post("/reset-password/request",    requestPasswordReset);
+authRouter.post("/reset-password/request", requestPasswordReset);
 authRouter.post("/reset-password/verify-otp", verifyOTP);
-authRouter.post("/reset-password/confirm",    confirmPasswordReset);
+authRouter.post("/reset-password/confirm", confirmPasswordReset);
 
 authRouter.get("/me/user", isAuthenticated, meUser);
 
-authRouter.post("/create-manager", createManager);
 
-// authRouter.get("/geocode/search", 
-//   //  isAuthenticated, 
-//    searchAddress);
-// authRouter.get("/geocode/reverse", 
-//   // isAuthenticated, 
-//   reverseGeocodeAddress);
-
-authRouter.get("/geocode/search",   searchAddress);
+authRouter.get("/geocode/search", searchAddress);
 authRouter.post("/geocode/resolve", resolvePlace);
-authRouter.get("/geocode/reverse",  reverseGeocodeAddress);
+authRouter.get("/geocode/reverse", reverseGeocodeAddress);
 
 
 authRouter.post(
@@ -97,7 +90,7 @@ authRouter.post(
   isAuthenticated,
   requestContactChange,
 );
- 
+
 authRouter.post(
   "/change-contact/confirm",
   isAuthenticated,
