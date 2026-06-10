@@ -15133,3 +15133,552 @@ export const getMyLoaders = catchAsyncError(
     });
   }
 );
+
+
+
+
+
+
+export const getPackagesPaginatedFromRoute = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const limit = Math.min(
+        100,
+        Math.max(1, parseInt(req.query.limit as string) || 20),
+      );
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const skip = (page - 1) * limit;
+
+      const filter: Record<string, any> = {};
+
+      const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
+      const isValidId = (val: string) => mongoose.Types.ObjectId.isValid(val);
+
+      // ── Authentication and role-based access control ──────────────────────
+      const user = (req as any).user;
+      const userRole = user?.role;
+      const userId = user?._id;
+
+      let assignedDelivererId: mongoose.Types.ObjectId | null = null;
+      let routePackageIds: mongoose.Types.ObjectId[] | null = null;
+
+      // ── COMPANY FILTER ────────────────────────────────────────────────────
+      if (req.query.companyId) {
+        if (!isValidId(req.query.companyId as string))
+          return next(new ErrorHandler("Invalid companyId.", 400));
+        filter.companyId = toObjectId(req.query.companyId as string);
+      }
+
+      // ── STRICT ACCESS CONTROL FOR DELIVERER ROLE ──────────────────────────
+      if (userRole === 'deliverer') {
+        // Find the deliverer record for this user
+        const deliverer = await DelivererModel.findOne({ userId: userId });
+        if (!deliverer) {
+          return next(new ErrorHandler("Deliverer profile not found.", 404));
+        }
+        
+        // Find the active route for this deliverer (not completed or cancelled)
+        const activeRoute = await RouteModel.findOne({
+          assignedDelivererId: deliverer._id,
+          status: { $in: ['planned', 'assigned', 'active', 'paused'] }
+        }).lean();
+
+        if (activeRoute && activeRoute.stops && activeRoute.stops.length > 0) {
+          // Extract all package IDs from all stops
+          const allPackageIds: mongoose.Types.ObjectId[] = [];
+          for (const stop of activeRoute.stops) {
+            if (stop.packageIds && stop.packageIds.length > 0) {
+              allPackageIds.push(...stop.packageIds);
+            }
+          }
+          
+          if (allPackageIds.length > 0) {
+            routePackageIds = allPackageIds;
+            // Filter packages to only those in the active route
+            filter._id = { $in: allPackageIds };
+          } else {
+            // No packages in the route, return empty result
+            routePackageIds = [];
+            filter._id = { $in: [] };
+          }
+        } else {
+          // No active route found, return empty result
+          routePackageIds = [];
+          filter._id = { $in: [] };
+        }
+        
+        assignedDelivererId = deliverer._id;
+      }
+
+      // ── If query explicitly asks for a specific deliverer (admin only) ─────
+      if (req.query.assignedDelivererId && userRole !== 'deliverer') {
+        if (!isValidId(req.query.assignedDelivererId as string))
+          return next(new ErrorHandler("Invalid assignedDelivererId.", 400));
+        assignedDelivererId = toObjectId(req.query.assignedDelivererId as string);
+        filter.assignedDelivererId = assignedDelivererId;
+      }
+
+      // ── Other filters (client, branch, status, etc.) ───────────────────────
+      if (req.query.clientId) {
+        if (!isValidId(req.query.clientId as string))
+          return next(new ErrorHandler("Invalid clientId.", 400));
+        filter.clientId = toObjectId(req.query.clientId as string);
+      }
+
+      if (req.query.originBranchId) {
+        if (!isValidId(req.query.originBranchId as string))
+          return next(new ErrorHandler("Invalid originBranchId.", 400));
+        filter.originBranchId = toObjectId(req.query.originBranchId as string);
+      }
+
+      if (req.query.currentBranchId) {
+        if (!isValidId(req.query.currentBranchId as string))
+          return next(new ErrorHandler("Invalid currentBranchId.", 400));
+        filter.currentBranchId = toObjectId(req.query.currentBranchId as string);
+      }
+
+      // Status filter
+      const VALID_STATUSES: PackageStatus[] = [
+        "pending", "accepted", "at_origin_branch", "in_transit_to_branch",
+        "at_destination_branch", "out_for_delivery", "delivered",
+        "failed_delivery", "failed_delivery_attempt", "rescheduled", "returned", "cancelled",
+        "lost", "damaged", "on_hold",
+      ];
+      if (req.query.status) {
+        const s = req.query.status as string;
+        if (!VALID_STATUSES.includes(s as PackageStatus))
+          return next(new ErrorHandler(`Invalid status: ${s}.`, 400));
+        filter.status = s;
+      }
+
+      // Type filter
+      const VALID_TYPES: PackageType[] = [
+        "document", "parcel", "fragile", "heavy",
+        "perishable", "electronic", "clothing",
+      ];
+      if (req.query.type) {
+        const t = req.query.type as string;
+        if (!VALID_TYPES.includes(t as PackageType))
+          return next(new ErrorHandler(`Invalid package type: ${t}.`, 400));
+        filter.type = t;
+      }
+
+      // Payment status filter
+      const VALID_PAYMENT_STATUSES: PaymentStatus[] = [
+        "pending", "paid", "partially_paid", "refunded", "failed",
+      ];
+      if (req.query.paymentStatus && req.query.paymentStatus !== "") {
+        const ps = req.query.paymentStatus as string;
+        if (!VALID_PAYMENT_STATUSES.includes(ps as PaymentStatus))
+          return next(new ErrorHandler(`Invalid paymentStatus: ${ps}.`, 400));
+        filter.paymentStatus = ps;
+      }
+
+      // Delivery priority filter
+      const VALID_PRIORITIES = ["standard", "express", "same_day"];
+      if (req.query.deliveryPriority && req.query.deliveryPriority !== "") {
+        const dp = req.query.deliveryPriority as string;
+        if (!VALID_PRIORITIES.includes(dp))
+          return next(new ErrorHandler(`Invalid deliveryPriority: ${dp}.`, 400));
+        filter.deliveryPriority = dp;
+      }
+
+      // Delivery type filter
+      const VALID_DELIVERY_TYPES: DeliveryType[] = ["home", "branch_pickup"];
+      if (req.query.deliveryType) {
+        const dt = req.query.deliveryType as string;
+        if (!VALID_DELIVERY_TYPES.includes(dt as DeliveryType))
+          return next(new ErrorHandler(`Invalid deliveryType: ${dt}.`, 400));
+        filter.deliveryType = dt;
+      }
+
+      // Boolean filters
+      if (req.query.isFragile !== undefined && req.query.isFragile !== "") {
+        filter.isFragile = req.query.isFragile === "true";
+      }
+
+      if (req.query.isReturn !== undefined) {
+        filter["returnInfo.isReturn"] = req.query.isReturn === "true";
+      }
+
+      if (req.query.hasIssues !== undefined) {
+        filter.issues =
+          req.query.hasIssues === "true"
+            ? { $elemMatch: { resolved: false } }
+            : { $not: { $elemMatch: { resolved: false } } };
+      }
+
+      // Range filters
+      const applyRange = (
+        field: string,
+        minKey: string,
+        maxKey: string,
+      ) => {
+        const min = req.query[minKey]
+          ? parseFloat(req.query[minKey] as string)
+          : null;
+        const max = req.query[maxKey]
+          ? parseFloat(req.query[maxKey] as string)
+          : null;
+        if (min !== null || max !== null) {
+          filter[field] = {
+            ...(min !== null && !isNaN(min) && { $gte: min }),
+            ...(max !== null && !isNaN(max) && { $lte: max }),
+          };
+        }
+      };
+
+      applyRange("weight", "minWeight", "maxWeight");
+      applyRange("volume", "minVolume", "maxVolume");
+      applyRange("dimensions.length", "minLength", "maxLength");
+      applyRange("dimensions.width", "minWidth", "maxWidth");
+      applyRange("dimensions.height", "minHeight", "maxHeight");
+
+      // Location filters
+      if (req.query.city) {
+        filter["destination.city"] = new RegExp(req.query.city as string, "i");
+      }
+      if (req.query.state) {
+        filter["destination.state"] = new RegExp(req.query.state as string, "i");
+      }
+
+      // ── Fetch deliverer stats if filtering by deliverer ────────────────────
+      let delivererStats: any = null;
+      if (assignedDelivererId) {
+        const deliverer = await DelivererModel.findById(assignedDelivererId)
+          .lean({ virtuals: true });
+
+        if (deliverer) {
+          // For deliverer stats, we still need to count based on assigned packages
+          // But for deliverer role, we use routePackageIds, otherwise use assignedDelivererId filter
+          let statsMatchFilter: any = {};
+          
+          if (userRole === 'deliverer' && routePackageIds !== null) {
+            // For deliverer role, stats should only count packages in the active route
+            if (routePackageIds.length > 0) {
+              statsMatchFilter._id = { $in: routePackageIds };
+            } else {
+              statsMatchFilter._id = { $in: [] };
+            }
+          } else {
+            // For admin queries, use the assignedDelivererId filter
+            statsMatchFilter.assignedDelivererId = assignedDelivererId;
+          }
+
+          // Aggregate package stats
+          const packageStats = await PackageModel.aggregate([
+            {
+              $match: statsMatchFilter,
+            },
+            {
+              $group: {
+                _id: null,
+                totalPackages: { $sum: 1 },
+                deliveredPackages: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "delivered"] }, 1, 0],
+                  },
+                },
+                failedPackages: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $in: [
+                          "$status",
+                          ["failed_delivery", "failed_delivery_attempt", "cancelled", "returned"],
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                inProgressPackages: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $in: [
+                          "$status",
+                          ["out_for_delivery", "at_destination_branch"],
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                pendingPackages: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $in: [
+                          "$status",
+                          ["pending", "accepted", "at_origin_branch", "in_transit_to_branch"],
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                totalCollected: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$paymentStatus", "paid"] },
+                      "$totalPrice",
+                      0,
+                    ],
+                  },
+                },
+                totalCOD: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $eq: ["$status", "delivered"] },
+                          { $eq: ["$paymentMethod", "cod"] },
+                        ],
+                      },
+                      "$totalPrice",
+                      0,
+                    ],
+                  },
+                },
+              },
+            },
+          ]);
+
+          const stats = packageStats[0] || {
+            totalPackages: 0,
+            deliveredPackages: 0,
+            failedPackages: 0,
+            inProgressPackages: 0,
+            pendingPackages: 0,
+            totalCollected: 0,
+            totalCOD: 0,
+          };
+
+          delivererStats = {
+            id: deliverer._id,
+            userId: deliverer.userId,
+            branchId: deliverer.branchId,
+            companyId: deliverer.companyId,
+            availabilityStatus: deliverer.availabilityStatus,
+            verificationStatus: deliverer.verificationStatus,
+            isActive: deliverer.isActive,
+            isOnline: deliverer.isOnline,
+            isSuspended: deliverer.isSuspended,
+            isVerified: deliverer.isVerified,
+            isAvailable: deliverer.isAvailable,
+            isOnDuty: deliverer.isOnDuty,
+            rating: deliverer.rating,
+            successRate: deliverer.successRate,
+            totalDeliveries: deliverer.totalDeliveries,
+            successfulDeliveries: deliverer.successfulDeliveries,
+            failedDeliveries: deliverer.failedDeliveries,
+            todayDeliveriesCount: deliverer.todayDeliveriesCount,
+            todayEarnings: deliverer.todayEarnings,
+            todayCollectedAmount: deliverer.todayCollectedAmount,
+            commission: deliverer.commission,
+            totalEarnings: deliverer.totalEarnings,
+            pendingBranchReturn: deliverer.pendingBranchReturn,
+            performance: {
+              averageDeliveryTime: deliverer.performance?.averageDeliveryTime ?? 0,
+              onTimeDeliveryRate: deliverer.performance?.onTimeDeliveryRate ?? 0,
+              customerSatisfaction: deliverer.performance?.customerSatisfaction ?? 0,
+              totalDistanceCovered: deliverer.performance?.totalDistanceCovered ?? 0,
+            },
+            packageStats: {
+              totalAssigned: stats.totalPackages,
+              delivered: stats.deliveredPackages,
+              failed: stats.failedPackages,
+              inProgress: stats.inProgressPackages,
+              pending: stats.pendingPackages,
+              totalCollected: stats.totalCollected,
+              totalCOD: stats.totalCOD,
+            },
+            documentStatus: deliverer.documentStatus,
+            hasValidLicense: deliverer.hasValidLicense,
+            canAcceptDeliveries: deliverer.canAcceptDeliveries,
+            currentVehicleId: deliverer.currentVehicleId ?? null,
+            currentRouteId: deliverer.currentRouteId ?? null,
+            suspensionReason: deliverer.suspensionReason ?? null,
+            lastActiveAt: deliverer.lastActiveAt,
+          };
+        }
+      }
+
+      // ── Fetch packages with pagination ─────────────────────────────────────
+      const [total, packages] = await Promise.all([
+        PackageModel.countDocuments(filter),
+        PackageModel.find(filter)
+          .skip(skip)
+          .limit(limit)
+          .sort({ createdAt: -1 })
+          .lean({ virtuals: true }),
+      ]);
+
+      // Apply overdue filter (client-side since it's a virtual)
+      let filteredPackages = packages as any[];
+      if (req.query.isOverdue !== undefined) {
+        const wantOverdue = req.query.isOverdue === "true";
+        filteredPackages = filteredPackages.filter((pkg) => pkg.isOverdue === wantOverdue);
+      }
+
+      // Apply sorting
+      const sortBy = (req.query.sortBy as string) || "createdAt";
+      const order = req.query.order === "desc" ? -1 : 1;
+
+      switch (sortBy) {
+        case "estimatedTimeRemaining":
+          filteredPackages.sort((a, b) => {
+            const aVal = a.estimatedTimeRemaining ?? Infinity;
+            const bVal = b.estimatedTimeRemaining ?? Infinity;
+            return (aVal - bVal) * order;
+          });
+          break;
+        case "weight":
+          filteredPackages.sort((a, b) => (a.weight - b.weight) * order);
+          break;
+        case "totalPrice":
+          filteredPackages.sort((a, b) => (a.totalPrice - b.totalPrice) * order);
+          break;
+        case "createdAt":
+          filteredPackages.sort(
+            (a, b) =>
+              (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) * order,
+          );
+          break;
+        case "attemptCount":
+          filteredPackages.sort((a, b) => (a.attemptCount - b.attemptCount) * order);
+          break;
+        default:
+          if (order === -1) filteredPackages.reverse();
+      }
+
+      // Format packages for response
+      const formattedPackages = filteredPackages.map((pkg) => ({
+        id: pkg._id,
+        trackingNumber: pkg.trackingNumber,
+        status: pkg.status,
+        type: pkg.type,
+        isFragile: pkg.isFragile,
+        senderId: pkg.senderId,
+        senderType: pkg.senderType,
+        clientId: pkg.clientId ?? null,
+        weight: pkg.weight,
+        volume: pkg.volume ?? null,
+        dimensions: pkg.dimensions ?? null,
+        destination: {
+          recipientName: pkg.destination.recipientName,
+          recipientPhone: pkg.destination.recipientPhone,
+          alternativePhone: pkg.destination.alternativePhone ?? null,
+          address: pkg.destination.address,
+          city: pkg.destination.city,
+          state: pkg.destination.state,
+          postalCode: pkg.destination.postalCode ?? null,
+          notes: pkg.destination.notes ?? null,
+          coordinates: pkg.deliveryType === "home" && pkg.destination.location?.coordinates
+            ? {
+                type: pkg.destination.location.type || "Point",
+                coordinates: pkg.destination.location.coordinates,
+              }
+            : null,
+        },
+        deliveryType: pkg.deliveryType,
+        deliveryPriority: pkg.deliveryPriority,
+        estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
+        estimatedTimeRemaining: pkg.estimatedTimeRemaining ?? null,
+        isOverdue: pkg.isOverdue,
+        deliveryProgress: pkg.deliveryProgress,
+        canBeDelivered: pkg.canBeDelivered,
+        needsAttention: pkg.needsAttention,
+        isInTransit: pkg.isInTransit,
+        isAtBranch: pkg.isAtBranch,
+        totalPrice: pkg.totalPrice,
+        paymentStatus: pkg.paymentStatus,
+        paymentMethod: pkg.paymentMethod ?? null,
+        paidAt: pkg.paidAt ?? null,
+        assignedDelivererId: pkg.assignedDelivererId ?? null,
+        assignedVehicleId: pkg.assignedVehicleId ?? null,
+        attemptCount: pkg.attemptCount,
+        maxAttempts: pkg.maxAttempts,
+        lastAttemptDate: pkg.lastAttemptDate ?? null,
+        nextAttemptDate: pkg.nextAttemptDate ?? null,
+        returnInfo: pkg.returnInfo,
+        unresolvedIssuesCount: (pkg.issues as IIssue[]).filter(
+          (i) => !i.resolved,
+        ).length,
+        createdAt: pkg.createdAt,
+        updatedAt: pkg.updatedAt,
+        deliveredAt: pkg.deliveredAt ?? null,
+      }));
+
+      // Build response
+      const responseData: any = {
+        packages: formattedPackages,
+        pagination: {
+          total: filteredPackages.length,
+          page,
+          limit,
+          pages: Math.ceil(filteredPackages.length / limit),
+          hasMore: filteredPackages.length > skip + limit,
+        },
+        filters: {
+          status: req.query.status ?? null,
+          type: req.query.type ?? null,
+          paymentStatus: req.query.paymentStatus ?? null,
+          deliveryPriority: req.query.deliveryPriority ?? null,
+          deliveryType: req.query.deliveryType ?? null,
+          isFragile: req.query.isFragile ?? null,
+          isOverdue: req.query.isOverdue ?? null,
+          isReturn: req.query.isReturn ?? null,
+          hasIssues: req.query.hasIssues ?? null,
+          minWeight: req.query.minWeight ?? null,
+          maxWeight: req.query.maxWeight ?? null,
+          minVolume: req.query.minVolume ?? null,
+          maxVolume: req.query.maxVolume ?? null,
+          minLength: req.query.minLength ?? null,
+          maxLength: req.query.maxLength ?? null,
+          minWidth: req.query.minWidth ?? null,
+          maxWidth: req.query.maxWidth ?? null,
+          minHeight: req.query.minHeight ?? null,
+          maxHeight: req.query.maxHeight ?? null,
+          city: req.query.city ?? null,
+          state: req.query.state ?? null,
+          clientId: req.query.clientId ?? null,
+          companyId: req.query.companyId ?? null,
+          originBranchId: req.query.originBranchId ?? null,
+          currentBranchId: req.query.currentBranchId ?? null,
+          assignedDelivererId: req.query.assignedDelivererId ?? null,
+          sortBy: sortBy,
+          order: req.query.order ?? "asc",
+        },
+      };
+
+      // Attach deliverer stats if available
+      if (delivererStats) {
+        responseData.delivererStats = delivererStats;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: responseData,
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+      return next(
+        new ErrorHandler(error.message || "Error fetching packages.", 500),
+      );
+    }
+  },
+);
