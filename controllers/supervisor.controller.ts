@@ -15393,6 +15393,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
       let assignedDelivererId: mongoose.Types.ObjectId | null = null;
       let routePackageIds: mongoose.Types.ObjectId[] | null = null;
       let packageStopOrderMap: Map<string, { stopIndex: number; orderInStop: number }> | null = null;
+      let activeRouteInfo: { routeId: string; scheduledEnd: Date; status: string } | null = null;
 
       // ── COMPANY FILTER ────────────────────────────────────────────────────
       if (req.query.companyId) {
@@ -15409,13 +15410,48 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
           return next(new ErrorHandler("Deliverer profile not found.", 404));
         }
         
-        // Find the active route for this deliverer (not completed or cancelled)
+        // Find the active route for this deliverer that hasn't exceeded scheduledEnd
+        const now = new Date();
+        
         const activeRoute = await RouteModel.findOne({
           assignedDelivererId: deliverer._id,
-          status: { $in: ['planned', 'assigned', 'active', 'paused'] }
+          status: { $in: ['planned', 'assigned', 'active', 'paused'] },
+          scheduledEnd: { $gte: now } 
         }).lean();
 
-        if (activeRoute && activeRoute.stops && activeRoute.stops.length > 0) {
+        // If no active route with valid schedule end, return empty
+        if (!activeRoute) {
+          res.status(200).json({
+            success: true,
+            data: {
+              packages: [],
+              pagination: {
+                total: 0,
+                page,
+                limit,
+                pages: 0,
+                hasMore: false,
+              },
+              filters: {},
+              message: "No active routes found for today.",
+              routeExpired: false,
+              noActiveRoute: true,
+            },
+
+            
+          });
+          return;
+        }
+        
+        
+        if (activeRoute.stops && activeRoute.stops.length > 0) {
+          // Store route info for response
+          activeRouteInfo = {
+            routeId: activeRoute._id.toString(),
+            scheduledEnd: activeRoute.scheduledEnd,
+            status: activeRoute.status,
+          };
+          
           // Extract all package IDs with their stop order information
           const allPackageIds: mongoose.Types.ObjectId[] = [];
           const stopOrderMap = new Map<string, { stopIndex: number; orderInStop: number }>();
@@ -15446,7 +15482,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
             filter._id = { $in: [] };
           }
         } else {
-          // No active route found, return empty result
+          // No stops or packages in the route, return empty result
           routePackageIds = [];
           filter._id = { $in: [] };
         }
@@ -15753,23 +15789,32 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
       }
 
       // ── Fetch packages with pagination ─────────────────────────────────────
-      const [total, packages] = await Promise.all([
-        PackageModel.countDocuments(filter),
-        PackageModel.find(filter)
-          .skip(skip)
-          .limit(limit)
-          .lean({ virtuals: true }),
-      ]);
+      let total = 0;
+      let packages: any[] = [];
+      
+      // If filter._id is set to empty array (no packages in route), skip DB query
+      if (filter._id && Array.isArray(filter._id.$in) && filter._id.$in.length === 0) {
+        total = 0;
+        packages = [];
+      } else {
+        [total, packages] = await Promise.all([
+          PackageModel.countDocuments(filter),
+          PackageModel.find(filter)
+            .skip(skip)
+            .limit(limit)
+            .lean({ virtuals: true }),
+        ]);
+      }
 
       // Apply overdue filter (client-side since it's a virtual)
       let filteredPackages = packages as any[];
-      if (req.query.isOverdue !== undefined) {
+      if (req.query.isOverdue !== undefined && req.query.isOverdue !== "") {
         const wantOverdue = req.query.isOverdue === "true";
         filteredPackages = filteredPackages.filter((pkg) => pkg.isOverdue === wantOverdue);
       }
 
       // Sort packages by route stop order (for deliverer role only)
-      if (userRole === 'deliverer' && packageStopOrderMap) {
+      if (userRole === 'deliverer' && packageStopOrderMap && filteredPackages.length > 0) {
         filteredPackages.sort((a, b) => {
           const orderA = packageStopOrderMap.get(a._id.toString());
           const orderB = packageStopOrderMap.get(b._id.toString());
@@ -15787,7 +15832,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
           if (orderB) return 1;
           return 0;
         });
-      } else {
+      } else if (filteredPackages.length > 0) {
         // Apply client-side sorting for non-deliverer roles
         const sortBy = (req.query.sortBy as string) || "createdAt";
         const order = req.query.order === "desc" ? -1 : 1;
@@ -15921,9 +15966,30 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         },
       };
 
+      // Add route info for deliverer role
+      if (userRole === 'deliverer' && activeRouteInfo) {
+        responseData.routeInfo = {
+          routeId: activeRouteInfo.routeId,
+          scheduledEnd: activeRouteInfo.scheduledEnd,
+          status: activeRouteInfo.status,
+        };
+      }
+
       // Attach deliverer stats if available
       if (delivererStats) {
         responseData.delivererStats = delivererStats;
+      }
+
+      // Check if all packages in route are delivered/completed
+      if (userRole === 'deliverer' && routePackageIds && routePackageIds.length > 0) {
+        const allCompleted = formattedPackages.every(
+          (pkg) => pkg.status === 'delivered' || pkg.status === 'cancelled' || pkg.status === 'returned'
+        );
+        
+        if (allCompleted && formattedPackages.length > 0) {
+          responseData.allPackagesCompleted = true;
+          responseData.message = "All packages in this route have been completed. Great job!";
+        }
       }
 
       res.status(200).json({
@@ -15947,7 +16013,6 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
     }
   },
 );
-
 
 
 
