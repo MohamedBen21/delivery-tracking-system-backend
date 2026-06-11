@@ -2149,7 +2149,8 @@ export class SocketService {
 
       if (role === "deliverer") {
 
-        socket.on("start_delivery_route", async (data: { routeId: string }) => {
+        socket.on("start_delivery_route",
+          async (data: { routeId: string; packageId?: string }) => {
           try {
             if (
               !data?.routeId ||
@@ -2161,6 +2162,7 @@ export class SocketService {
               });
               return;
             }
+            
             const deliverer = await DelivererModel.findOne({ userId }).lean();
             if (!deliverer) {
               socket.emit("route_error", {
@@ -2169,6 +2171,7 @@ export class SocketService {
               });
               return;
             }
+            
             const route = await RouteModel.findOne({
               _id: data.routeId,
               assignedDelivererId: deliverer._id,
@@ -2181,6 +2184,28 @@ export class SocketService {
               return;
             }
 
+            const firstStop = route.stops[0];
+            if (!firstStop || !firstStop.packageIds[0]) {
+              socket.emit("route_error", {
+                code: "NO_PACKAGES",
+                message: "No packages found in this route.",
+              });
+              return;
+            }
+
+            const expectedPackageId = firstStop.packageIds[0].toString();
+
+            // Validate package ID if provided
+            if (data.packageId && data.packageId !== expectedPackageId) {
+              socket.emit("route_error", {
+                code: "PACKAGE_MISMATCH",
+                message: `Package mismatch. Expected package ${expectedPackageId} but received ${data.packageId}.`,
+                expectedPackageId,
+                receivedPackageId: data.packageId,
+              });
+              return;
+            }
+
             await route.startRoute();
             socket.join(this.getRouteRoom(data.routeId));
             await DelivererModel.findByIdAndUpdate(deliverer._id, {
@@ -2189,60 +2214,47 @@ export class SocketService {
               lastActiveAt: new Date(),
             });
 
-            const firstStop = route.stops[0];
-            if (firstStop && firstStop.packageIds[0]) {
-              firstStop.status = "in_progress";
-              await route.save();
+            // Mark first stop as in_progress and start the first package
+            firstStop.status = "in_progress";
+            await route.save();
 
-              const firstPackageId = firstStop.packageIds[0].toString();
-              const firstPackage = await PackageModel.findById(firstPackageId);
-              if (firstPackage) {
-                await firstPackage.updateStatus(
-                  "out_for_delivery",
-                  new mongoose.Types.ObjectId(userId),
-                  deliverer.branchId,
-                  "Package picked up by deliverer - out for delivery",
-                  firstStop.address
-                );
-                
-                this.broadcastPackageStatusToClient(firstPackageId, "out_for_delivery");
-              }
-
-              await this.generateAndSendDeliveryOTP(route, 0, data.routeId);
-
-              socket.emit("delivery_route_started", {
-                routeId: data.routeId,
-                routeNumber: route.routeNumber,
-                status: "active",
-                currentStopIndex: 0,
-                totalStops: route.stops.length,
-                currentStop: {
-                  stopId: firstStop._id,
-                  clientId: firstStop.clientId,
-                  packageId: firstPackageId,
-                  address: firstStop.address,
-                  location: firstStop.location.coordinates,
-                  recipientName: (firstStop as any).recipientName,
-                  recipientPhone: (firstStop as any).recipientPhone,
-                  otpSent: true,
-                  status: "in_progress",
-                },
-                scheduledEnd: route.scheduledEnd,
-                message: "Route started! First package is ready for delivery.",
-                timestamp: new Date(),
-              });
-            } else {
-              socket.emit("delivery_route_started", {
-                routeId: data.routeId,
-                routeNumber: route.routeNumber,
-                status: "active",
-                currentStopIndex: 0,
-                totalStops: route.stops.length,
-                scheduledEnd: route.scheduledEnd,
-                message: "Route started!",
-                timestamp: new Date(),
-              });
+            const firstPackageId = firstStop.packageIds[0].toString();
+            const firstPackage = await PackageModel.findById(firstPackageId);
+            if (firstPackage) {
+              await firstPackage.updateStatus(
+                "out_for_delivery",
+                new mongoose.Types.ObjectId(userId),
+                deliverer.branchId,
+                "Package picked up by deliverer - out for delivery",
+                firstStop.address
+              );
+              
+              this.broadcastPackageStatusToClient(firstPackageId, "out_for_delivery");
             }
+
+            await this.generateAndSendDeliveryOTP(route, 0, data.routeId);
+
+            socket.emit("delivery_route_started", {
+              routeId: data.routeId,
+              routeNumber: route.routeNumber,
+              status: "active",
+              currentStopIndex: 0,
+              totalStops: route.stops.length,
+              currentStop: {
+                stopId: firstStop._id,
+                clientId: firstStop.clientId,
+                packageId: firstPackageId,
+                address: firstStop.address,
+                location: firstStop.location.coordinates,
+                recipientName: (firstStop as any).recipientName,
+                recipientPhone: (firstStop as any).recipientPhone,
+                otpSent: true,
+                status: "in_progress",
+              },
+              scheduledEnd: route.scheduledEnd,
+              message: "Route started! First package is ready for delivery.",
+              timestamp: new Date(),
+            });
 
             this.io
               .to(this.getBranchRoom(deliverer.branchId.toString()))
@@ -2271,6 +2283,7 @@ export class SocketService {
         socket.on("start_package", async (data: {
           routeId: string;
           stopIndex: number;
+          packageId?: string;
         }) => {
           try {
             if (!data?.routeId || !mongoose.Types.ObjectId.isValid(data.routeId)) {
@@ -2330,7 +2343,39 @@ export class SocketService {
               return;
             }
 
+            const expectedPackageId = stop.packageIds[0].toString();
+
+            // Validate package ID
+            if (!data.packageId) {
+              socket.emit("route_error", {
+                code: "PACKAGE_ID_REQUIRED",
+                message: "packageId is required to start a package.",
+                expectedPackageId,
+              });
+              return;
+            }
+
+            if (data.packageId !== expectedPackageId) {
+              socket.emit("route_error", {
+                code: "PACKAGE_MISMATCH",
+                message: `Package mismatch. Expected package ${expectedPackageId} but received ${data.packageId}.`,
+                expectedPackageId,
+                receivedPackageId: data.packageId,
+              });
+              return;
+            }
+
             const packageId = stop.packageIds[0].toString();
+
+            // Check if package is already started
+            if (stop.status === "in_progress") {
+              socket.emit("route_error", {
+                code: "PACKAGE_ALREADY_STARTED",
+                message: "This package has already been started.",
+                packageId,
+              });
+              return;
+            }
 
             stop.status = "in_progress";
             await route.save();
@@ -2359,6 +2404,7 @@ export class SocketService {
               location: stop.location.coordinates,
               recipientName: (stop as any).recipientName,
               recipientPhone: (stop as any).recipientPhone,
+              currentStopIndex: route.currentStopIndex,
               message: "Package started. OTP sent to client. Proceed to delivery location.",
               otpSent: true,
               timestamp: new Date(),
@@ -2485,6 +2531,7 @@ export class SocketService {
                 address: stop.address,
                 distanceMeters: Math.round(distanceMeters),
                 message: "Arrival confirmed. Ask the client for the OTP code.",
+                currentStopIndex: route.currentStopIndex,
                 timestamp: new Date(),
               });
               console.log(
@@ -2683,6 +2730,7 @@ export class SocketService {
                   actualEnd: route.actualEnd,
                   actualTime: route.actualTime,
                   onTimePerformance: route.onTimePerformance,
+                  currentStopIndex: route.currentStopIndex,
                   message: "Route completed successfully!",
                   timestamp: new Date(),
                 });
@@ -2746,10 +2794,11 @@ export class SocketService {
                       address: nextStop.address,
                       location: nextStop.location.coordinates,
                       otpSent: true,
-                      status: "in_progress",
+                      status: nextStop.status,
                     },
                     remainingStops: route.stops.length - (data.stopIndex + 1),
-                    message: `Package delivered! Next package ready: ${route.stops.length - (data.stopIndex + 1)} stops remaining.`,
+                    message: `Package delivered! Next package ready: ${route.stops.length - (data.stopIndex + 1)} stops remaining.`,  
+                    currentStopIndex: route.currentStopIndex,
                     timestamp: new Date(),
                   });
                 } else {
@@ -3046,8 +3095,8 @@ export class SocketService {
                         }
                       : null,
                     remainingStops: totalStopsNow - route.currentStopIndex,
-                    message:
-                      "Maximum attempts reached. Package will be returned. Continuing to next stop.",
+                    currentStopIndex: route.currentStopIndex,
+                    message: "Maximum attempts reached. Package will be returned. Continuing to next stop.",
                     timestamp: new Date(),
                   });
                   this.io.to(routeRoom).emit("delivery_stop_failed", {
@@ -3102,6 +3151,7 @@ export class SocketService {
                       }
                     : null,
                   remainingStops: totalStopsNow - route.currentStopIndex,
+                  currentStopIndex: route.currentStopIndex,
                   message: nextStop
                     ? `Attempt recorded. ${attemptsLeft} attempt${attemptsLeft === 1 ? "" : "s"} remaining.`
                     : "All stops complete.",
@@ -3280,6 +3330,7 @@ export class SocketService {
                 address: stop.address,
                 reason: data.reason,
                 notes: data.notes,
+                currentStopIndex: route.currentStopIndex,
                 isLastStop,
                 message: `Package ${updatedPkg?.trackingNumber || packageId} has been successfully cancelled.`,
                 timestamp: new Date(),
@@ -3358,6 +3409,7 @@ export class SocketService {
                   actualTime: route.actualTime,
                   onTimePerformance: route.onTimePerformance,
                   hasCancelledPackage: true,
+                  currentStopIndex: route.currentStopIndex,
                   message: "Route completed. Package was permanently cancelled.",
                   timestamp: new Date(),
                 });
@@ -3385,33 +3437,9 @@ export class SocketService {
                   `and COMPLETED route ${data.routeId}`,
                 );
               } else {
-                const nextStop = route.stops[data.stopIndex + 1];
+                // REMOVED: Auto-start next package
+                // The next package will stay in "pending" status until deliverer manually starts it
                 
-                if (nextStop) {
-                  nextStop.status = "in_progress";
-                  await route.save();
-
-                  const nextPackageId = nextStop.packageIds[0].toString();
-                  const nextPackage = await PackageModel.findById(nextPackageId);
-                  if (nextPackage) {
-                    await nextPackage.updateStatus(
-                      "out_for_delivery",
-                      new mongoose.Types.ObjectId(userId),
-                      deliverer.branchId,
-                      "Next package auto-started after cancellation",
-                      nextStop.address
-                    );
-                    
-                    this.broadcastPackageStatusToClient(nextPackageId, "out_for_delivery");
-                  }
-
-                  await this.generateAndSendDeliveryOTP(
-                    route,
-                    data.stopIndex + 1,
-                    data.routeId,
-                  );
-                }
-
                 socket.emit("package_cancelled", {
                   routeId: data.routeId,
                   routeNumber: route.routeNumber,
@@ -3426,20 +3454,9 @@ export class SocketService {
                     reason: data.reason,
                     notes: data.notes,
                   },
-                  nextStop: nextStop
-                    ? {
-                        stopIndex: data.stopIndex + 1,
-                        stopId: nextStop._id,
-                        clientId: nextStop.clientId,
-                        packageId: nextStop.packageIds[0],
-                        address: nextStop.address,
-                        location: nextStop.location.coordinates,
-                        otpSent: true,
-                        status: "in_progress",
-                      }
-                    : null,
+                  nextStop: null,
                   remainingStops: route.stops.length - (data.stopIndex + 1),
-                  message: `Package permanently cancelled. ${route.stops.length - (data.stopIndex + 1)} stops remaining.`,
+                  message: `Package permanently cancelled. ${route.stops.length - (data.stopIndex + 1)} stops remaining. Next package needs to be started manually.`,
                   timestamp: new Date(),
                 });
 
@@ -3454,7 +3471,7 @@ export class SocketService {
 
                 console.log(
                   `[Socket] Deliverer ${userId} cancelled package ${packageId} ` +
-                  `at stop ${data.stopIndex}/${route.stops.length - 1}`,
+                  `at stop ${data.stopIndex}/${route.stops.length - 1} - next package not auto-started`,
                 );
               }
             } catch (err: any) {
