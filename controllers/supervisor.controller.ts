@@ -10135,7 +10135,7 @@ export const searchPackages = catchAsyncError(
             : null,
         },
 
-
+        description: pkg.description ?? null,
         deliveryType: pkg.deliveryType,
         deliveryPriority: pkg.deliveryPriority,
         estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
@@ -12162,6 +12162,18 @@ export const getDeliveryHistory = catchAsyncError(
       }
 
 
+      const minWeight = req.query.minWeight ? parseFloat(req.query.minWeight as string) : undefined;
+      const maxWeight = req.query.maxWeight ? parseFloat(req.query.maxWeight as string) : undefined;
+      
+      if (minWeight !== undefined && !isNaN(minWeight)) {
+        filter.weight = { ...filter.weight, $gte: minWeight };
+      }
+      
+      if (maxWeight !== undefined && !isNaN(maxWeight)) {
+        filter.weight = { ...filter.weight, $lte: maxWeight };
+      }
+
+
       const sortBy = (req.query.sortBy as string) || "deliveredAt";
       const order = req.query.order === "desc" ? -1 : 1;
       const sortMap: Record<string, any> = {
@@ -12232,7 +12244,7 @@ export const getDeliveryHistory = catchAsyncError(
             }
             : null,
         },
-
+        description: pkg.description ?? null,
         weight: pkg.weight,
         totalPrice: pkg.totalPrice,
         paymentStatus: pkg.paymentStatus,
@@ -12285,6 +12297,8 @@ export const getDeliveryHistory = catchAsyncError(
             deliveryType: req.query.deliveryType ?? null,
             city: req.query.city ?? null,
             search: req.query.search ?? null,
+            minWeight: minWeight !== undefined && !isNaN(minWeight) ? minWeight : null,
+            maxWeight: maxWeight !== undefined && !isNaN(maxWeight) ? maxWeight : null,
             sortBy,
             order: req.query.order ?? "desc",
           },
@@ -15835,6 +15849,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
               }
             : null,
         },
+        description: pkg.description ?? null,
         deliveryType: pkg.deliveryType,
         deliveryPriority: pkg.deliveryPriority,
         estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
