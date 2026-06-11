@@ -15,6 +15,8 @@ import StopQrSessionModel from "../models/stopQrSession.model";
 import { IUser } from "../models/user.model";
 import sendSMS from "../utils/sendSMS";
 import PaymentModel from "../models/payment.model";
+import BranchModel from "../models/branch.model";
+import VehicleModel from "../models/vehicle.model";
 
 import { PresenceService } from "./presence.service";
 
@@ -71,37 +73,6 @@ function stopLoadCount(stop: any, routeType: string): number {
 // ─────────────────────────────────────────────────────────────────────────────
 //  QR Flow Overview
 // ─────────────────────────────────────────────────────────────────────────────
-//
-//  BOTH hub_to_hub and hub_to_branch use the same two-step handshake
-//  instead of the old one-shot "complete_stop":
-//
-//  Step 1 — transporter:request_stop_qr
-//    • Transporter taps "Complete / I've arrived" at a stop.
-//    • Server runs the same proximity + order guards as before.
-//    • Server creates a StopQrSession (code, expiresAt=30min).
-//    • Server emits  branch:show_stop_qr  → branch room (supervisor sees QR).
-//    • Server emits  transporter:stop_qr_ready  → transporter (confirmation).
-//
-//  Step 2 — transporter:scan_stop_qr
-//    • Transporter scans the QR displayed at the branch.
-//    • Server verifies: session exists, not expired, not already verified,
-//      belongs to this transporter + route + stop.
-//    • Server marks session verified, then runs the original complete_stop
-//      logic (manifest updates, route advance / complete, stats, broadcasts).
-//    • Emits  transporter:stop_completed  or  transporter:route_completed
-//      as appropriate, plus  branch:arrival_confirmed  to the branch room.
-//
-//  hub_to_hub specifics
-//    • Only 1 stop (the destination hub).  isLastStop is always true.
-//    • After QR scan → route completed, transporter's currentBranchId updated
-//      to the destination hub (ready for the return trip).
-//
-//  hub_to_branch specifics
-//    • Multiple stops (local branches served by the hub).
-//    • Non-last stop → stop completed, next stop advanced.
-//    • Last stop → route completed, transporter freed.
-//
-// ─────────────────────────────────────────────────────────────────────────────
 
 export class SocketService {
   private io: Server;
@@ -156,6 +127,245 @@ export class SocketService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  //  CLIENT TRACKING HELPER METHODS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async buildClientTrackingData(pkg: any): Promise<any> {
+    let locationData = null;
+    
+    if (pkg.status === 'at_origin_branch' && pkg.originBranchId) {
+      const branch = await BranchModel.findById(pkg.originBranchId)
+        .select('name address location phone');
+      if (branch) {
+        locationData = {
+          type: 'branch',
+          name: branch.name,
+          address: branch.address,
+          coordinates: branch.location?.coordinates,
+          phone: branch.phone,
+          isOrigin: true,
+        };
+      }
+    } else if (pkg.status === 'at_destination_branch' && pkg.destinationBranchId) {
+      const branch = await BranchModel.findById(pkg.destinationBranchId)
+        .select('name address location phone');
+      if (branch) {
+        locationData = {
+          type: 'branch',
+          name: branch.name,
+          address: branch.address,
+          coordinates: branch.location?.coordinates,
+          phone: branch.phone,
+          isOrigin: false,
+        };
+      }
+    } else if (pkg.status === 'in_transit_to_branch') {
+      const manifest = await ManifestModel.findOne({
+        'packages.packageId': pkg._id,
+        status: { $in: ['in_transit', 'arrived', 'loaded', 'sealed'] },
+      })
+        .populate('originBranchId', 'name address location')
+        .populate('destinationBranchId', 'name address location')
+        .lean();
+
+      if (manifest) {
+        const route = await RouteModel.findOne({
+          'stops.manifestIds': manifest._id,
+          status: { $in: ['active', 'in_transit'] },
+        }).lean();
+
+        let currentStopLocation = null;
+        if (route && route.currentStopIndex !== undefined) {
+          const currentStop = route.stops[route.currentStopIndex];
+          if (currentStop?.location?.coordinates) {
+            currentStopLocation = currentStop.location.coordinates;
+          }
+        }
+
+        const destBranch = manifest.destinationBranchId as any;
+        
+        locationData = {
+          type: 'transit',
+          manifestCode: manifest.manifestCode,
+          originBranch: manifest.originBranchId ? {
+            name: (manifest.originBranchId as any)?.name,
+            address: (manifest.originBranchId as any)?.address,
+          } : null,
+          destinationBranch: destBranch ? {
+            name: destBranch.name,
+            address: destBranch.address,
+            coordinates: destBranch.location?.coordinates,
+          } : null,
+          currentStopLocation,
+          estimatedArrival: manifest.estimatedArrival,
+        };
+      }
+    } else if (pkg.status === 'out_for_delivery' && pkg.assignedDelivererId) {
+      const deliverer = await DelivererModel.findOne({ userId: pkg.assignedDelivererId })
+        .populate('userId', 'name phone')
+        .select('currentLocation lastLocationUpdate availabilityStatus');
+      
+      if (deliverer?.currentLocation?.coordinates) {
+        const user = deliverer.userId as any;
+        locationData = {
+          type: 'deliverer',
+          coordinates: deliverer.currentLocation.coordinates,
+          lastUpdate: deliverer.lastLocationUpdate || deliverer.lastActiveAt,
+          delivererName: user?.name,
+          delivererPhone: user?.phone,
+          status: deliverer.availabilityStatus,
+        };
+      }
+    } else if (pkg.destination?.location?.coordinates) {
+      locationData = {
+        type: 'destination',
+        coordinates: pkg.destination.location.coordinates,
+        address: pkg.destination.address,
+        recipientName: pkg.destination.recipientName,
+      };
+    }
+
+    let estimatedTimeRemaining = null;
+    if (pkg.estimatedDeliveryTime && pkg.status !== 'delivered') {
+      const remainingMs = new Date(pkg.estimatedDeliveryTime).getTime() - Date.now();
+      if (remainingMs > 0) {
+        estimatedTimeRemaining = {
+          hours: Math.floor(remainingMs / (1000 * 60 * 60)),
+          minutes: Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60)),
+        };
+      }
+    }
+
+    return {
+      packageId: pkg._id,
+      trackingNumber: pkg.trackingNumber,
+      status: pkg.status,
+      statusDisplay: this.getClientStatusDisplay(pkg.status),
+      statusColor: this.getClientStatusColor(pkg.status),
+      progress: this.getClientProgress(pkg.status),
+      
+      currentLocation: locationData,
+      
+      destination: {
+        address: pkg.destination.address,
+        city: pkg.destination.city,
+        state: pkg.destination.state,
+        recipientName: pkg.destination.recipientName,
+        recipientPhone: this.maskPhoneNumber(pkg.destination.recipientPhone),
+      },
+      
+      packageInfo: {
+        weight: pkg.weight,
+        type: pkg.type,
+        isFragile: pkg.isFragile,
+        description: pkg.description,
+      },
+      
+      timing: {
+        estimatedDelivery: pkg.estimatedDeliveryTime,
+        estimatedTimeRemaining,
+        createdAt: pkg.createdAt,
+        deliveredAt: pkg.deliveredAt,
+      },
+      
+      trackingHistory: (pkg.trackingHistory || []).slice(-8).map((event: any) => ({
+        status: event.status,
+        statusDisplay: this.getClientStatusDisplay(event.status),
+        location: event.location,
+        notes: event.notes,
+        timestamp: event.timestamp,
+        isCompleted: true,
+      })),
+      
+      deliveryOtp: pkg.deliveryOtp ? {
+        isActive: pkg.status === 'out_for_delivery' && 
+                  !pkg.deliveryOtp.verified && 
+                  new Date() < pkg.deliveryOtp.expiresAt,
+        expiresAt: pkg.deliveryOtp.expiresAt,
+      } : null,
+    };
+  }
+
+  private getClientStatusDisplay(status: string): string {
+    const map: Record<string, string> = {
+      pending: 'Order Placed',
+      accepted: 'Order Confirmed',
+      cashier_claimed: 'Processing',
+      at_origin_branch: 'At Pickup Location',
+      manifested: 'Preparing for Transit',
+      in_transit_to_branch: 'In Transit',
+      at_destination_branch: 'At Your Local Branch',
+      out_for_delivery: 'Out for Delivery',
+      delivered: 'Delivered',
+      failed_delivery: 'Delivery Issue',
+      failed_delivery_attempt: 'Delivery Attempt Failed',
+      cancelled: 'Cancelled',
+      returned: 'Returned',
+      lost: 'Lost',
+      damaged: 'Damaged',
+      on_hold: 'On Hold',
+      rescheduled: 'Rescheduled',
+    };
+    return map[status] || status;
+  }
+
+  private getClientStatusColor(status: string): string {
+    const map: Record<string, string> = {
+      pending: '#F59E0B',
+      accepted: '#3B82F6',
+      cashier_claimed: '#8B5CF6',
+      at_origin_branch: '#3B82F6',
+      manifested: '#6366F1',
+      in_transit_to_branch: '#8B5CF6',
+      at_destination_branch: '#F97316',
+      out_for_delivery: '#F97316',
+      delivered: '#10B981',
+      failed_delivery: '#EF4444',
+      failed_delivery_attempt: '#EF4444',
+      cancelled: '#6B7280',
+      returned: '#6B7280',
+      lost: '#EF4444',
+      damaged: '#EF4444',
+      on_hold: '#F59E0B',
+      rescheduled: '#F59E0B',
+    };
+    return map[status] || '#6B7280';
+  }
+
+  private getClientProgress(status: string): number {
+    const map: Record<string, number> = {
+      pending: 5,
+      accepted: 10,
+      cashier_claimed: 15,
+      at_origin_branch: 20,
+      manifested: 35,
+      in_transit_to_branch: 50,
+      at_destination_branch: 75,
+      out_for_delivery: 90,
+      delivered: 100,
+    };
+    return map[status] || 0;
+  }
+
+  private maskPhoneNumber(phone: string): string {
+    if (!phone || phone.length < 8) return phone || 'Not provided';
+    return phone.slice(0, 3) + '****' + phone.slice(-3);
+  }
+
+  public broadcastPackageStatusToClient(packageId: string, status: string, additionalData?: any) {
+    const room = this.getPackageRoom(packageId);
+    this.io.to(room).emit('tracking:status_update', {
+      packageId,
+      status,
+      statusDisplay: this.getClientStatusDisplay(status),
+      statusColor: this.getClientStatusColor(status),
+      progress: this.getClientProgress(status),
+      timestamp: new Date(),
+      ...additionalData,
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   //  SETUP
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -199,7 +409,6 @@ export class SocketService {
 
       await this.broadcastOnlineStatus(userId, role, true);
 
-      // ── Reconnect resume: push any unfinished work back to the client ──────
       if (role === "deliverer" || role === "transporter") {
         await this.resumeActiveSession(socket, userId, role);
       }
@@ -326,11 +535,162 @@ export class SocketService {
       }
 
       // ══════════════════════════════════════════════════════════════════════
+      //  CLIENT TRACKING EVENTS
+      // ══════════════════════════════════════════════════════════════════════
+
+      if (role === "client") {
+        
+        socket.on("client:track_package", async (data: { 
+          trackingNumber: string; 
+          clientId?: string;
+        }) => {
+          try {
+            if (!data?.trackingNumber) {
+              socket.emit("tracking_error", {
+                code: "NO_TRACKING_NUMBER",
+                message: "Tracking number is required",
+              });
+              return;
+            }
+
+            const pkg = await PackageModel.findOne({ 
+              trackingNumber: data.trackingNumber.toUpperCase() 
+            })
+              .populate('originBranchId', 'name address location phone')
+              .populate('destinationBranchId', 'name address location phone')
+              .lean();
+
+            if (!pkg) {
+              socket.emit("tracking_error", {
+                code: "NOT_FOUND",
+                message: "Package not found with this tracking number",
+              });
+              return;
+            }
+
+            const RESTRICTED = ['cancelled', 'lost', 'damaged', 'failed_delivery'];
+            if (RESTRICTED.includes(pkg.status)) {
+              socket.emit("tracking_error", {
+                code: "RESTRICTED",
+                message: `This package has been ${pkg.status}. Please contact support.`,
+                status: pkg.status,
+              });
+              return;
+            }
+
+            const packageRoom = this.getPackageRoom(pkg._id.toString());
+            socket.join(packageRoom);
+            
+            (socket as any).trackingPackages = (socket as any).trackingPackages || new Set();
+            (socket as any).trackingPackages.add(pkg._id.toString());
+
+            const trackingData = await this.buildClientTrackingData(pkg);
+
+            socket.emit("tracking:initial", {
+              success: true,
+              data: trackingData,
+              message: "Tracking started successfully",
+            });
+
+            console.log(`[Socket] Client ${userId} started tracking package ${pkg.trackingNumber}`);
+
+          } catch (error: any) {
+            console.error('[Socket] client:track_package error:', error);
+            socket.emit("tracking_error", {
+              code: "TRACKING_FAILED",
+              message: error.message || "Failed to track package",
+            });
+          }
+        });
+
+        socket.on("client:untrack_package", async (data: { trackingNumber?: string }) => {
+          try {
+            if (!data?.trackingNumber) {
+              if ((socket as any).trackingPackages) {
+                for (const packageId of (socket as any).trackingPackages) {
+                  socket.leave(this.getPackageRoom(packageId));
+                }
+                (socket as any).trackingPackages.clear();
+              }
+              socket.emit("tracking:stopped", { message: "Stopped tracking all packages" });
+              return;
+            }
+
+            const pkg = await PackageModel.findOne({ 
+              trackingNumber: data.trackingNumber.toUpperCase() 
+            }).select('_id').lean();
+
+            if (pkg) {
+              socket.leave(this.getPackageRoom(pkg._id.toString()));
+              if ((socket as any).trackingPackages) {
+                (socket as any).trackingPackages.delete(pkg._id.toString());
+              }
+              socket.emit("tracking:stopped", { 
+                trackingNumber: data.trackingNumber,
+                message: "Stopped tracking package",
+              });
+            }
+          } catch (error: any) {
+            console.error('[Socket] client:untrack_package error:', error);
+            socket.emit("tracking_error", { message: error.message });
+          }
+        });
+
+        socket.on("client:request_delivery_otp", async (data: { trackingNumber: string }) => {
+          try {
+            if (!data?.trackingNumber) {
+              socket.emit("tracking_error", { message: "Tracking number required" });
+              return;
+            }
+
+            const pkg = await PackageModel.findOne({ 
+              trackingNumber: data.trackingNumber.toUpperCase() 
+            }).lean();
+
+            if (!pkg) {
+              socket.emit("tracking_error", { message: "Package not found" });
+              return;
+            }
+
+            if (pkg.status !== "out_for_delivery") {
+              socket.emit("tracking_error", { 
+                message: `Cannot request OTP when package status is ${pkg.status}` 
+              });
+              return;
+            }
+
+            if (!pkg.deliveryOtp || pkg.deliveryOtp.verified) {
+              socket.emit("tracking_error", { message: "No active OTP available" });
+              return;
+            }
+
+            if (new Date() > pkg.deliveryOtp.expiresAt) {
+              socket.emit("tracking_error", { message: "OTP has expired" });
+              return;
+            }
+
+            socket.emit("tracking:delivery_otp", {
+              packageId: pkg._id,
+              trackingNumber: pkg.trackingNumber,
+              otp: pkg.deliveryOtp.code,
+              expiresAt: pkg.deliveryOtp.expiresAt,
+              message: "Your delivery OTP code",
+            });
+
+            console.log(`[Socket] Client ${userId} requested OTP for package ${pkg.trackingNumber}`);
+
+          } catch (error: any) {
+            console.error('[Socket] client:request_delivery_otp error:', error);
+            socket.emit("tracking_error", { message: error.message });
+          }
+        });
+      }
+
+      // ══════════════════════════════════════════════════════════════════════
       //  TRANSPORTER ROUTE EVENTS
       // ══════════════════════════════════════════════════════════════════════
 
       if (role === "transporter") {
-        // ── start_route ──────────────────────────────────────────────────────
 
         socket.on("start_route", async (data: { routeId: string }) => {
           try {
@@ -359,7 +719,6 @@ export class SocketService {
             const route = await RouteModel.findOne({
               _id: data.routeId,
               assignedTransporterId: transporter._id,
-              // status: "assigned",
             });
             if (!route) {
               socket.emit("route_error", {
@@ -463,8 +822,6 @@ export class SocketService {
             });
           }
         });
-
-        // ── arrived_at_stop ──────────────────────────────────────────────────
 
         socket.on(
           "arrived_at_stop",
@@ -629,8 +986,6 @@ export class SocketService {
             }
           },
         );
-
-        // ── request_stop_qr ──────────────────────────────────────────────────
 
         socket.on(
           "request_stop_qr",
@@ -835,8 +1190,6 @@ export class SocketService {
             }
           },
         );
-
-        // ── scan_stop_qr ─────────────────────────────────────────────────────
 
         socket.on(
           "scan_stop_qr",
@@ -1235,8 +1588,6 @@ export class SocketService {
           },
         );
 
-        // ── complete_stop ────────────────────────────────────────────────────
-
         socket.on(
           "complete_stop",
           async (data: {
@@ -1535,8 +1886,6 @@ export class SocketService {
           },
         );
 
-        // ── fail_stop ────────────────────────────────────────────────────────
-
         socket.on(
           "fail_stop",
           async (data: {
@@ -1647,8 +1996,6 @@ export class SocketService {
           },
         );
 
-        // ── pause_route ──────────────────────────────────────────────────────
-
         socket.on(
           "pause_route",
           async (data: { routeId: string; reason?: string }) => {
@@ -1695,8 +2042,6 @@ export class SocketService {
             }
           },
         );
-
-        // ── resume_route ─────────────────────────────────────────────────────
 
         socket.on("resume_route", async (data: { routeId: string }) => {
           try {
@@ -1751,8 +2096,6 @@ export class SocketService {
           }
         });
 
-        // ── join_route_room ──────────────────────────────────────────────────
-
         socket.on("join_route_room", async (data: { routeId: string }) => {
           if (!data?.routeId) return;
           const transporter = await TransporterModel.findOne({ userId }).lean();
@@ -1798,15 +2141,13 @@ export class SocketService {
             timestamp: new Date(),
           });
         });
-      } // end if (role === "transporter")
+      }
 
       // ══════════════════════════════════════════════════════════════════════
       //  DELIVERER ROUTE EVENTS
       // ══════════════════════════════════════════════════════════════════════
 
       if (role === "deliverer") {
-        // ── start_delivery_route ──────────────────────────────────────────────
-        // AUTO-STARTS THE FIRST PACKAGE AND UPDATES PACKAGE STATUS
 
         socket.on("start_delivery_route", async (data: { routeId: string }) => {
           try {
@@ -1831,7 +2172,6 @@ export class SocketService {
             const route = await RouteModel.findOne({
               _id: data.routeId,
               assignedDelivererId: deliverer._id,
-              // status: "assigned",
             });
             if (!route) {
               socket.emit("route_error", {
@@ -1849,13 +2189,11 @@ export class SocketService {
               lastActiveAt: new Date(),
             });
 
-            // AUTO-START THE FIRST PACKAGE
             const firstStop = route.stops[0];
             if (firstStop && firstStop.packageIds[0]) {
               firstStop.status = "in_progress";
               await route.save();
 
-              // UPDATE PACKAGE STATUS TO OUT_FOR_DELIVERY
               const firstPackageId = firstStop.packageIds[0].toString();
               const firstPackage = await PackageModel.findById(firstPackageId);
               if (firstPackage) {
@@ -1866,6 +2204,8 @@ export class SocketService {
                   "Package picked up by deliverer - out for delivery",
                   firstStop.address
                 );
+                
+                this.broadcastPackageStatusToClient(firstPackageId, "out_for_delivery");
               }
 
               await this.generateAndSendDeliveryOTP(route, 0, data.routeId);
@@ -1927,9 +2267,6 @@ export class SocketService {
             });
           }
         });
-
-        // ── start_package ─────────────────────────────────────────────────────
-        // Called when deliverer manually starts a package - UPDATES PACKAGE STATUS
 
         socket.on("start_package", async (data: {
           routeId: string;
@@ -1995,11 +2332,9 @@ export class SocketService {
 
             const packageId = stop.packageIds[0].toString();
 
-            // Mark stop as in_progress
             stop.status = "in_progress";
             await route.save();
 
-            // UPDATE PACKAGE STATUS TO OUT_FOR_DELIVERY
             const pkg = await PackageModel.findById(packageId);
             if (pkg) {
               await pkg.updateStatus(
@@ -2009,9 +2344,10 @@ export class SocketService {
                 "Package started by deliverer - out for delivery",
                 stop.address
               );
+              
+              this.broadcastPackageStatusToClient(packageId, "out_for_delivery");
             }
 
-            // Generate OTP for this package
             await this.generateAndSendDeliveryOTP(route, data.stopIndex, data.routeId);
 
             socket.emit("package_started", {
@@ -2036,8 +2372,6 @@ export class SocketService {
             });
           }
         });
-
-        // ── arrived_at_delivery ──────────────────────────────────────────────
 
         socket.on(
           "arrived_at_delivery",
@@ -2164,9 +2498,6 @@ export class SocketService {
             }
           },
         );
-
-        // ── complete_delivery ─────────────────────────────────────────────────
-        // AUTO-STARTS THE NEXT PACKAGE AFTER COMPLETION AND UPDATES PACKAGE STATUS
 
         socket.on(
           "complete_delivery",
@@ -2309,6 +2640,19 @@ export class SocketService {
               );
               this.deliveryOTPs.delete(otpKey);
 
+              this.broadcastPackageStatusToClient(packageId, "delivered", {
+                deliveredAt: new Date(),
+              });
+
+              this.io
+                .to(this.getPackageRoom(packageId))
+                .emit("package_delivered", {
+                  packageId,
+                  deliveredAt: new Date(),
+                  message: "Your package has been delivered!",
+                  timestamp: new Date(),
+                });
+
               const delivererDoc = await DelivererModel.findById(deliverer._id);
               if (delivererDoc) {
                 const isCOD = pkg.paymentMethod === "cod";
@@ -2321,15 +2665,6 @@ export class SocketService {
 
               const isLastStop = data.stopIndex === route.stops.length - 1;
               const routeRoom = this.getRouteRoom(data.routeId);
-
-              this.io
-                .to(this.getPackageRoom(packageId))
-                .emit("package_delivered", {
-                  packageId,
-                  deliveredAt: new Date(),
-                  message: "Your package has been delivered!",
-                  timestamp: new Date(),
-                });
 
               if (isLastStop) {
                 await route.completeRoute(data.notes);
@@ -2374,12 +2709,10 @@ export class SocketService {
               } else {
                 const nextStop = route.stops[data.stopIndex + 1];
                 
-                // AUTO-START THE NEXT PACKAGE
                 if (nextStop && nextStop.packageIds[0]) {
                   nextStop.status = "in_progress";
                   await route.save();
 
-                  // UPDATE NEXT PACKAGE STATUS TO OUT_FOR_DELIVERY
                   const nextPackageId = nextStop.packageIds[0].toString();
                   const nextPackage = await PackageModel.findById(nextPackageId);
                   if (nextPackage) {
@@ -2390,6 +2723,8 @@ export class SocketService {
                       "Next package auto-started after delivery",
                       nextStop.address
                     );
+                    
+                    this.broadcastPackageStatusToClient(nextPackageId, "out_for_delivery");
                   }
 
                   await this.generateAndSendDeliveryOTP(
@@ -2446,9 +2781,6 @@ export class SocketService {
             }
           },
         );
-
-        // ── fail_delivery_attempt ────────────────────────────────────────────
-        // AUTO-STARTS THE NEXT PACKAGE AFTER FAILURE AND UPDATES PACKAGE STATUS
 
         socket.on(
           "fail_delivery_attempt",
@@ -2541,6 +2873,11 @@ export class SocketService {
                 pkg.currentBranchId,
                 data.reason,
               );
+              
+              this.broadcastPackageStatusToClient(packageId, "failed_delivery_attempt", {
+                reason: data.reason,
+              });
+
               const updatedPkgAfterFail =
                 await PackageModel.findById(packageId).lean();
               const attemptsExhausted =
@@ -2668,11 +3005,9 @@ export class SocketService {
                   });
                 } else {
                   if (nextStop) {
-                    // AUTO-START THE NEXT PACKAGE
                     nextStop.status = "in_progress";
                     await route.save();
 
-                    // UPDATE NEXT PACKAGE STATUS TO OUT_FOR_DELIVERY
                     const nextPackageId = nextStop.packageIds[0].toString();
                     const nextPackage = await PackageModel.findById(nextPackageId);
                     if (nextPackage) {
@@ -2683,6 +3018,8 @@ export class SocketService {
                         "Next package auto-started after failed delivery",
                         nextStop.address
                       );
+                      
+                      this.broadcastPackageStatusToClient(nextPackageId, "out_for_delivery");
                     }
 
                     await this.generateAndSendDeliveryOTP(
@@ -2723,11 +3060,9 @@ export class SocketService {
                 }
               } else {
                 if (nextStop) {
-                  // AUTO-START THE NEXT PACKAGE
                   nextStop.status = "in_progress";
                   await route.save();
 
-                  // UPDATE NEXT PACKAGE STATUS TO OUT_FOR_DELIVERY
                   const nextPackageId = nextStop.packageIds[0].toString();
                   const nextPackage = await PackageModel.findById(nextPackageId);
                   if (nextPackage) {
@@ -2738,6 +3073,8 @@ export class SocketService {
                       "Next package auto-started after failed delivery attempt",
                       nextStop.address
                     );
+                    
+                    this.broadcastPackageStatusToClient(nextPackageId, "out_for_delivery");
                   }
 
                   await this.generateAndSendDeliveryOTP(
@@ -2795,9 +3132,6 @@ export class SocketService {
             }
           },
         );
-
-        // ── cancel_package ───────────────────────────────────────────────────
-        // YOUR EXISTING CANCEL PACKAGE WITH CANCELLATION_SUCCESS EVENT
 
         socket.on(
           "cancel_package",
@@ -2874,8 +3208,6 @@ export class SocketService {
                 return;
               }
 
-              // PROXIMITY CHECK REMOVED - Deliverer can cancel from anywhere
-
               const packageId = stop.packageIds[0].toString();
 
               const pkg = await PackageModel.findById(packageId);
@@ -2909,6 +3241,10 @@ export class SocketService {
                 stop.address
               );
 
+              this.broadcastPackageStatusToClient(packageId, "cancelled", {
+                reason: data.reason,
+              });
+
               await PaymentModel.findOneAndUpdate(
                 { packageId: pkg._id },
                 {
@@ -2933,7 +3269,6 @@ export class SocketService {
               const isLastStop = data.stopIndex === route.stops.length - 1;
               const routeRoom = this.getRouteRoom(data.routeId);
 
-              // ★ EMIT CANCELLATION SUCCESS TO DELIVERER ★
               socket.emit("cancellation_success", {
                 success: true,
                 routeId: data.routeId,
@@ -3053,11 +3388,9 @@ export class SocketService {
                 const nextStop = route.stops[data.stopIndex + 1];
                 
                 if (nextStop) {
-                  // AUTO-START THE NEXT PACKAGE
                   nextStop.status = "in_progress";
                   await route.save();
 
-                  // UPDATE NEXT PACKAGE STATUS TO OUT_FOR_DELIVERY
                   const nextPackageId = nextStop.packageIds[0].toString();
                   const nextPackage = await PackageModel.findById(nextPackageId);
                   if (nextPackage) {
@@ -3068,6 +3401,8 @@ export class SocketService {
                       "Next package auto-started after cancellation",
                       nextStop.address
                     );
+                    
+                    this.broadcastPackageStatusToClient(nextPackageId, "out_for_delivery");
                   }
 
                   await this.generateAndSendDeliveryOTP(
@@ -3231,9 +3566,8 @@ export class SocketService {
                 });
                 return;
               }
-              const BranchModel = (await import("../models/branch.model"))
-                .default;
-              const branch = await BranchModel.findById(data.branchId)
+              const BranchModelModule = await import("../models/branch.model");
+              const branch = await BranchModelModule.default.findById(data.branchId)
                 .select("location name")
                 .lean();
               if (!branch || !(branch as any).location) {
@@ -3274,6 +3608,9 @@ export class SocketService {
                 } as any);
                 await pkg.save();
               }
+              
+              this.broadcastPackageStatusToClient(data.packageId, "returned");
+              
               await DelivererModel.findByIdAndUpdate(deliverer._id, {
                 availabilityStatus: "available",
                 currentRouteId: null,
@@ -3360,7 +3697,7 @@ export class SocketService {
             });
           },
         );
-      } // end if (role === "deliverer")
+      }
 
       // ══════════════════════════════════════════════════════════════════════
       //  PACKAGE / MANIFEST TRACKING
@@ -3469,7 +3806,7 @@ export class SocketService {
       });
 
       // ══════════════════════════════════════════════════════════════════════
-      //  BRANCH ROOM MANAGEMENT  (supervisor / manager / admin)
+      //  BRANCH ROOM MANAGEMENT
       // ══════════════════════════════════════════════════════════════════════
 
       if (role === "supervisor" || role === "manager" || role === "admin") {
@@ -3667,6 +4004,15 @@ export class SocketService {
             coordinates,
             timestamp: new Date(),
           });
+        
+        this.io
+          .to(this.getPackageRoom(pkg._id.toString()))
+          .emit("tracking:location_update", {
+            type: "deliverer",
+            coordinates,
+            lastUpdate: new Date(),
+            timestamp: new Date(),
+          });
       }
     } catch (err) {
       console.error("[Socket] broadcastDelivererLocation error:", err);
@@ -3702,6 +4048,7 @@ export class SocketService {
       })
         .select("_id")
         .lean();
+      
       for (const pkg of packages) {
         this.io
           .to(this.getPackageRoom(pkg._id.toString()))
@@ -3709,6 +4056,21 @@ export class SocketService {
             packageId: pkg._id,
             transporterId: transporter._id,
             coordinates,
+            timestamp: new Date(),
+          });
+        
+        const manifest = await ManifestModel.findOne({
+          'packages.packageId': pkg._id,
+          status: 'in_transit',
+        }).select('estimatedArrival destinationBranchId').lean();
+        
+        this.io
+          .to(this.getPackageRoom(pkg._id.toString()))
+          .emit("tracking:location_update", {
+            type: "transit",
+            coordinates,
+            lastUpdate: new Date(),
+            estimatedArrival: manifest?.estimatedArrival,
             timestamp: new Date(),
           });
       }
@@ -3896,8 +4258,6 @@ export class SocketService {
     }
   }
 
-  // ── Deliverer ──────────────────────────────────────────────────────────────
-
   private async resumeDelivererSession(
     socket: AuthenticatedSocket,
     userId: string,
@@ -3945,7 +4305,6 @@ export class SocketService {
 
     socket.join(this.getRouteRoom(route._id.toString()));
 
-    // Check if the current stop is already started (in_progress)
     const isPackageStarted = stop.status === "in_progress";
 
     if (isPackageStarted) {
@@ -4005,7 +4364,6 @@ export class SocketService {
         timestamp: new Date(),
       });
     } else {
-      // Package is NOT started - send minimal info so frontend can call start_package
       socket.emit("session_resumed", {
         role: "deliverer",
         routeId: route._id,
@@ -4063,8 +4421,6 @@ export class SocketService {
         `pkg ${activePackageId} started=${isPackageStarted} otpAlive=${otpAlive}`,
     );
   }
-
-  // ── Transporter ────────────────────────────────────────────────────────────
 
   private async resumeTransporterSession(
     socket: AuthenticatedSocket,
@@ -4256,6 +4612,8 @@ export class SocketService {
       ...payload,
       timestamp: new Date(),
     });
+    
+    this.broadcastPackageStatusToClient(packageId, payload.status);
   }
 
   public emitManifestStatusUpdate(
