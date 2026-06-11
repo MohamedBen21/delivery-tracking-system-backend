@@ -359,7 +359,7 @@ export class SocketService {
             const route = await RouteModel.findOne({
               _id: data.routeId,
               assignedTransporterId: transporter._id,
-              status: "assigned",
+              // status: "assigned",
             });
             if (!route) {
               socket.emit("route_error", {
@@ -631,16 +631,6 @@ export class SocketService {
         );
 
         // ── request_stop_qr ──────────────────────────────────────────────────
-        //
-        // NEW — Step 1 of the QR handshake.
-        //
-        // Transporter taps "Complete Stop" / "Complete Route" in the app.
-        // Server validates proximity + order, then generates a StopQrSession.
-        // The QR code is pushed to the branch room (supervisor displays it).
-        // The transporter gets a "ready to scan" confirmation.
-        //
-        // Replaces the old "complete_stop" for hub routes.
-        // Non-hub routes still use the original complete_stop flow below.
 
         socket.on(
           "request_stop_qr",
@@ -648,7 +638,6 @@ export class SocketService {
             routeId: string;
             stopIndex: number;
             coordinates: [number, number];
-            // Optional manifest list for partial discrepancy notes (hub routes)
             completedManifestIds?: string[];
             discrepancyManifestIds?: string[];
             notes?: string;
@@ -740,7 +729,6 @@ export class SocketService {
                 return;
               }
 
-              // Proximity guard: hub stops allow 500m
               const distanceMeters =
                 this.calculateDistance(
                   data.coordinates,
@@ -757,7 +745,6 @@ export class SocketService {
                 return;
               }
 
-              // Cancel any existing unexpired QR session for this stop to avoid duplicates
               await StopQrSessionModel.updateMany(
                 {
                   routeId: new mongoose.Types.ObjectId(data.routeId),
@@ -765,12 +752,11 @@ export class SocketService {
                   verified: false,
                   expiresAt: { $gt: new Date() },
                 },
-                { $set: { expiresAt: new Date() } }, // expire immediately
+                { $set: { expiresAt: new Date() } },
               );
 
-              // Generate a cryptographically secure QR code (hex string)
               const qrCode = crypto.randomBytes(32).toString("hex");
-              const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 min
+              const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
               const isLastStop = data.stopIndex === route.stops.length - 1;
 
               const manifestCount = stop.manifestIds?.length ?? 0;
@@ -790,24 +776,18 @@ export class SocketService {
                 verified: false,
               });
 
-              // Stash the pending manifest breakdown on the session document
-              // so scan_stop_qr can use them without re-sending.
-              // We piggy-back using a transient field (not in schema — attach to
-              // the in-memory object for the pending scan, then pass via the QR
-              // payload as metadata so the transporter app can echo them back).
               const pendingPayload = {
                 completedManifestIds: data.completedManifestIds ?? [],
                 discrepancyManifestIds: data.discrepancyManifestIds ?? [],
                 notes: data.notes ?? "",
               };
 
-              // ── Notify branch room: display QR ───────────────────────────────
               if (stop.branchId) {
                 this.io
                   .to(this.getBranchRoom(stop.branchId.toString()))
                   .emit("branch:show_stop_qr", {
                     sessionId: session._id,
-                    qrCode, // branch app encodes this into a QR image
+                    qrCode,
                     routeId: data.routeId,
                     routeNumber: route.routeNumber,
                     routeType: route.type,
@@ -826,7 +806,6 @@ export class SocketService {
                   });
               }
 
-              // ── Confirm to transporter: ready to scan ────────────────────────
               socket.emit("transporter:stop_qr_ready", {
                 sessionId: session._id,
                 routeId: data.routeId,
@@ -837,7 +816,7 @@ export class SocketService {
                 manifestCount,
                 packageCount,
                 expiresAt,
-                pendingPayload, // echoed back so transporter app can include in scan event
+                pendingPayload,
                 message:
                   "QR code displayed at branch. Please scan it to complete the stop.",
                 timestamp: new Date(),
@@ -858,31 +837,20 @@ export class SocketService {
         );
 
         // ── scan_stop_qr ─────────────────────────────────────────────────────
-        //
-        // NEW — Step 2 of the QR handshake.
-        //
-        // Transporter scans the QR shown by the branch supervisor.
-        // Server verifies the session, then executes the full stop-completion
-        // logic (manifest/package updates, route advance or complete, stats).
-        //
-        // Payload mirrors what the transporter received in stop_qr_ready so
-        // the server can re-use the manifest breakdown without another round-trip.
 
         socket.on(
           "scan_stop_qr",
           async (data: {
-            sessionId: string; // StopQrSession._id
-            qrCode: string; // the scanned code string
+            sessionId: string;
+            qrCode: string;
             routeId: string;
             stopIndex: number;
             coordinates: [number, number];
-            // Manifest breakdown (echoed from pendingPayload in stop_qr_ready)
             completedManifestIds?: string[];
             discrepancyManifestIds?: string[];
             notes?: string;
           }) => {
             try {
-              // ── Basic input guards ───────────────────────────────────────────
               if (
                 !data?.sessionId ||
                 !mongoose.Types.ObjectId.isValid(data.sessionId)
@@ -929,7 +897,6 @@ export class SocketService {
                 return;
               }
 
-              // ── Load and validate the QR session ────────────────────────────
               const session = await StopQrSessionModel.findById(data.sessionId);
               if (!session) {
                 socket.emit("route_error", {
@@ -984,7 +951,6 @@ export class SocketService {
                 return;
               }
 
-              // ── Load route ───────────────────────────────────────────────────
               const route = await RouteModel.findOne({
                 _id: data.routeId,
                 assignedTransporterId: transporter._id,
@@ -1016,7 +982,6 @@ export class SocketService {
                 return;
               }
 
-              // Proximity guard (still enforced at scan time — transporter must stay on-site)
               const distanceMeters =
                 this.calculateDistance(
                   data.coordinates,
@@ -1032,7 +997,6 @@ export class SocketService {
                 return;
               }
 
-              // ── Mark QR session as verified ──────────────────────────────────
               session.verified = true;
               session.verifiedAt = new Date();
               await session.save();
@@ -1040,7 +1004,6 @@ export class SocketService {
               const isLastStop = data.stopIndex === route.stops.length - 1;
               const routeRoom = this.getRouteRoom(data.routeId);
 
-              // ── Manifest breakdown ───────────────────────────────────────────
               const stopManifestSet = new Set(
                 (stop.manifestIds ?? []).map((id: mongoose.Types.ObjectId) =>
                   id.toString(),
@@ -1079,19 +1042,16 @@ export class SocketService {
                 );
               }
 
-              // Default: treat all stop manifests as completed when no breakdown given
               const finalCompletedManifests =
                 completedManifestOids.length > 0
                   ? completedManifestOids
                   : ((stop.manifestIds ?? []) as mongoose.Types.ObjectId[]);
 
-              // ── Persist manifest breakdown on route stop ─────────────────────
               stop.completedManifests = finalCompletedManifests;
               stop.discrepancyManifests = discrepancyManifestOids;
 
               await route.completeStop(data.stopIndex, [], [], data.notes);
 
-              // ── Update manifest statuses → arrived + cascade to packages ─────
               if (finalCompletedManifests.length > 0) {
                 await ManifestModel.updateMany(
                   {
@@ -1123,7 +1083,6 @@ export class SocketService {
                 );
               }
 
-              // ── Notify branch: arrival confirmed ─────────────────────────────
               if (stop.branchId) {
                 this.io
                   .to(this.getBranchRoom(stop.branchId.toString()))
@@ -1144,18 +1103,14 @@ export class SocketService {
                   });
               }
 
-              // ── Route branch: hub_to_hub vs hub_to_branch ────────────────────
-
               if (isLastStop) {
-                // ── Complete the route ─────────────────────────────────────────
                 await route.completeRoute(data.notes);
 
                 if (route.type === "hub_to_hub" && stop.branchId) {
-                  // Update transporter's home hub to the destination
                   await TransporterModel.findByIdAndUpdate(transporter._id, {
                     availabilityStatus: "available",
                     currentRouteId: null,
-                    currentBranchId: stop.branchId, // now stationed at destination hub
+                    currentBranchId: stop.branchId,
                     lastActiveAt: new Date(),
                     $inc: { totalTrips: 1, completedTrips: 1 },
                   });
@@ -1168,7 +1123,6 @@ export class SocketService {
                   });
                 }
 
-                // Tell transporter the full route is done
                 socket.emit("transporter:route_completed", {
                   routeId: data.routeId,
                   routeNumber: route.routeNumber,
@@ -1187,7 +1141,6 @@ export class SocketService {
                   timestamp: new Date(),
                 });
 
-                // Notify company room
                 this.io
                   .to(this.getCompanyRoom(transporter.companyId.toString()))
                   .emit("transporter_route_completed", {
@@ -1210,7 +1163,6 @@ export class SocketService {
                   `[Socket] Transporter ${userId} COMPLETED ${route.type} route ${data.routeId} via QR`,
                 );
               } else {
-                // ── hub_to_branch: advance to next stop ────────────────────────
                 const nextStop = route.stops[data.stopIndex + 1];
 
                 socket.emit("transporter:stop_completed", {
@@ -1237,7 +1189,6 @@ export class SocketService {
                   timestamp: new Date(),
                 });
 
-                // Notify the completed branch that transporter is leaving
                 if (stop.branchId) {
                   this.io
                     .to(this.getBranchRoom(stop.branchId.toString()))
@@ -1249,7 +1200,6 @@ export class SocketService {
                     });
                 }
 
-                // Notify the next branch that transporter is on the way
                 if (nextStop?.branchId) {
                   this.io
                     .to(this.getBranchRoom(nextStop.branchId.toString()))
@@ -1286,9 +1236,6 @@ export class SocketService {
         );
 
         // ── complete_stop ────────────────────────────────────────────────────
-        //
-        // Original flow — kept unchanged for NON-hub routes (package-based).
-        // Hub routes must use request_stop_qr → scan_stop_qr instead.
 
         socket.on(
           "complete_stop",
@@ -1352,7 +1299,6 @@ export class SocketService {
                 return;
               }
 
-              // Hub routes must go through the QR flow
               if (isHubRoute(route.type)) {
                 socket.emit("route_error", {
                   code: "USE_QR_FLOW",
@@ -1409,7 +1355,6 @@ export class SocketService {
               const isLastStop = data.stopIndex === route.stops.length - 1;
               const routeRoom = this.getRouteRoom(data.routeId);
 
-              // ── Package-based stop completion ────────────────────────────────
               const stopPackageSet = new Set(
                 (stop.packageIds as mongoose.Types.ObjectId[]).map((id) =>
                   id.toString(),
@@ -1638,7 +1583,6 @@ export class SocketService {
               const isLastStop = data.stopIndex === route.stops.length - 1;
               const hubRoute = isHubRoute(route.type);
 
-              // Expire any pending QR session for this stop if it was a hub route
               if (hubRoute) {
                 await StopQrSessionModel.updateMany(
                   {
@@ -1857,10 +1801,13 @@ export class SocketService {
       } // end if (role === "transporter")
 
       // ══════════════════════════════════════════════════════════════════════
-      //  DELIVERER ROUTE EVENTS  (unchanged from original)
+      //  DELIVERER ROUTE EVENTS
       // ══════════════════════════════════════════════════════════════════════
 
       if (role === "deliverer") {
+        // ── start_delivery_route ──────────────────────────────────────────────
+        // AUTO-STARTS THE FIRST PACKAGE AND UPDATES PACKAGE STATUS
+
         socket.on("start_delivery_route", async (data: { routeId: string }) => {
           try {
             if (
@@ -1902,8 +1849,59 @@ export class SocketService {
               lastActiveAt: new Date(),
             });
 
-            if (route.stops.length > 0) {
+            // AUTO-START THE FIRST PACKAGE
+            const firstStop = route.stops[0];
+            if (firstStop && firstStop.packageIds[0]) {
+              firstStop.status = "in_progress";
+              await route.save();
+
+              // UPDATE PACKAGE STATUS TO OUT_FOR_DELIVERY
+              const firstPackageId = firstStop.packageIds[0].toString();
+              const firstPackage = await PackageModel.findById(firstPackageId);
+              if (firstPackage) {
+                await firstPackage.updateStatus(
+                  "out_for_delivery",
+                  new mongoose.Types.ObjectId(userId),
+                  deliverer.branchId,
+                  "Package picked up by deliverer - out for delivery",
+                  firstStop.address
+                );
+              }
+
               await this.generateAndSendDeliveryOTP(route, 0, data.routeId);
+
+              socket.emit("delivery_route_started", {
+                routeId: data.routeId,
+                routeNumber: route.routeNumber,
+                status: "active",
+                currentStopIndex: 0,
+                totalStops: route.stops.length,
+                currentStop: {
+                  stopId: firstStop._id,
+                  clientId: firstStop.clientId,
+                  packageId: firstPackageId,
+                  address: firstStop.address,
+                  location: firstStop.location.coordinates,
+                  recipientName: (firstStop as any).recipientName,
+                  recipientPhone: (firstStop as any).recipientPhone,
+                  otpSent: true,
+                  status: "in_progress",
+                },
+                scheduledEnd: route.scheduledEnd,
+                message: "Route started! First package is ready for delivery.",
+                timestamp: new Date(),
+              });
+            } else {
+              socket.emit("delivery_route_started", {
+                routeId: data.routeId,
+                routeNumber: route.routeNumber,
+                status: "active",
+                currentStopIndex: 0,
+                totalStops: route.stops.length,
+                scheduledEnd: route.scheduledEnd,
+                message: "Route started!",
+                timestamp: new Date(),
+              });
             }
 
             this.io
@@ -1919,31 +1917,8 @@ export class SocketService {
                 timestamp: new Date(),
               });
 
-            const firstStop = route.stops[0];
-            socket.emit("delivery_route_started", {
-              routeId: data.routeId,
-              routeNumber: route.routeNumber,
-              status: "active",
-              currentStopIndex: 0,
-              totalStops: route.stops.length,
-              currentStop: firstStop
-                ? {
-                    stopId: firstStop._id,
-                    clientId: firstStop.clientId,
-                    packageId: firstStop.packageIds[0],
-                    address: firstStop.address,
-                    location: firstStop.location.coordinates,
-                    recipientName: (firstStop as any).recipientName,
-                    recipientPhone: (firstStop as any).recipientPhone,
-                    otpSent: true,
-                  }
-                : null,
-              scheduledEnd: route.scheduledEnd,
-              timestamp: new Date(),
-            });
-
             console.log(
-              `[Socket] Deliverer ${userId} started delivery route ${data.routeId}`,
+              `[Socket] Deliverer ${userId} started delivery route ${data.routeId} and auto-started first package`,
             );
           } catch (err: any) {
             socket.emit("route_error", {
@@ -1952,6 +1927,117 @@ export class SocketService {
             });
           }
         });
+
+        // ── start_package ─────────────────────────────────────────────────────
+        // Called when deliverer manually starts a package - UPDATES PACKAGE STATUS
+
+        socket.on("start_package", async (data: {
+          routeId: string;
+          stopIndex: number;
+        }) => {
+          try {
+            if (!data?.routeId || !mongoose.Types.ObjectId.isValid(data.routeId)) {
+              socket.emit("route_error", {
+                code: "INVALID_ROUTE_ID",
+                message: "Invalid routeId.",
+              });
+              return;
+            }
+
+            if (data.stopIndex === undefined || data.stopIndex < 0) {
+              socket.emit("route_error", {
+                code: "INVALID_STOP",
+                message: "Invalid stopIndex.",
+              });
+              return;
+            }
+
+            const deliverer = await DelivererModel.findOne({ userId }).lean();
+            if (!deliverer) {
+              socket.emit("route_error", {
+                code: "NOT_FOUND",
+                message: "Deliverer not found.",
+              });
+              return;
+            }
+
+            const route = await RouteModel.findOne({
+              _id: data.routeId,
+              assignedDelivererId: deliverer._id,
+              status: "active",
+            });
+
+            if (!route) {
+              socket.emit("route_error", {
+                code: "ROUTE_NOT_FOUND",
+                message: "Active route not found.",
+              });
+              return;
+            }
+
+            if (data.stopIndex !== route.currentStopIndex) {
+              socket.emit("route_error", {
+                code: "WRONG_STOP",
+                message: `Expected stop ${route.currentStopIndex}, got ${data.stopIndex}.`,
+                expectedStopIndex: route.currentStopIndex,
+              });
+              return;
+            }
+
+            const stop = route.stops[data.stopIndex];
+            if (!stop || !stop.packageIds[0]) {
+              socket.emit("route_error", {
+                code: "STOP_NOT_FOUND",
+                message: "Stop or package not found.",
+              });
+              return;
+            }
+
+            const packageId = stop.packageIds[0].toString();
+
+            // Mark stop as in_progress
+            stop.status = "in_progress";
+            await route.save();
+
+            // UPDATE PACKAGE STATUS TO OUT_FOR_DELIVERY
+            const pkg = await PackageModel.findById(packageId);
+            if (pkg) {
+              await pkg.updateStatus(
+                "out_for_delivery",
+                new mongoose.Types.ObjectId(userId),
+                deliverer.branchId,
+                "Package started by deliverer - out for delivery",
+                stop.address
+              );
+            }
+
+            // Generate OTP for this package
+            await this.generateAndSendDeliveryOTP(route, data.stopIndex, data.routeId);
+
+            socket.emit("package_started", {
+              routeId: data.routeId,
+              stopIndex: data.stopIndex,
+              stopId: stop._id,
+              packageId,
+              address: stop.address,
+              location: stop.location.coordinates,
+              recipientName: (stop as any).recipientName,
+              recipientPhone: (stop as any).recipientPhone,
+              message: "Package started. OTP sent to client. Proceed to delivery location.",
+              otpSent: true,
+              timestamp: new Date(),
+            });
+
+            console.log(`[Socket] Deliverer ${userId} started package ${packageId} at stop ${data.stopIndex}`);
+          } catch (err: any) {
+            socket.emit("route_error", {
+              code: "START_PACKAGE_FAILED",
+              message: err.message || "Failed to start package.",
+            });
+          }
+        });
+
+        // ── arrived_at_delivery ──────────────────────────────────────────────
 
         socket.on(
           "arrived_at_delivery",
@@ -2078,6 +2164,9 @@ export class SocketService {
             }
           },
         );
+
+        // ── complete_delivery ─────────────────────────────────────────────────
+        // AUTO-STARTS THE NEXT PACKAGE AFTER COMPLETION AND UPDATES PACKAGE STATUS
 
         socket.on(
           "complete_delivery",
@@ -2284,31 +2373,61 @@ export class SocketService {
                 );
               } else {
                 const nextStop = route.stops[data.stopIndex + 1];
-                if (nextStop)
+                
+                // AUTO-START THE NEXT PACKAGE
+                if (nextStop && nextStop.packageIds[0]) {
+                  nextStop.status = "in_progress";
+                  await route.save();
+
+                  // UPDATE NEXT PACKAGE STATUS TO OUT_FOR_DELIVERY
+                  const nextPackageId = nextStop.packageIds[0].toString();
+                  const nextPackage = await PackageModel.findById(nextPackageId);
+                  if (nextPackage) {
+                    await nextPackage.updateStatus(
+                      "out_for_delivery",
+                      new mongoose.Types.ObjectId(userId),
+                      deliverer.branchId,
+                      "Next package auto-started after delivery",
+                      nextStop.address
+                    );
+                  }
+
                   await this.generateAndSendDeliveryOTP(
                     route,
                     data.stopIndex + 1,
                     data.routeId,
                   );
-                socket.emit("delivery_stop_completed", {
-                  routeId: data.routeId,
-                  completedStopIndex: data.stopIndex,
-                  packageId,
-                  distanceMeters: Math.round(distanceMeters),
-                  nextStop: nextStop
-                    ? {
-                        stopIndex: data.stopIndex + 1,
-                        stopId: nextStop._id,
-                        clientId: nextStop.clientId,
-                        packageId: nextStop.packageIds[0],
-                        address: nextStop.address,
-                        location: nextStop.location.coordinates,
-                        otpSent: true,
-                      }
-                    : null,
-                  remainingStops: route.stops.length - (data.stopIndex + 1),
-                  timestamp: new Date(),
-                });
+
+                  socket.emit("delivery_stop_completed", {
+                    routeId: data.routeId,
+                    completedStopIndex: data.stopIndex,
+                    packageId,
+                    distanceMeters: Math.round(distanceMeters),
+                    nextStop: {
+                      stopIndex: data.stopIndex + 1,
+                      stopId: nextStop._id,
+                      clientId: nextStop.clientId,
+                      packageId: nextPackageId,
+                      address: nextStop.address,
+                      location: nextStop.location.coordinates,
+                      otpSent: true,
+                      status: "in_progress",
+                    },
+                    remainingStops: route.stops.length - (data.stopIndex + 1),
+                    message: `Package delivered! Next package ready: ${route.stops.length - (data.stopIndex + 1)} stops remaining.`,
+                    timestamp: new Date(),
+                  });
+                } else {
+                  socket.emit("delivery_stop_completed", {
+                    routeId: data.routeId,
+                    completedStopIndex: data.stopIndex,
+                    packageId,
+                    distanceMeters: Math.round(distanceMeters),
+                    remainingStops: route.stops.length - (data.stopIndex + 1),
+                    message: `Package delivered! ${route.stops.length - (data.stopIndex + 1)} stops remaining.`,
+                    timestamp: new Date(),
+                  });
+                }
                 this.io.to(routeRoom).emit("delivery_stop_completed", {
                   routeId: data.routeId,
                   stopIndex: data.stopIndex,
@@ -2327,6 +2446,9 @@ export class SocketService {
             }
           },
         );
+
+        // ── fail_delivery_attempt ────────────────────────────────────────────
+        // AUTO-STARTS THE NEXT PACKAGE AFTER FAILURE AND UPDATES PACKAGE STATUS
 
         socket.on(
           "fail_delivery_attempt",
@@ -2545,12 +2667,30 @@ export class SocketService {
                     timestamp: new Date(),
                   });
                 } else {
-                  if (nextStop)
+                  if (nextStop) {
+                    // AUTO-START THE NEXT PACKAGE
+                    nextStop.status = "in_progress";
+                    await route.save();
+
+                    // UPDATE NEXT PACKAGE STATUS TO OUT_FOR_DELIVERY
+                    const nextPackageId = nextStop.packageIds[0].toString();
+                    const nextPackage = await PackageModel.findById(nextPackageId);
+                    if (nextPackage) {
+                      await nextPackage.updateStatus(
+                        "out_for_delivery",
+                        new mongoose.Types.ObjectId(userId),
+                        deliverer.branchId,
+                        "Next package auto-started after failed delivery",
+                        nextStop.address
+                      );
+                    }
+
                     await this.generateAndSendDeliveryOTP(
                       route,
                       route.currentStopIndex,
                       data.routeId,
                     );
+                  }
                   socket.emit("delivery_attempt_failed", {
                     ...failPayload,
                     maxReached: true,
@@ -2565,6 +2705,7 @@ export class SocketService {
                           address: nextStop.address,
                           location: nextStop.location.coordinates,
                           otpSent: true,
+                          status: "in_progress",
                         }
                       : null,
                     remainingStops: totalStopsNow - route.currentStopIndex,
@@ -2581,12 +2722,30 @@ export class SocketService {
                   });
                 }
               } else {
-                if (nextStop)
+                if (nextStop) {
+                  // AUTO-START THE NEXT PACKAGE
+                  nextStop.status = "in_progress";
+                  await route.save();
+
+                  // UPDATE NEXT PACKAGE STATUS TO OUT_FOR_DELIVERY
+                  const nextPackageId = nextStop.packageIds[0].toString();
+                  const nextPackage = await PackageModel.findById(nextPackageId);
+                  if (nextPackage) {
+                    await nextPackage.updateStatus(
+                      "out_for_delivery",
+                      new mongoose.Types.ObjectId(userId),
+                      deliverer.branchId,
+                      "Next package auto-started after failed delivery attempt",
+                      nextStop.address
+                    );
+                  }
+
                   await this.generateAndSendDeliveryOTP(
                     route,
                     route.currentStopIndex,
                     data.routeId,
                   );
+                }
                 socket.emit("delivery_attempt_failed", {
                   ...failPayload,
                   maxReached: false,
@@ -2602,6 +2761,7 @@ export class SocketService {
                         location: nextStop.location.coordinates,
                         isRetry: route.currentStopIndex === requeuedStopIndex,
                         otpSent: true,
+                        status: nextStop.status === "in_progress" ? "in_progress" : "pending",
                       }
                     : null,
                   remainingStops: totalStopsNow - route.currentStopIndex,
@@ -2636,13 +2796,8 @@ export class SocketService {
           },
         );
 
-
-        // ── cancel_package ───────────────────────────────────────────────────────
-        //
-        // Permanently cancels a package delivery at a specific stop.
-        // Unlike fail_delivery_attempt, this does NOT re-queue the package.
-        // It records the cancellation reason, route ID, stop index, and marks
-        // the package as cancelled, then advances to the next stop.
+        // ── cancel_package ───────────────────────────────────────────────────
+        // YOUR EXISTING CANCEL PACKAGE WITH CANCELLATION_SUCCESS EVENT
 
         socket.on(
           "cancel_package",
@@ -2654,7 +2809,6 @@ export class SocketService {
             notes?: string;
           }) => {
             try {
-              // ── Validate required fields ──────────────────────────────────────────
               if (!data?.routeId || !data?.reason) {
                 socket.emit("route_error", {
                   code: "MISSING_DATA",
@@ -2680,7 +2834,6 @@ export class SocketService {
                 return;
               }
 
-              // ── Fetch deliverer ──────────────────────────────────────────────────
               const deliverer = await DelivererModel.findOne({ userId }).lean();
               if (!deliverer) {
                 socket.emit("route_error", {
@@ -2690,7 +2843,6 @@ export class SocketService {
                 return;
               }
 
-              // ── Fetch active route ───────────────────────────────────────────────
               const route = await RouteModel.findOne({
                 _id: data.routeId,
                 assignedDelivererId: deliverer._id,
@@ -2704,7 +2856,6 @@ export class SocketService {
                 return;
               }
 
-              // ── Validate stop index ──────────────────────────────────────────────
               if (data.stopIndex !== route.currentStopIndex) {
                 socket.emit("route_error", {
                   code: "WRONG_STOP",
@@ -2723,11 +2874,10 @@ export class SocketService {
                 return;
               }
 
-              // ── PROXIMITY CHECK REMOVED ── Deliverer can cancel from anywhere
+              // PROXIMITY CHECK REMOVED - Deliverer can cancel from anywhere
 
               const packageId = stop.packageIds[0].toString();
 
-              // ── Fetch package ────────────────────────────────────────────────────
               const pkg = await PackageModel.findById(packageId);
               if (!pkg) {
                 socket.emit("route_error", {
@@ -2737,7 +2887,6 @@ export class SocketService {
                 return;
               }
 
-              // ── Build detailed cancellation notes with route/stop context ────────
               const cancellationDetails = {
                 cancelledBy: deliverer.userId,
                 cancelledAt: new Date().toISOString(),
@@ -2752,7 +2901,6 @@ export class SocketService {
 
               const trackingNotes = JSON.stringify(cancellationDetails);
 
-              // ── Update package status to cancelled ───────────────────────────────
               await pkg.updateStatus(
                 "cancelled",
                 deliverer.userId,
@@ -2761,7 +2909,6 @@ export class SocketService {
                 stop.address
               );
 
-              // ── Update payment status ────────────────────────────────────────────
               await PaymentModel.findOneAndUpdate(
                 { packageId: pkg._id },
                 {
@@ -2771,15 +2918,12 @@ export class SocketService {
                 },
               );
 
-              // ── Remove OTP from memory ───────────────────────────────────────────
               this.deliveryOTPs.delete(`delivery_otp_${packageId}`);
 
-              // ── Mark stop as failed (permanently, no requeue) ────────────────────
               await route.failStop(data.stopIndex, data.reason, [
                 new mongoose.Types.ObjectId(packageId),
               ]);
 
-              // ── Update deliverer stats ───────────────────────────────────────────
               await DelivererModel.findByIdAndUpdate(deliverer._id, {
                 $inc: { totalDeliveries: 1, failedDeliveries: 1 },
                 lastActiveAt: new Date(),
@@ -2789,9 +2933,7 @@ export class SocketService {
               const isLastStop = data.stopIndex === route.stops.length - 1;
               const routeRoom = this.getRouteRoom(data.routeId);
 
-              // ═══════════════════════════════════════════════════════════════════════
               // ★ EMIT CANCELLATION SUCCESS TO DELIVERER ★
-              // ═══════════════════════════════════════════════════════════════════════
               socket.emit("cancellation_success", {
                 success: true,
                 routeId: data.routeId,
@@ -2808,7 +2950,6 @@ export class SocketService {
                 timestamp: new Date(),
               });
 
-              // ── Notify package room ──────────────────────────────────────────────
               this.io
                 .to(this.getPackageRoom(packageId))
                 .emit("package_cancelled", {
@@ -2827,7 +2968,6 @@ export class SocketService {
                   timestamp: new Date(),
                 });
 
-              // ── Also emit a general status update ────────────────────────────────
               this.io
                 .to(this.getPackageRoom(packageId))
                 .emit("package_status_update", {
@@ -2838,7 +2978,6 @@ export class SocketService {
                   timestamp: new Date(),
                 });
 
-              // ── Notify branch ────────────────────────────────────────────────────
               this.io
                 .to(this.getBranchRoom(deliverer.branchId.toString()))
                 .emit("deliverer_package_cancelled", {
@@ -2861,9 +3000,7 @@ export class SocketService {
                   timestamp: new Date(),
                 });
 
-              // ── Handle route progression ─────────────────────────────────────────
               if (isLastStop) {
-                // Complete the route if this was the last stop
                 await route.completeRoute(
                   `Last stop cancelled: ${data.reason}${data.notes ? ` - ${data.notes}` : ""}`,
                 );
@@ -2913,10 +3050,26 @@ export class SocketService {
                   `and COMPLETED route ${data.routeId}`,
                 );
               } else {
-                // Advance to next stop
                 const nextStop = route.stops[data.stopIndex + 1];
                 
                 if (nextStop) {
+                  // AUTO-START THE NEXT PACKAGE
+                  nextStop.status = "in_progress";
+                  await route.save();
+
+                  // UPDATE NEXT PACKAGE STATUS TO OUT_FOR_DELIVERY
+                  const nextPackageId = nextStop.packageIds[0].toString();
+                  const nextPackage = await PackageModel.findById(nextPackageId);
+                  if (nextPackage) {
+                    await nextPackage.updateStatus(
+                      "out_for_delivery",
+                      new mongoose.Types.ObjectId(userId),
+                      deliverer.branchId,
+                      "Next package auto-started after cancellation",
+                      nextStop.address
+                    );
+                  }
+
                   await this.generateAndSendDeliveryOTP(
                     route,
                     data.stopIndex + 1,
@@ -2947,6 +3100,7 @@ export class SocketService {
                         address: nextStop.address,
                         location: nextStop.location.coordinates,
                         otpSent: true,
+                        status: "in_progress",
                       }
                     : null,
                   remainingStops: route.stops.length - (data.stopIndex + 1),
@@ -2978,7 +3132,6 @@ export class SocketService {
           },
         );
 
-        
         socket.on(
           "resend_delivery_otp",
           async (data: { routeId: string; stopIndex: number }) => {
@@ -3723,24 +3876,6 @@ export class SocketService {
   // ═══════════════════════════════════════════════════════════════════════════
   //  RECONNECT RESUME
   // ═══════════════════════════════════════════════════════════════════════════
-  //
-  //  Called on every (re)connection for deliverer and transporter roles.
-  //  Queries the DB for any unfinished work and emits a single
-  //  "session_resumed" event so the frontend can restore its UI state without
-  //  the user having to navigate back manually.
-  //
-  //  Deliverer  → finds the active/paused delivery route and its current stop.
-  //               Includes the first non-completed package at that stop plus
-  //               whether an OTP is still alive for it.
-  //
-  //  Transporter → finds the active/paused hub or non-hub route, the current
-  //                stop, and the manifests (hub routes) or packages (other
-  //                routes) that are still in transit at that stop.
-  //                Also re-attaches the socket to the route room so subsequent
-  //                stop events work without the user pressing "rejoin".
-  //
-  //  If nothing is unfinished the event is NOT emitted (no unnecessary noise).
-  // ─────────────────────────────────────────────────────────────────────────
 
   private async resumeActiveSession(
     socket: AuthenticatedSocket,
@@ -3754,7 +3889,6 @@ export class SocketService {
         await this.resumeTransporterSession(socket, userId);
       }
     } catch (err: any) {
-      // Non-fatal — just log. Never throw back to the connection handler.
       console.error(
         `[Socket] resumeActiveSession failed for ${role} ${userId}:`,
         err.message,
@@ -3779,29 +3913,18 @@ export class SocketService {
     }).lean();
     if (!route) return;
 
-    // currentStopIndex IS the queue pointer. completeStop() and failStop()
-    // both advance it, so every stop before it is already done.
-    // The stop it points to is exactly what the deliverer must act on next.
-    // On a requeue, a brand-new stop is appended with the same package and
-    // the cursor moves to it — so stops[currentStopIndex].packageIds[0]
-    // is always the correct package, no filtering needed.
     const stop = route.stops[route.currentStopIndex];
     if (!stop) return;
 
     const activePackageId = stop.packageIds[0] ?? null;
     if (!activePackageId) return;
 
-    // ── Fetch package document ────────────────────────────────────────────────
     const pkg = await PackageModel.findById(activePackageId)
       .select(
         "trackingNumber status destination attemptCount maxAttempts estimatedDeliveryTime deliveryOtp",
       )
       .lean();
 
-    // ── OTP restoration ───────────────────────────────────────────────────────
-    // In-memory map is wiped on server restart; fall back to the persisted
-    // package.deliveryOtp field and restore to memory so complete_delivery
-    // works without the deliverer having to request a fresh code.
     const otpKey = `delivery_otp_${activePackageId.toString()}`;
     const memEntry = this.deliveryOTPs.get(otpKey);
     const dbOtp = pkg?.deliveryOtp;
@@ -3820,68 +3943,124 @@ export class SocketService {
       });
     }
 
-    // ── Re-join route room ────────────────────────────────────────────────────
     socket.join(this.getRouteRoom(route._id.toString()));
 
-    socket.emit("session_resumed", {
-      role: "deliverer",
-      routeId: route._id,
-      routeNumber: route.routeNumber,
-      routeType: route.type,
-      routeStatus: route.status,
-      currentStopIndex: route.currentStopIndex,
-      totalStops: route.stops.length,
-      completedStops: route.completedStops,
-      remainingStops: route.stops.length - route.currentStopIndex,
-      scheduledEnd: route.scheduledEnd,
-      actualStart: route.actualStart,
-      isDelayed: route.scheduledEnd ? new Date() > route.scheduledEnd : false,
+    // Check if the current stop is already started (in_progress)
+    const isPackageStarted = stop.status === "in_progress";
 
-      currentStop: {
-        stopId: stop._id,
-        stopIndex: route.currentStopIndex,
-        status: stop.status,
-        address: stop.address,
-        location: stop.location.coordinates,
-        clientId: stop.clientId,
-        action: stop.action,
-        packageIds: stop.packageIds,
-        activePackageId,
-      },
+    if (isPackageStarted) {
+      socket.emit("session_resumed", {
+        role: "deliverer",
+        routeId: route._id,
+        routeNumber: route.routeNumber,
+        routeType: route.type,
+        routeStatus: route.status,
+        currentStopIndex: route.currentStopIndex,
+        totalStops: route.stops.length,
+        completedStops: route.completedStops,
+        remainingStops: route.stops.length - route.currentStopIndex,
+        scheduledEnd: route.scheduledEnd,
+        actualStart: route.actualStart,
+        isDelayed: route.scheduledEnd ? new Date() > route.scheduledEnd : false,
+        packageStarted: true,
 
-      activePackage: pkg
-        ? {
-            packageId: pkg._id,
-            trackingNumber: pkg.trackingNumber,
-            status: pkg.status,
-            recipientName: pkg.destination?.recipientName,
-            recipientPhone: pkg.destination?.recipientPhone,
-            address: pkg.destination?.address,
-            city: pkg.destination?.city,
-            attemptCount: pkg.attemptCount,
-            maxAttempts: pkg.maxAttempts,
-            estimatedDeliveryTime: pkg.estimatedDeliveryTime,
-            otp: {
-              alive: otpAlive,
-              expiresAt: memEntry
-                ? new Date(memEntry.expiresAt)
-                : (dbOtp?.expiresAt ?? null),
-              verified: dbOtp?.verified ?? false,
-            },
-          }
-        : null,
+        currentStop: {
+          stopId: stop._id,
+          stopIndex: route.currentStopIndex,
+          status: stop.status,
+          address: stop.address,
+          location: stop.location.coordinates,
+          clientId: stop.clientId,
+          action: stop.action,
+          packageIds: stop.packageIds,
+          activePackageId,
+        },
 
-      message:
-        route.status === "paused"
-          ? "Your route was paused. Tap Resume to continue."
-          : "You have an active delivery. Pick up where you left off.",
-      timestamp: new Date(),
-    });
+        activePackage: pkg
+          ? {
+              packageId: pkg._id,
+              trackingNumber: pkg.trackingNumber,
+              status: pkg.status,
+              recipientName: pkg.destination?.recipientName,
+              recipientPhone: pkg.destination?.recipientPhone,
+              address: pkg.destination?.address,
+              city: pkg.destination?.city,
+              attemptCount: pkg.attemptCount,
+              maxAttempts: pkg.maxAttempts,
+              estimatedDeliveryTime: pkg.estimatedDeliveryTime,
+              otp: {
+                alive: otpAlive,
+                expiresAt: memEntry
+                  ? new Date(memEntry.expiresAt)
+                  : (dbOtp?.expiresAt ?? null),
+                verified: dbOtp?.verified ?? false,
+              },
+            }
+          : null,
+
+        message:
+          route.status === "paused"
+            ? "Your route was paused. Tap Resume to continue."
+            : "You have an active delivery. Pick up where you left off.",
+        timestamp: new Date(),
+      });
+    } else {
+      // Package is NOT started - send minimal info so frontend can call start_package
+      socket.emit("session_resumed", {
+        role: "deliverer",
+        routeId: route._id,
+        routeNumber: route.routeNumber,
+        routeType: route.type,
+        routeStatus: route.status,
+        currentStopIndex: route.currentStopIndex,
+        totalStops: route.stops.length,
+        completedStops: route.completedStops,
+        remainingStops: route.stops.length - route.currentStopIndex,
+        scheduledEnd: route.scheduledEnd,
+        actualStart: route.actualStart,
+        isDelayed: route.scheduledEnd ? new Date() > route.scheduledEnd : false,
+        packageStarted: false,
+        packageNotStarted: true,
+
+        currentStop: {
+          stopId: stop._id,
+          stopIndex: route.currentStopIndex,
+          status: stop.status,
+          address: stop.address,
+          location: stop.location.coordinates,
+          clientId: stop.clientId,
+          action: stop.action,
+          packageIds: stop.packageIds,
+          activePackageId,
+        },
+
+        activePackage: pkg
+          ? {
+              packageId: pkg._id,
+              trackingNumber: pkg.trackingNumber,
+              status: pkg.status,
+              recipientName: pkg.destination?.recipientName,
+              recipientPhone: pkg.destination?.recipientPhone,
+              address: pkg.destination?.address,
+              city: pkg.destination?.city,
+              attemptCount: pkg.attemptCount,
+              maxAttempts: pkg.maxAttempts,
+              estimatedDeliveryTime: pkg.estimatedDeliveryTime,
+            }
+          : null,
+
+        message:
+          route.status === "paused"
+            ? "Your route was paused. Tap Resume to continue, then start the package."
+            : "You have an active route. Tap 'Start Package' to begin delivery.",
+        timestamp: new Date(),
+      });
+    }
 
     console.log(
       `[Socket] Deliverer ${userId} resumed — route ${route.routeNumber} ` +
         `stop ${route.currentStopIndex}/${route.stops.length - 1} ` +
-        `pkg ${activePackageId} otpAlive=${otpAlive}`,
+        `pkg ${activePackageId} started=${isPackageStarted} otpAlive=${otpAlive}`,
     );
   }
 
@@ -3902,14 +4081,10 @@ export class SocketService {
     }).lean();
     if (!route) return;
 
-    // currentStopIndex IS the queue pointer — same reasoning as deliverer.
-    // All manifests/packages at this stop are pending; the cursor would have
-    // moved past it already if anything here were already settled.
     const hubRoute = isHubRoute(route.type);
     const stop = route.stops[route.currentStopIndex];
     if (!stop) return;
 
-    // Hub routes: every manifest in stop.manifestIds is still on the truck.
     let pendingManifests: any[] = [];
     if (hubRoute && (stop.manifestIds ?? []).length > 0) {
       pendingManifests = await ManifestModel.find({
@@ -3921,7 +4096,6 @@ export class SocketService {
         .lean();
     }
 
-    // Non-hub routes: every package in stop.packageIds is still in the vehicle.
     let pendingPackages: any[] = [];
     if (!hubRoute && stop.packageIds.length > 0) {
       pendingPackages = await PackageModel.find({
@@ -3931,10 +4105,6 @@ export class SocketService {
         .lean();
     }
 
-    // ── Live QR session check (hub routes only) ───────────────────────────────
-    // If request_stop_qr was called before disconnect but scan_stop_qr was not,
-    // the session is still valid and the branch QR is still on screen.
-    // We return the code so the transporter app can go straight to "scan now".
     let pendingQrSession: any = null;
     if (hubRoute) {
       const qr = await StopQrSessionModel.findOne({
@@ -3957,7 +4127,6 @@ export class SocketService {
       }
     }
 
-    // ── Re-join route room ────────────────────────────────────────────────────
     socket.join(this.getRouteRoom(route._id.toString()));
 
     const nextStop = route.stops[route.currentStopIndex + 1] ?? null;
@@ -3987,7 +4156,6 @@ export class SocketService {
         action: stop.action,
         isLastStop: route.currentStopIndex === route.stops.length - 1,
 
-        // Hub routes: full manifest cards for everything still on the truck
         pendingManifestCount: pendingManifests.length,
         totalManifestCount: stop.manifestIds?.length ?? 0,
         pendingManifests: pendingManifests.map((m) => ({
@@ -4000,7 +4168,6 @@ export class SocketService {
           destinationBranchId: m.destinationBranchId,
         })),
 
-        // Non-hub routes: package cards
         pendingPackageCount: pendingPackages.length,
         totalPackageCount: stop.packageIds.length,
         pendingPackages: pendingPackages.map((p) => ({
@@ -4013,8 +4180,6 @@ export class SocketService {
         })),
       },
 
-      // Non-null only if request_stop_qr fired but scan_stop_qr did not yet —
-      // frontend should restore the "scan now" screen immediately
       pendingQrSession,
 
       nextStop: nextStop

@@ -12225,6 +12225,12 @@ export const getDeliveryHistory = catchAsyncError(
           address: pkg.destination?.address,
           city: pkg.destination?.city,
           state: pkg.destination?.state,
+          coordinates: pkg.deliveryType === "home" && pkg.destination.location?.coordinates
+            ? {
+              type: pkg.destination.location.type || "Point",
+              coordinates: pkg.destination.location.coordinates,
+            }
+            : null,
         },
 
         weight: pkg.weight,
