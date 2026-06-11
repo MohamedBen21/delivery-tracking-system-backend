@@ -52,6 +52,7 @@ import {
   deleteCashier,
   deleteLoader,
   getPackagesPaginatedFromRoute,
+  searchDeliveries,
 } from "../controllers/supervisor.controller";
 
 const supervisorRouter = Router();
@@ -134,7 +135,7 @@ supervisorRouter.patch(
 );
 
 supervisorRouter.get("/packages/search", isAuthenticated, searchPackages);
-supervisorRouter.get("/packages", isAuthenticated , authorizeRoles("deliverer" , "transporter"), getPackagesPaginated);
+// supervisorRouter.get("/packages", isAuthenticated , authorizeRoles("deliverer" , "transporter"), getPackagesPaginated);
 supervisorRouter.get("/packages", isAuthenticated , authorizeRoles("deliverer" , "transporter"), getPackagesPaginatedFromRoute);
 
 
@@ -287,6 +288,9 @@ supervisorRouter.get(
   authorizeRoles("supervisor" , "transporter", "deliverer"),
   getMyRoutes
 );
+
+supervisorRouter.get("/deliveries/search", isAuthenticated,authorizeRoles("deliverer"), searchDeliveries);
+
 
 export default supervisorRouter;
 
