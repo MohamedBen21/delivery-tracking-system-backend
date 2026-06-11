@@ -135,7 +135,7 @@ const transportationSchema = new Schema<ITransportation>({
     type: Schema.Types.ObjectId,
     ref: 'Route',
     required: [true, 'Source route reference is required'],
-    index: true,
+    // index: true,
   },
 
   source: {
