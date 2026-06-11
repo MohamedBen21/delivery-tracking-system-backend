@@ -22,7 +22,6 @@ app.use(cookieParser());
 
 app.use(
   cors({
-    // origin: process.env.ORIGIN,
     origin: process.env.ORIGIN || "http://localhost:3000",
     credentials: true,
   }),
@@ -47,13 +46,5 @@ app.use("/api/loader", loaderRouter);
 app.use("/api/tariffs", tarrifRouter);
 app.use("/api/notifications", notificationRouter);
 
-
-app.all("*", (req: Request, res: Response, next: NextFunction) => {
-  const err = new Error(`route ${req.originalUrl} not found :(`) as any;
-
-  err.statusCode = 404;
-
-  next(err);
-});
-
-app.use(ErrorMiddleware);
+// REMOVED the app.all("*") and app.use(ErrorMiddleware) from here
+// They will be moved to server.ts

@@ -10,6 +10,9 @@ import { Server } from 'socket.io';
 import { socketAuth } from './middleware/socketAuth';
 import { SocketService } from './services/socket.service';
 import { startStalePresenceCleanup } from './Cron/cleanupStalePresence.job'; 
+import { setupTrackingRoutes } from './routes/tracking.route';
+import { ErrorMiddleware } from "./middleware/errors"; // ADD THIS IMPORT
+import { NextFunction, Request, Response } from "express"; // ADD THIS IMPORT
 
 const port = process.env.PORT || 8080;
 
@@ -19,7 +22,6 @@ async function bootstrap() {
   
   await connectMongo();
   connectRedis();
-
 
   startStalePresenceCleanup();
 
@@ -33,11 +35,11 @@ async function bootstrap() {
       credentials: true
     },
 
-    pingTimeout: 20000,   // disconnect after 20 seconds of no pong from client
-    pingInterval: 25000,  // send ping to client every 25 seconds
-    transports: ["websocket"], // prefer WebSocket over polling
-    allowUpgrades: true,  // allow upgrade from polling to WebSocket
-    upgradeTimeout: 10000, // timeout for upgrade to WebSocket (10 seconds)
+    pingTimeout: 20000,
+    pingInterval: 25000,
+    transports: ["websocket"],
+    allowUpgrades: true,
+    upgradeTimeout: 10000,
 
   });
   
@@ -50,6 +52,17 @@ async function bootstrap() {
 
   (global as any).socketService = socketService;
 
+  // Register tracking routes HERE (before the 404 handler)
+  app.use("/api", setupTrackingRoutes(socketService));
+
+  // ADD 404 HANDLER HERE - AFTER all routes are registered
+  app.all("*", (req: Request, res: Response, next: NextFunction) => {
+    const err = new Error(`route ${req.originalUrl} not found :(`) as any;
+    err.statusCode = 404;
+    next(err);
+  });
+  
+  app.use(ErrorMiddleware);
 
   const server = httpServer.listen(port, () => {
 
