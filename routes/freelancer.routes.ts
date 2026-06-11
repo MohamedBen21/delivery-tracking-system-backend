@@ -28,10 +28,10 @@ freelancerRouter.get("/packages/delivered", getMyDeliveredPackages);
 freelancerRouter.get("/packages/:packageId/track", trackPackage);
 freelancerRouter.patch("/packages/:packageId/cancel", cancelPackage);
 
-freelancerRouter.post("/packages" ,isAuthenticated,authorizeRoles("freelancer"), createPackage);
+freelancerRouter.post("/packages", isAuthenticated, authorizeRoles("freelancer", "cashier"), createPackage);
 
 
-freelancerRouter.post("/packages" ,isAuthenticated,authorizeRoles("freelancer"), createPackageWithImages);
+freelancerRouter.post("/packages", isAuthenticated, authorizeRoles("freelancer"), createPackageWithImages);
 
 freelancerRouter.get("/branches/search", searchBranchesForPickup);
 

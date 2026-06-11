@@ -95,23 +95,23 @@ async function resolveFreelancer(
     next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     return null;
   }
-  
+
   const freelancer = await FreelancerModel.findOne({ userId });
-  
+
   if (!freelancer) {
     throw new ErrorHandler("Freelancer profile not found.", 404);
     return null;
   }
-  
+
   if (freelancer.status !== "active" || !freelancer.isActive) {
 
-    throw  new ErrorHandler(
-        `Your freelancer account is ${freelancer.status}. Contact support.`,
-        403,
+    throw new ErrorHandler(
+      `Your freelancer account is ${freelancer.status}. Contact support.`,
+      403,
     );
     return null;
   }
-  
+
   return freelancer;
 }
 
@@ -183,28 +183,28 @@ export const getMyPackages = catchAsyncError(
       return next(new ErrorHandler("sortOrder must be 'asc' or 'desc'", 400));
     }
 
-    const pageNum  = parseInt(page  ?? "1",  10);
+    const pageNum = parseInt(page ?? "1", 10);
     const limitNum = parseInt(limit ?? "20", 10);
-    if (isNaN(pageNum)  || pageNum  < 1)               return next(new ErrorHandler("page must be a positive integer", 400));
+    if (isNaN(pageNum) || pageNum < 1) return next(new ErrorHandler("page must be a positive integer", 400));
     if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
     const skip = (pageNum - 1) * limitNum;
 
 
     const matchStage: Record<string, any> = {
-      senderId:   new mongoose.Types.ObjectId((freelancerUserId as mongoose.Types.ObjectId).toString()),
+      senderId: new mongoose.Types.ObjectId((freelancerUserId as mongoose.Types.ObjectId).toString()),
       senderType: "freelancer",
     };
 
     if (statusFilter) {
       matchStage.status = statusFilter.length === 1 ? statusFilter[0] : { $in: statusFilter };
     }
-    if (deliveryType)  matchStage.deliveryType  = deliveryType;
+    if (deliveryType) matchStage.deliveryType = deliveryType;
     if (paymentStatus) matchStage.paymentStatus = paymentStatus;
     if (search) {
       const regex = { $regex: search.trim(), $options: "i" };
       matchStage.$or = [
         { trackingNumber: regex },
-        { "destination.recipientName":  regex },
+        { "destination.recipientName": regex },
         { "destination.recipientPhone": regex },
       ];
     }
@@ -221,15 +221,15 @@ export const getMyPackages = catchAsyncError(
       {
         $facet: {
           data: [{ $skip: skip }, { $limit: limitNum }],
-          totalCount:   [{ $count: "count" }],
+          totalCount: [{ $count: "count" }],
           statusSummary: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
           paymentSummary: [
             {
               $group: {
                 _id: null,
-                totalRevenue:   { $sum: "$totalPrice" },
-                totalPackages:  { $sum: 1 },
-                paidPackages:   { $sum: { $cond: [{ $eq: ["$paymentStatus", "paid"] }, 1, 0] } },
+                totalRevenue: { $sum: "$totalPrice" },
+                totalPackages: { $sum: 1 },
+                paidPackages: { $sum: { $cond: [{ $eq: ["$paymentStatus", "paid"] }, 1, 0] } },
                 pendingPayment: { $sum: { $cond: [{ $eq: ["$paymentStatus", "pending"] }, 1, 0] } },
               },
             },
@@ -257,8 +257,8 @@ export const getMyPackages = catchAsyncError(
       summary: {
         byStatus: statusSummary,
         payment: {
-          totalRevenue:   payment.totalRevenue,
-          paidPackages:   payment.paidPackages,
+          totalRevenue: payment.totalRevenue,
+          paidPackages: payment.paidPackages,
           pendingPayment: payment.pendingPayment,
         },
       },
@@ -288,16 +288,16 @@ export const getMyActivePackages = catchAsyncError(
       return next(new ErrorHandler("deliveryType must be 'home' or 'branch_pickup'", 400));
     }
 
-    const pageNum  = parseInt(page  ?? "1",  10);
+    const pageNum = parseInt(page ?? "1", 10);
     const limitNum = parseInt(limit ?? "20", 10);
-    if (isNaN(pageNum)  || pageNum  < 1)               return next(new ErrorHandler("page must be a positive integer", 400));
+    if (isNaN(pageNum) || pageNum < 1) return next(new ErrorHandler("page must be a positive integer", 400));
     if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
     const skip = (pageNum - 1) * limitNum;
 
     const matchStage: Record<string, any> = {
-      senderId:   new mongoose.Types.ObjectId((freelancerUserId as mongoose.Types.ObjectId).toString()),
+      senderId: new mongoose.Types.ObjectId((freelancerUserId as mongoose.Types.ObjectId).toString()),
       senderType: "freelancer",
-      status:     { $in: ACTIVE_STATUSES },
+      status: { $in: ACTIVE_STATUSES },
     };
 
     if (deliveryType) matchStage.deliveryType = deliveryType;
@@ -305,7 +305,7 @@ export const getMyActivePackages = catchAsyncError(
       const regex = { $regex: search.trim(), $options: "i" };
       matchStage.$or = [
         { trackingNumber: regex },
-        { "destination.recipientName":  regex },
+        { "destination.recipientName": regex },
         { "destination.recipientPhone": regex },
       ];
     }
@@ -316,8 +316,8 @@ export const getMyActivePackages = catchAsyncError(
       { $sort: { updatedAt: -1 } },
       {
         $facet: {
-          data:          [{ $skip: skip }, { $limit: limitNum }],
-          totalCount:    [{ $count: "count" }],
+          data: [{ $skip: skip }, { $limit: limitNum }],
+          totalCount: [{ $count: "count" }],
           statusBreakdown: [{ $group: { _id: "$status", count: { $sum: 1 } } }],
 
           needsAttention: [
@@ -352,7 +352,7 @@ export const getMyActivePackages = catchAsyncError(
       pagination: paginationMeta(total, pageNum, limitNum),
       summary: {
         total,
-        byStatus:      statusBreakdown,
+        byStatus: statusBreakdown,
         needsAttention: result.needsAttention[0]?.count ?? 0,
       },
     });
@@ -397,7 +397,7 @@ export const getMyDeliveredPackages = catchAsyncError(
     }
 
     let fromDateParsed: Date | undefined;
-    let toDateParsed:   Date | undefined;
+    let toDateParsed: Date | undefined;
 
     if (fromDate) {
       fromDateParsed = new Date(fromDate);
@@ -411,32 +411,32 @@ export const getMyDeliveredPackages = catchAsyncError(
       return next(new ErrorHandler("fromDate must be before toDate", 400));
     }
 
-    const pageNum  = parseInt(page  ?? "1",  10);
+    const pageNum = parseInt(page ?? "1", 10);
     const limitNum = parseInt(limit ?? "20", 10);
-    if (isNaN(pageNum)  || pageNum  < 1)               return next(new ErrorHandler("page must be a positive integer", 400));
+    if (isNaN(pageNum) || pageNum < 1) return next(new ErrorHandler("page must be a positive integer", 400));
     if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
     const skip = (pageNum - 1) * limitNum;
 
     const matchStage: Record<string, any> = {
-      senderId:   new mongoose.Types.ObjectId((freelancerUserId as mongoose.Types.ObjectId).toString()),
+      senderId: new mongoose.Types.ObjectId((freelancerUserId as mongoose.Types.ObjectId).toString()),
       senderType: "freelancer",
-      status:     "delivered",
+      status: "delivered",
     };
 
     if (fromDateParsed || toDateParsed) {
       matchStage.deliveredAt = {
         ...(fromDateParsed && { $gte: fromDateParsed }),
-        ...(toDateParsed   && { $lte: toDateParsed   }),
+        ...(toDateParsed && { $lte: toDateParsed }),
       };
     }
 
-    if (deliveryType)  matchStage.deliveryType  = deliveryType;
+    if (deliveryType) matchStage.deliveryType = deliveryType;
     if (paymentStatus) matchStage.paymentStatus = paymentStatus;
     if (search) {
       const regex = { $regex: search.trim(), $options: "i" };
       matchStage.$or = [
         { trackingNumber: regex },
-        { "destination.recipientName":  regex },
+        { "destination.recipientName": regex },
         { "destination.recipientPhone": regex },
       ];
     }
@@ -447,15 +447,15 @@ export const getMyDeliveredPackages = catchAsyncError(
       { $sort: { deliveredAt: sortOrder === "asc" ? 1 : -1 } },
       {
         $facet: {
-          data:         [{ $skip: skip }, { $limit: limitNum }],
-          totalCount:   [{ $count: "count" }],
+          data: [{ $skip: skip }, { $limit: limitNum }],
+          totalCount: [{ $count: "count" }],
           revenueStats: [
             {
               $group: {
-                _id:           null,
-                totalRevenue:  { $sum: "$totalPrice" },
+                _id: null,
+                totalRevenue: { $sum: "$totalPrice" },
                 avgOrderValue: { $avg: "$totalPrice" },
-                paidCount:     { $sum: { $cond: [{ $eq: ["$paymentStatus", "paid"] }, 1, 0] } },
+                paidCount: { $sum: { $cond: [{ $eq: ["$paymentStatus", "paid"] }, 1, 0] } },
               },
             },
           ],
@@ -464,10 +464,10 @@ export const getMyDeliveredPackages = catchAsyncError(
             {
               $group: {
                 _id: {
-                  year:  { $year:  "$deliveredAt" },
+                  year: { $year: "$deliveredAt" },
                   month: { $month: "$deliveredAt" },
                 },
-                count:   { $sum: 1 },
+                count: { $sum: 1 },
                 revenue: { $sum: "$totalPrice" },
               },
             },
@@ -478,7 +478,7 @@ export const getMyDeliveredPackages = catchAsyncError(
       },
     ]);
 
-    const total   = result.totalCount[0]?.count ?? 0;
+    const total = result.totalCount[0]?.count ?? 0;
     const revenue = result.revenueStats[0] ?? { totalRevenue: 0, avgOrderValue: 0, paidCount: 0 };
 
     return res.status(200).json({
@@ -487,9 +487,9 @@ export const getMyDeliveredPackages = catchAsyncError(
       pagination: paginationMeta(total, pageNum, limitNum),
       summary: {
         total,
-        totalRevenue:   revenue.totalRevenue,
-        avgOrderValue:  revenue.avgOrderValue,
-        paidCount:      revenue.paidCount,
+        totalRevenue: revenue.totalRevenue,
+        avgOrderValue: revenue.avgOrderValue,
+        paidCount: revenue.paidCount,
         monthlyBreakdown: result.monthlyBreakdown,
       },
     });
@@ -538,7 +538,7 @@ export const cancelPackage = catchAsyncError(
         FreelancerModel.findOne({ userId: freelancerUserId }).session(session),
         PackageModel.findOne({
           _id: packageId,
-          senderId:   freelancerUserId,
+          senderId: freelancerUserId,
           senderType: "freelancer",
         }).session(session),
       ]);
@@ -562,10 +562,10 @@ export const cancelPackage = catchAsyncError(
 
         throw new ErrorHandler(
           `Cannot cancel a package with status '${packageDoc.status}'. ` +
-            `Cancellation is only allowed while the package is: ${FREELANCER_CANCELLABLE_STATUSES.join(", ")}. ` +
-            `Contact your branch supervisor to cancel a shipment that is already in transit.`,
-            400,
-          )
+          `Cancellation is only allowed while the package is: ${FREELANCER_CANCELLABLE_STATUSES.join(", ")}. ` +
+          `Contact your branch supervisor to cancel a shipment that is already in transit.`,
+          400,
+        )
       }
 
       const now = new Date();
@@ -573,7 +573,7 @@ export const cancelPackage = catchAsyncError(
         ? `Cancelled by freelancer. Reason: ${reason.trim()}`
         : "Cancelled by freelancer";
 
-        await Promise.all([
+      await Promise.all([
 
         PackageModel.findByIdAndUpdate(
           packageId,
@@ -581,10 +581,10 @@ export const cancelPackage = catchAsyncError(
             $set: { status: "cancelled" },
             $push: {
               trackingHistory: {
-                status:    "cancelled",
-                branchId:  packageDoc.currentBranchId,
-                userId:    freelancerUserId,
-                notes:     noteText,
+                status: "cancelled",
+                branchId: packageDoc.currentBranchId,
+                userId: freelancerUserId,
+                notes: noteText,
                 timestamp: now,
               },
             },
@@ -602,13 +602,13 @@ export const cancelPackage = catchAsyncError(
         PackageHistoryModel.create(
           [
             {
-              packageId:   new mongoose.Types.ObjectId(packageId.toString()),
-              status:      "cancelled" as PackageStatus,
-              handledBy:   new mongoose.Types.ObjectId(freelancerUserId.toString()),
-              handlerRole: "client", 
-              branchId:    packageDoc.currentBranchId,
-              notes:       noteText,
-              timestamp:   now,
+              packageId: new mongoose.Types.ObjectId(packageId.toString()),
+              status: "cancelled" as PackageStatus,
+              handledBy: new mongoose.Types.ObjectId(freelancerUserId.toString()),
+              handlerRole: "client",
+              branchId: packageDoc.currentBranchId,
+              notes: noteText,
+              timestamp: now,
             },
           ],
           { session },
@@ -646,8 +646,8 @@ export const cancelPackage = catchAsyncError(
         data: {
           packageId,
           trackingNumber: packageDoc.trackingNumber,
-          status:         "cancelled",
-          cancelledAt:    now,
+          status: "cancelled",
+          cancelledAt: now,
           previousStatus: packageDoc.status,
         },
       });
@@ -664,7 +664,7 @@ export const cancelPackage = catchAsyncError(
     finally {
 
       if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -678,25 +678,25 @@ export const cancelPackage = catchAsyncError(
 //  TRACK PACKAGE
 //  Returns the full tracking timeline from the embedded trackingHistory array
 const READABLE_STATUS: Record<PackageStatus, string> = {
-  pending:               "Created",
-  accepted:              "Accepted",
-  at_origin_branch:      "At Origin Branch",
-  in_transit_to_branch:  "In Transit",
+  pending: "Created",
+  accepted: "Accepted",
+  at_origin_branch: "At Origin Branch",
+  in_transit_to_branch: "In Transit",
   at_destination_branch: "Arrived at Destination Branch",
-  out_for_delivery:      "Out for Delivery",
-  delivered:             "Delivered",
-  failed_delivery:       "Delivery Failed",
-  failed_delivery_attempt:       "Delivery Failed attempt",
+  out_for_delivery: "Out for Delivery",
+  delivered: "Delivered",
+  failed_delivery: "Delivery Failed",
+  failed_delivery_attempt: "Delivery Failed attempt",
 
   cashier_claimed: 'Claimed at Counter',
-  manifested:      'Assigned to Manifest',
+  manifested: 'Assigned to Manifest',
 
-  rescheduled:           "Rescheduled",
-  returned:              "Returned",
-  cancelled:             "Cancelled",
-  lost:                  "Lost",
-  damaged:               "Damaged",
-  on_hold:               "On Hold",
+  rescheduled: "Rescheduled",
+  returned: "Returned",
+  cancelled: "Cancelled",
+  lost: "Lost",
+  damaged: "Damaged",
+  on_hold: "On Hold",
 };
 
 const HAPPY_PATH: PackageStatus[] = [
@@ -719,12 +719,12 @@ function deliveryProgress(status: PackageStatus): number {
   if (idx !== -1) return Math.round((idx / (HAPPY_PATH.length - 1)) * 100);
   const exceptionMap: Partial<Record<PackageStatus, number>> = {
     failed_delivery: 80,
-    rescheduled:     70,
-    on_hold:         50,
-    returned:        100,
-    damaged:         100,
-    lost:            0,
-    cancelled:       0,
+    rescheduled: 70,
+    on_hold: 50,
+    returned: 100,
+    damaged: 100,
+    lost: 0,
+    cancelled: 0,
   };
   return exceptionMap[status] ?? 0;
 }
@@ -746,8 +746,8 @@ export const trackPackage = catchAsyncError(
     const [freelancer, packageDoc] = await Promise.all([
       FreelancerModel.findOne({ userId: freelancerUserId }).lean(),
       PackageModel.findOne({
-        _id:        packageId,
-        senderId:   freelancerUserId,
+        _id: packageId,
+        senderId: freelancerUserId,
         senderType: "freelancer",
       })
         .select(
@@ -756,8 +756,8 @@ export const trackPackage = catchAsyncError(
           "totalPrice paymentStatus estimatedDeliveryTime deliveredAt " +
           "attemptCount maxAttempts returnInfo trackingHistory createdAt weight type isFragile",
         )
-        .populate("originBranchId",      "name code address")
-        .populate("currentBranchId",     "name code address")
+        .populate("originBranchId", "name code address")
+        .populate("currentBranchId", "name code address")
         .populate("destinationBranchId", "name code address")
         .lean(),
     ]);
@@ -787,23 +787,23 @@ export const trackPackage = catchAsyncError(
       return {
         status,
         readableStatus: READABLE_STATUS[status] ?? status,
-        isException:    EXCEPTION_STATUSES.has(status),
-        stepState:      idx === history.length - 1 ? "active" : "completed",
-        timestamp:      event.timestamp,
-        notes:          event.notes   ?? null,
-        location:       event.location ?? null,
+        isException: EXCEPTION_STATUSES.has(status),
+        stepState: idx === history.length - 1 ? "active" : "completed",
+        timestamp: event.timestamp,
+        notes: event.notes ?? null,
+        location: event.location ?? null,
       };
     });
 
 
     const expectedSteps = HAPPY_PATH.map((status) => {
-      const reached   = history.find((e: any) => e.status === status);
+      const reached = history.find((e: any) => e.status === status);
       const isCurrent = status === currentStatus;
       return {
         status,
         readableStatus: READABLE_STATUS[status],
-        stepState:  reached ? (isCurrent ? "active" : "completed") : "pending",
-        timestamp:  reached?.timestamp ?? null,
+        stepState: reached ? (isCurrent ? "active" : "completed") : "pending",
+        timestamp: reached?.timestamp ?? null,
       };
     });
 
@@ -814,45 +814,45 @@ export const trackPackage = catchAsyncError(
       const seconds = Math.floor(
         (Date.now() - new Date(latestEvent.timestamp).getTime()) / 1000,
       );
-      if      (seconds < 60)    lastUpdatedAgo = "just now";
-      else if (seconds < 3600)  lastUpdatedAgo = `${Math.floor(seconds / 60)}m ago`;
+      if (seconds < 60) lastUpdatedAgo = "just now";
+      else if (seconds < 3600) lastUpdatedAgo = `${Math.floor(seconds / 60)}m ago`;
       else if (seconds < 86400) lastUpdatedAgo = `${Math.floor(seconds / 3600)}h ago`;
-      else                      lastUpdatedAgo = `${Math.floor(seconds / 86400)}d ago`;
+      else lastUpdatedAgo = `${Math.floor(seconds / 86400)}d ago`;
     }
 
     return res.status(200).json({
       success: true,
 
       currentState: {
-        status:         currentStatus,
+        status: currentStatus,
         readableStatus: READABLE_STATUS[currentStatus] ?? currentStatus,
-        isException:    EXCEPTION_STATUSES.has(currentStatus),
-        progress:       deliveryProgress(currentStatus),
+        isException: EXCEPTION_STATUSES.has(currentStatus),
+        progress: deliveryProgress(currentStatus),
         lastUpdatedAgo,
       },
 
       package: {
-        trackingNumber:        packageDoc.trackingNumber,
-        type:                  (packageDoc as any).type,
-        isFragile:             (packageDoc as any).isFragile,
-        weight:                (packageDoc as any).weight,
-        deliveryType:          packageDoc.deliveryType,
-        deliveryPriority:      (packageDoc as any).deliveryPriority,
-        totalPrice:            (packageDoc as any).totalPrice,
-        paymentStatus:         (packageDoc as any).paymentStatus,
+        trackingNumber: packageDoc.trackingNumber,
+        type: (packageDoc as any).type,
+        isFragile: (packageDoc as any).isFragile,
+        weight: (packageDoc as any).weight,
+        deliveryType: packageDoc.deliveryType,
+        deliveryPriority: (packageDoc as any).deliveryPriority,
+        totalPrice: (packageDoc as any).totalPrice,
+        paymentStatus: (packageDoc as any).paymentStatus,
         estimatedDeliveryTime: (packageDoc as any).estimatedDeliveryTime ?? null,
-        deliveredAt:           (packageDoc as any).deliveredAt           ?? null,
-        attemptCount:          (packageDoc as any).attemptCount,
-        maxAttempts:           (packageDoc as any).maxAttempts,
-        isReturn:              (packageDoc as any).returnInfo?.isReturn   ?? false,
+        deliveredAt: (packageDoc as any).deliveredAt ?? null,
+        attemptCount: (packageDoc as any).attemptCount,
+        maxAttempts: (packageDoc as any).maxAttempts,
+        isReturn: (packageDoc as any).returnInfo?.isReturn ?? false,
         recipient: {
-          name:  packageDoc.destination.recipientName,
+          name: packageDoc.destination.recipientName,
           phone: packageDoc.destination.recipientPhone,
-          city:  packageDoc.destination.city,
+          city: packageDoc.destination.city,
           state: packageDoc.destination.state,
         },
-        originBranch:      packageDoc.originBranchId,
-        currentBranch:     packageDoc.currentBranchId,
+        originBranch: packageDoc.originBranchId,
+        currentBranch: packageDoc.currentBranchId,
         destinationBranch: packageDoc.destinationBranchId ?? null,
       },
 
@@ -867,48 +867,48 @@ export const trackPackage = catchAsyncError(
 export const getMeFreelancer = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?._id;
- 
+
     if (!userId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
- 
+
     const [user, freelancer] = await Promise.all([
       userModel.findById(userId)
         .select("firstName lastName email phone imageUrl role status createdAt")
         .lean(),
       FreelancerModel.findOne({ userId })
-        .populate("companyId",            "name logo status")
+        .populate("companyId", "name logo status")
         .populate("defaultOriginBranchId", "name code address wilaya")
         .lean(),
     ]);
- 
+
     if (!user) {
       return next(new ErrorHandler("User not found.", 404));
     }
     if (!freelancer) {
       return next(new ErrorHandler("Freelancer profile not found.", 404));
     }
- 
+
     return res.status(200).json({
       success: true,
       data: {
 
-        firstName:   user.firstName,
-        lastName:    user.lastName,
-        email:       user.email,
-        phone:       user.phone,
-        imageUrl:    user.imageUrl,
-        role:        user.role,
-        status:      user.status,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone,
+        imageUrl: user.imageUrl,
+        role: user.role,
+        status: user.status,
 
-        businessName:          freelancer.businessName          ?? null,
-        businessType:          freelancer.businessType          ?? null,
+        businessName: freelancer.businessName ?? null,
+        businessType: freelancer.businessType ?? null,
         preferredDeliveryType: freelancer.preferredDeliveryType ?? null,
-        freelancerStatus:      freelancer.status,
-        statistics:            freelancer.statistics,
-        company:               freelancer.companyId,       
-        defaultOriginBranch:   freelancer.defaultOriginBranchId,
-        lastActiveAt:          freelancer.lastActiveAt,
+        freelancerStatus: freelancer.status,
+        statistics: freelancer.statistics,
+        company: freelancer.companyId,
+        defaultOriginBranch: freelancer.defaultOriginBranchId,
+        lastActiveAt: freelancer.lastActiveAt,
       },
     });
   },
@@ -927,15 +927,15 @@ export const getMeFreelancer = catchAsyncError(
 //  Blocked: status, statistics, companyId, defaultOriginBranchId, lastActiveAt
 //  — all system or supervisor managed.
 
- 
+
 export const updateMeFreelancer = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?._id;
- 
+
     if (!userId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
- 
+
     const blocked = ["status", "statistics", "companyId", "defaultOriginBranchId", "lastActiveAt"];
     const blockedFound = blocked.filter((f) => f in req.body);
     if (blockedFound.length) {
@@ -946,32 +946,32 @@ export const updateMeFreelancer = catchAsyncError(
         ),
       );
     }
- 
+
     const [user, freelancer] = await Promise.all([
       userModel.findById(userId).lean(),
       FreelancerModel.findOne({ userId }).lean(),
     ]);
- 
-    if (!user)       return next(new ErrorHandler("User not found.", 404));
+
+    if (!user) return next(new ErrorHandler("User not found.", 404));
     if (!freelancer) return next(new ErrorHandler("Freelancer profile not found.", 404));
- 
+
     if (freelancer.status === "suspended") {
       return next(new ErrorHandler("Your account is suspended. Contact support.", 403));
     }
- 
+
 
     const userUpdates = buildUserFieldUpdates(req.body, next);
 
     if (!userUpdates) return;
- 
+
 
     const freelancerUpdates: Record<string, any> = {};
     const { businessName, businessType, preferredDeliveryType } = req.body as {
-      businessName?:          string;
-      businessType?:          string;
+      businessName?: string;
+      businessType?: string;
       preferredDeliveryType?: string;
     };
- 
+
     if (businessName !== undefined) {
       if (typeof businessName !== "string") {
         return next(new ErrorHandler("businessName must be a string", 400));
@@ -982,7 +982,7 @@ export const updateMeFreelancer = catchAsyncError(
       }
       freelancerUpdates.businessName = trimmed || null;
     }
- 
+
     if (businessType !== undefined) {
       const valid = ["individual", "small_business", "ecommerce", "other"];
       if (!valid.includes(businessType)) {
@@ -992,7 +992,7 @@ export const updateMeFreelancer = catchAsyncError(
       }
       freelancerUpdates.businessType = businessType;
     }
- 
+
     if (preferredDeliveryType !== undefined) {
       if (!["home", "branch_pickup"].includes(preferredDeliveryType)) {
         return next(
@@ -1001,25 +1001,25 @@ export const updateMeFreelancer = catchAsyncError(
       }
       freelancerUpdates.preferredDeliveryType = preferredDeliveryType;
     }
- 
+
     const allUpdates = { ...userUpdates, ...freelancerUpdates };
- 
+
     if (Object.keys(allUpdates).length === 0) {
       return next(new ErrorHandler("No valid fields to update.", 400));
     }
- 
+
 
     await Promise.all([
       Object.keys(userUpdates).length > 0 &&
-        userModel.findByIdAndUpdate(userId, { $set: userUpdates }, { runValidators: true }),
+      userModel.findByIdAndUpdate(userId, { $set: userUpdates }, { runValidators: true }),
       Object.keys(freelancerUpdates).length > 0 &&
-        FreelancerModel.findByIdAndUpdate(
-          freelancer._id,
-          { $set: { ...freelancerUpdates, lastActiveAt: new Date() } },
-          { runValidators: true },
-        ),
+      FreelancerModel.findByIdAndUpdate(
+        freelancer._id,
+        { $set: { ...freelancerUpdates, lastActiveAt: new Date() } },
+        { runValidators: true },
+      ),
     ]);
- 
+
     const [updatedUser, updatedFreelancer] = await Promise.all([
       userModel.findById(userId)
         .select("firstName lastName email phone imageUrl role status")
@@ -1028,18 +1028,18 @@ export const updateMeFreelancer = catchAsyncError(
         .select("businessName businessType preferredDeliveryType status statistics lastActiveAt")
         .lean(),
     ]);
- 
+
     return res.status(200).json({
       success: true,
       message: "Profile updated successfully",
       data: {
         ...updatedUser,
-        businessName:          updatedFreelancer?.businessName          ?? null,
-        businessType:          updatedFreelancer?.businessType          ?? null,
+        businessName: updatedFreelancer?.businessName ?? null,
+        businessType: updatedFreelancer?.businessType ?? null,
         preferredDeliveryType: updatedFreelancer?.preferredDeliveryType ?? null,
-        freelancerStatus:      updatedFreelancer?.status,
-        statistics:            updatedFreelancer?.statistics,
-        lastActiveAt:          updatedFreelancer?.lastActiveAt,
+        freelancerStatus: updatedFreelancer?.status,
+        statistics: updatedFreelancer?.statistics,
+        lastActiveAt: updatedFreelancer?.lastActiveAt,
       },
     });
   },
@@ -1049,6 +1049,7 @@ export const updateMeFreelancer = catchAsyncError(
 
 
 interface ICreatePackageBody {
+  freelancerId?: string; // cashier selects freelancer
 
   recipientName: string;
   recipientPhone: string;
@@ -1061,7 +1062,6 @@ interface ICreatePackageBody {
 
   deliveryLat?: number;
   deliveryLon?: number;
- 
 
   weight: number;
   dimensions?: { length: number; width: number; height: number };
@@ -1069,16 +1069,13 @@ interface ICreatePackageBody {
   type: "document" | "parcel" | "fragile" | "heavy" | "perishable" | "electronic" | "clothing";
   description?: string;
   declaredValue?: number;
- 
 
   deliveryType: "home" | "branch_pickup";
   deliveryPriority?: "standard" | "express" | "same_day";
-  destinationBranchId?: string;   
- 
+  destinationBranchId?: string;
 
   totalPrice: number;
   paymentMethod?: string;
- 
 
   estimatedDeliveryTime?: string;
 }
@@ -1087,15 +1084,15 @@ interface ICreatePackageBody {
 
 function normalizePhone(phone: string): string {
   let normalized = phone.trim().replace(/[^\d+]/g, '').replace(/\s+/g, '');
-  
+
   if (normalized.startsWith('0')) {
     normalized = '+213' + normalized.substring(1);
   }
-  
+
   if (!normalized.startsWith('+213')) {
     throw new Error('Phone number must start with +213 or 0');
   }
-  
+
   return normalized;
 }
 
@@ -1119,13 +1116,13 @@ async function resolveClientByPhone(
 ): Promise<mongoose.Types.ObjectId> {
   const normalizedPhone = normalizePhone(recipientPhone);
   const normalizedAltPhone = alternativePhone ? normalizePhone(alternativePhone) : undefined;
-  
 
-  const existingClient = await userModel.findOne({ 
+
+  const existingClient = await userModel.findOne({
     phone: normalizedPhone,
-    role: "client" 
+    role: "client"
   }).session(session || null);
-  
+
   if (existingClient) {
 
     await clientModel.findOneAndUpdate(
@@ -1143,15 +1140,15 @@ async function resolveClientByPhone(
       },
       { session: session || null, upsert: true }
     );
-    
+
     return existingClient._id;
   }
-  
+
 
   const nameParts = recipientName.trim().split(' ');
   const firstName = nameParts[0] || 'Client';
   const lastName = nameParts.slice(1).join(' ') || 'Recipient';
-  
+
   const [newClientUser] = await userModel.create(
     [{
 
@@ -1185,22 +1182,45 @@ async function resolveClientByPhone(
 
 export const createPackage = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
- 
+
     const session = await mongoose.startSession();
     session.startTransaction();
 
     let transactionCommitted = false;
- 
+
     try {
-      const freelancerUserId = req.user?._id;
- 
-      if (!freelancerUserId) {
+      const currentUserId = req.user?._id;
+
+      if (!currentUserId) {
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
-      const freelancer = await resolveFreelancer(freelancerUserId, next);
-      if (!freelancer) return;
- 
+      const { freelancerId } = req.body;
+
+      let freelancer: IFreelancer | null = null;
+      let createdByRole: "freelancer" | "cashier" = "freelancer";
+
+      if (freelancerId) {
+        createdByRole = "cashier";
+
+        freelancer = await FreelancerModel.findById(freelancerId);
+
+        if (!freelancer) {
+          throw new ErrorHandler("Freelancer not found.", 404);
+        }
+
+        if (freelancer.status !== "active" || !freelancer.isActive) {
+          throw new ErrorHandler(
+            `Freelancer account is ${freelancer.status}.`,
+            403
+          );
+        }
+      } else {
+        freelancer = await resolveFreelancer(currentUserId, next);
+
+        if (!freelancer) return;
+      }
+
 
       const {
         recipientName,
@@ -1226,7 +1246,7 @@ export const createPackage = catchAsyncError(
         deliveryLat,
         deliveryLon
       } = req.body as ICreatePackageBody;
- 
+
 
       // ── Required fields validation ──────────────────────────────────────────
       if (
@@ -1240,30 +1260,30 @@ export const createPackage = catchAsyncError(
           400,
         );
       }
- 
+
 
       if (typeof weight !== "number" || weight <= 0) {
         throw new ErrorHandler("weight must be a positive number.", 400);
       }
- 
+
       if (typeof totalPrice !== "number" || totalPrice <= 0) {
         throw new ErrorHandler("totalPrice must be a positive number.", 400);
       }
- 
+
       const VALID_TYPES = ["document", "parcel", "fragile", "heavy", "perishable", "electronic", "clothing"];
       if (!VALID_TYPES.includes(type)) {
         throw new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400);
       }
- 
+
       if (!["home", "branch_pickup"].includes(deliveryType)) {
         throw new ErrorHandler("deliveryType must be 'home' or 'branch_pickup'.", 400);
       }
- 
+
 
       // ── Phone number normalization ──────────────────────────────────────────
       let normalizedRecipientPhone: string;
       let normalizedAlternativePhone: string | undefined;
-      
+
       try {
         normalizedRecipientPhone = normalizePhone(recipientPhone);
         if (alternativePhone) {
@@ -1272,18 +1292,18 @@ export const createPackage = catchAsyncError(
       } catch (error: any) {
         throw new ErrorHandler(error.message || "Invalid phone number format.", 400);
       }
- 
+
 
       // ── Origin branch validation ────────────────────────────────────────────
       const originBranchId = freelancer.defaultOriginBranchId;
- 
+
       if (!originBranchId) {
         throw new ErrorHandler(
           "Your freelancer profile has no default origin branch set. Contact support.",
           400,
         );
       }
- 
+
 
       // ── Determine destinationBranchId ───────────────────────────────────────
       let finalDestinationBranchId: mongoose.Types.ObjectId | undefined;
@@ -1298,13 +1318,13 @@ export const createPackage = catchAsyncError(
           throw new ErrorHandler("Invalid destinationBranchId.", 400);
         }
         finalDestinationBranchId = new mongoose.Types.ObjectId(providedDestinationBranchId);
-        
+
         // Fetch destination branch for response
         destinationBranchDoc = await BranchModel.findById(finalDestinationBranchId).session(session).lean();
         if (!destinationBranchDoc || destinationBranchDoc.status !== "active") {
           throw new ErrorHandler("Destination branch not found or not active.", 404);
         }
-        
+
       } else if (deliveryType === "home") {
         // home delivery: route to the nearest REGIONAL MAIN HUB
         // (not the nearest any-branch — only hubs run the CVRP deliverer pass)
@@ -1341,26 +1361,26 @@ export const createPackage = catchAsyncError(
         }
 
         finalDestinationBranchId = nearestHubId;
-        
+
         // Fetch hub doc for response (name, code, address used in bordereau)
         destinationBranchDoc = await BranchModel
           .findById(finalDestinationBranchId)
           .session(session)
           .lean();
       }
- 
+
 
       // ── Validate origin branch ──────────────────────────────────────────────
       const originBranch = await BranchModel.findById(originBranchId).session(session).lean();
- 
+
       if (!originBranch) {
         throw new ErrorHandler("Origin branch not found.", 404);
       }
- 
+
       if (originBranch.status !== "active") {
         throw new ErrorHandler("Your origin branch is not currently active.", 400);
       }
- 
+
 
       // ── REMOVED: same-branch home delivery guard ──────────────────────────────
       // The old guard that blocked packages when origin branch was the same as
@@ -1372,8 +1392,8 @@ export const createPackage = catchAsyncError(
 
       // Always start as pending — cashier claim/accept handles the rest
       const initialStatus: PackageStatus = "pending";
- 
-   
+
+
       // ── Build destination object ────────────────────────────────────────────
       const destination = {
         recipientName: recipientName.trim(),
@@ -1391,10 +1411,10 @@ export const createPackage = catchAsyncError(
           },
         }),
       };
- 
+
 
       const trackingNumber = generateTrackingNumber();
- 
+
 
       const clientId = await resolveClientByPhone(
         recipientPhone,
@@ -1405,7 +1425,7 @@ export const createPackage = catchAsyncError(
         alternativePhone,
         session,
       );
- 
+
 
       // ── Create package document ─────────────────────────────────────────────
       const [packageDoc] = await PackageModel.create(
@@ -1413,46 +1433,60 @@ export const createPackage = catchAsyncError(
           {
             trackingNumber,
             companyId: freelancer.companyId,
-            senderId: freelancerUserId,
+            senderId: freelancer.userId,
             senderType: "freelancer",
+
+            createdBy: currentUserId,
+            createdByRole,
             clientId,
- 
+
             weight,
             dimensions,
             isFragile: isFragile ?? false,
             type,
             description: description?.trim(),
             declaredValue,
- 
+
             originBranchId,
             currentBranchId: originBranchId,
             destinationBranchId: finalDestinationBranchId,
- 
+
             destination,
- 
+
             status: initialStatus,
             deliveryType,
             deliveryPriority: deliveryPriority ?? "standard",
- 
+
             totalPrice,
             paymentStatus: "pending",
             paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
- 
+
             maxAttempts: 3,
             attemptCount: 0,
             issues: [],
             returnInfo: { isReturn: false },
- 
+
             estimatedDeliveryTime: estimatedDeliveryTime
               ? new Date(estimatedDeliveryTime)
               : undefined,
- 
+
             trackingHistory: [
               {
                 status: "pending",
                 branchId: originBranchId,
-                userId: freelancerUserId,
-                notes: `Package registered by freelancer. ${deliveryType === "home" ? `Routed to hub: ${destinationBranchDoc?.name || "unknown"}` : ""}`,
+                userId: currentUserId,
+
+                notes:
+                  createdByRole === "cashier"
+                    ? `Package registered by cashier for freelancer ${freelancer.businessName || freelancer._id
+                    }. ${deliveryType === "home"
+                      ? `Routed to hub: ${destinationBranchDoc?.name || "unknown"}`
+                      : ""
+                    }`
+                    : `Package registered by freelancer. ${deliveryType === "home"
+                      ? `Routed to hub: ${destinationBranchDoc?.name || "unknown"}`
+                      : ""
+                    }`,
                 timestamp: new Date(),
               },
             ],
@@ -1460,7 +1494,7 @@ export const createPackage = catchAsyncError(
         ],
         { session },
       );
- 
+
 
       await PackageHistoryModel.create(
         [
@@ -1468,17 +1502,20 @@ export const createPackage = catchAsyncError(
             packageId: packageDoc._id,
             status: "pending" as PackageStatus,
             branchId: originBranchId,
-            handledBy: freelancerUserId,
-            handlerRole: "freelancer",
-            notes: deliveryType === "home" 
-              ? `Package registered for home delivery. Will be routed to hub: ${destinationBranchDoc?.name || "unknown"}`
-              : "Package registered by freelancer via mobile app.",
+            handledBy: currentUserId,
+            handlerRole: createdByRole,
+            notes:
+              createdByRole === "cashier"
+                ? `Package registered by cashier for freelancer.`
+                : deliveryType === "home"
+                  ? `Package registered for home delivery. Will be routed to hub: ${destinationBranchDoc?.name || "unknown"}`
+                  : "Package registered by freelancer via mobile app.",
             timestamp: new Date(),
           },
         ],
         { session },
       );
- 
+
 
       // ── Create payment record ───────────────────────────────────────────────
       await PaymentModel.create(
@@ -1489,7 +1526,7 @@ export const createPackage = catchAsyncError(
             trackingNumber,
             branchId: originBranchId,
             clientId,
-            senderId: freelancerUserId,
+            senderId: freelancer.userId,
             collectionMethod: deliveryType === "home" ? "home_delivery" : "branch_pickup",
             amount: totalPrice,
             paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
@@ -1498,7 +1535,7 @@ export const createPackage = catchAsyncError(
         ],
         { session },
       );
- 
+
 
       // ── Update freelancer stats ─────────────────────────────────────────────
       await FreelancerModel.findByIdAndUpdate(
@@ -1509,20 +1546,20 @@ export const createPackage = catchAsyncError(
         },
         { session },
       );
- 
+
       await session.commitTransaction();
       transactionCommitted = true;
 
 
       sendPackageCreatedNotification(
-        freelancerUserId.toString(),
+        freelancer.userId.toString(),
         "freelancer",
         packageDoc._id.toString(),
         trackingNumber
       ).catch(error => {
         console.error('Package created notification failed:', error);
       });
- 
+
 
       // ── Build response message ──────────────────────────────────────────────
       let responseMessage: string;
@@ -1548,12 +1585,12 @@ export const createPackage = catchAsyncError(
             trackingNumber,
             barcodeFormat: "CODE128",
             generatedAt: new Date().toISOString(),
- 
+
             sender: {
               businessName: freelancer.businessName ?? null,
               phone: (req.user as any)?.phone ?? null,
             },
- 
+
             recipient: {
               name: destination.recipientName,
               phone: destination.recipientPhone,
@@ -1562,7 +1599,7 @@ export const createPackage = catchAsyncError(
               state: destination.state,
               postalCode: destination.postalCode ?? null,
             },
- 
+
             package: {
               weight,
               type,
@@ -1571,31 +1608,31 @@ export const createPackage = catchAsyncError(
               deliveryType,
               deliveryPriority: deliveryPriority ?? "standard",
             },
- 
+
             originBranch: {
               id: originBranch._id,
               name: originBranch.name,
               code: originBranch.code,
               address: originBranch.address,
             },
- 
+
             destinationBranch: destinationBranchDoc
               ? {
-                  id: destinationBranchDoc._id,
-                  name: destinationBranchDoc.name,
-                  code: destinationBranchDoc.code,
-                  address: destinationBranchDoc.address,
-                }
+                id: destinationBranchDoc._id,
+                name: destinationBranchDoc.name,
+                code: destinationBranchDoc.code,
+                address: destinationBranchDoc.address,
+              }
               : null,
- 
+
             totalPrice,
             paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
           },
- 
+
           createdAt: packageDoc.createdAt,
         },
       });
- 
+
     } catch (error: any) {
 
       if (error.name === "ValidationError") {
@@ -1608,22 +1645,22 @@ export const createPackage = catchAsyncError(
           ),
         );
       }
-      
+
       return next(error);
 
     } finally {
       if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
   },
 );
 
-  // if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-  //   await session.abortTransaction().catch(() => {});
-  // }
-  // await session.endSession();
+// if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+//   await session.abortTransaction().catch(() => {});
+// }
+// await session.endSession();
 
 
 
@@ -2173,10 +2210,10 @@ export const createPackage = catchAsyncError(
 //       return next(error);
 
 //     } finally {
-      // if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-      //   await session.abortTransaction().catch(() => {});
-      // }
-      // await session.endSession();
+// if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+//   await session.abortTransaction().catch(() => {});
+// }
+// await session.endSession();
 //     }
 //   },
 // );
@@ -2267,7 +2304,7 @@ export const createPackage = catchAsyncError(
 //     // We need to search through all communes and find ones that:
 //     // - Are in servedCommuneIds (company actually serves them)
 //     // - Match the search term (name, post_code, or ar_name)
-    
+
 //     const allCommunes = loadCommunes(); // You'll need to export this from branch.util.ts
 //     const matchingResults: IServedCommuneResult[] = [];
 
@@ -2502,23 +2539,23 @@ interface ICreatePackageBodyWithImages {
 
   deliveryLat?: number;
   deliveryLon?: number;
- 
+
   weight: number;
   dimensions?: { length: number; width: number; height: number };
   isFragile?: boolean;
   type: "document" | "parcel" | "fragile" | "heavy" | "perishable" | "electronic" | "clothing";
   description?: string;
   declaredValue?: number;
- 
+
   deliveryType: "home" | "branch_pickup";
   deliveryPriority?: "standard" | "express" | "same_day";
-  destinationBranchId?: string;   
- 
+  destinationBranchId?: string;
+
   totalPrice: number;
   paymentMethod?: string;
- 
+
   estimatedDeliveryTime?: string;
-  
+
   images?: string[];
 }
 
@@ -2528,18 +2565,18 @@ export const createPackageWithImages = catchAsyncError(
     session.startTransaction();
 
     let transactionCommitted = false;
-    let uploadedImagePublicIds: string[] = []; 
- 
+    let uploadedImagePublicIds: string[] = [];
+
     try {
       const freelancerUserId = req.user?._id;
- 
+
       if (!freelancerUserId) {
         return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
       }
 
       const freelancer = await resolveFreelancer(freelancerUserId, next);
       if (!freelancer) return;
- 
+
       const {
         recipientName,
         recipientPhone,
@@ -2578,52 +2615,52 @@ export const createPackageWithImages = catchAsyncError(
           400,
         );
       }
- 
+
       if (typeof weight !== "number" || weight <= 0) {
         throw new ErrorHandler("weight must be a positive number.", 400);
       }
- 
+
       if (typeof totalPrice !== "number" || totalPrice <= 0) {
         throw new ErrorHandler("totalPrice must be a positive number.", 400);
       }
- 
+
       const VALID_TYPES = ["document", "parcel", "fragile", "heavy", "perishable", "electronic", "clothing"];
       if (!VALID_TYPES.includes(type)) {
         throw new ErrorHandler(`type must be one of: ${VALID_TYPES.join(", ")}`, 400);
       }
- 
+
       if (!["home", "branch_pickup"].includes(deliveryType)) {
         throw new ErrorHandler("deliveryType must be 'home' or 'branch_pickup'.", 400);
       }
 
 
       let uploadedImages: Array<{ public_id: string; url: string }> = [];
-      
+
       if (providedImages && Array.isArray(providedImages) && providedImages.length > 0) {
 
         if (providedImages.length > MAX_PACKAGE_IMAGES) {
           throw new ErrorHandler(`Cannot upload more than ${MAX_PACKAGE_IMAGES} images per package.`, 400);
         }
-        
+
 
         for (let i = 0; i < providedImages.length; i++) {
           const img = providedImages[i];
-          
+
           if (!img || typeof img !== 'string') {
             throw new ErrorHandler(`Image at index ${i} is invalid.`, 400);
           }
-          
+
 
           const isValidBase64 = img.startsWith('data:image/');
           const isValidUrl = img.startsWith('http://') || img.startsWith('https://');
-          
+
           if (!isValidBase64 && !isValidUrl) {
             throw new ErrorHandler(
               `Invalid image format at index ${i}. Please provide base64 data URL or valid image URL.`,
               400
             );
           }
-          
+
 
           if (isValidBase64) {
             const base64Data = img.split(',')[1];
@@ -2635,7 +2672,7 @@ export const createPackageWithImages = catchAsyncError(
               );
             }
           }
-          
+
           try {
             const uploaded = await uploadPackageImageToCloudinary(img, i);
             uploadedImages.push(uploaded);
@@ -2645,11 +2682,11 @@ export const createPackageWithImages = catchAsyncError(
           }
         }
       }
- 
+
 
       let normalizedRecipientPhone: string;
       let normalizedAlternativePhone: string | undefined;
-      
+
       try {
         normalizedRecipientPhone = normalizePhone(recipientPhone);
         if (alternativePhone) {
@@ -2658,17 +2695,17 @@ export const createPackageWithImages = catchAsyncError(
       } catch (error: any) {
         throw new ErrorHandler(error.message || "Invalid phone number format.", 400);
       }
- 
+
 
       const originBranchId = freelancer.defaultOriginBranchId;
- 
+
       if (!originBranchId) {
         throw new ErrorHandler(
           "Your freelancer profile has no default origin branch set. Contact support.",
           400,
         );
       }
- 
+
 
       let finalDestinationBranchId: mongoose.Types.ObjectId | undefined;
       let destinationBranchDoc: any = null;
@@ -2681,12 +2718,12 @@ export const createPackageWithImages = catchAsyncError(
           throw new ErrorHandler("Invalid destinationBranchId.", 400);
         }
         finalDestinationBranchId = new mongoose.Types.ObjectId(providedDestinationBranchId);
-        
+
         destinationBranchDoc = await BranchModel.findById(finalDestinationBranchId).session(session).lean();
         if (!destinationBranchDoc || destinationBranchDoc.status !== "active") {
           throw new ErrorHandler("Destination branch not found or not active.", 404);
         }
-        
+
       } else if (deliveryType === "home") {
         if (deliveryLat === undefined || deliveryLon === undefined) {
           throw new ErrorHandler(
@@ -2717,26 +2754,26 @@ export const createPackageWithImages = catchAsyncError(
         }
 
         finalDestinationBranchId = nearestHubId;
-        
+
         destinationBranchDoc = await BranchModel
           .findById(finalDestinationBranchId)
           .session(session)
           .lean();
       }
- 
+
 
       const originBranch = await BranchModel.findById(originBranchId).session(session).lean();
- 
+
       if (!originBranch) {
         throw new ErrorHandler("Origin branch not found.", 404);
       }
- 
+
       if (originBranch.status !== "active") {
         throw new ErrorHandler("Your origin branch is not currently active.", 400);
       }
- 
+
       const initialStatus: PackageStatus = "pending";
-   
+
 
       const destination = {
         recipientName: recipientName.trim(),
@@ -2754,9 +2791,9 @@ export const createPackageWithImages = catchAsyncError(
           },
         }),
       };
- 
+
       const trackingNumber = generateTrackingNumber();
- 
+
       const clientId = await resolveClientByPhone(
         recipientPhone,
         recipientName,
@@ -2766,7 +2803,7 @@ export const createPackageWithImages = catchAsyncError(
         alternativePhone,
         session,
       );
- 
+
 
       const [packageDoc] = await PackageModel.create(
         [
@@ -2776,40 +2813,40 @@ export const createPackageWithImages = catchAsyncError(
             senderId: freelancerUserId,
             senderType: "freelancer",
             clientId,
- 
+
             weight,
             dimensions,
             isFragile: isFragile ?? false,
             type,
             description: description?.trim(),
             declaredValue,
-            
+
 
             images: uploadedImages,
- 
+
             originBranchId,
             currentBranchId: originBranchId,
             destinationBranchId: finalDestinationBranchId,
- 
+
             destination,
- 
+
             status: initialStatus,
             deliveryType,
             deliveryPriority: deliveryPriority ?? "standard",
- 
+
             totalPrice,
             paymentStatus: "pending",
             paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
- 
+
             maxAttempts: 3,
             attemptCount: 0,
             issues: [],
             returnInfo: { isReturn: false },
- 
+
             estimatedDeliveryTime: estimatedDeliveryTime
               ? new Date(estimatedDeliveryTime)
               : undefined,
- 
+
             trackingHistory: [
               {
                 status: "pending",
@@ -2823,7 +2860,7 @@ export const createPackageWithImages = catchAsyncError(
         ],
         { session },
       );
- 
+
       await PackageHistoryModel.create(
         [
           {
@@ -2832,7 +2869,7 @@ export const createPackageWithImages = catchAsyncError(
             branchId: originBranchId,
             handledBy: freelancerUserId,
             handlerRole: "freelancer",
-            notes: deliveryType === "home" 
+            notes: deliveryType === "home"
               ? `Package registered for home delivery. Will be routed to hub: ${destinationBranchDoc?.name || "unknown"}`
               : "Package registered by freelancer via mobile app.",
             timestamp: new Date(),
@@ -2840,7 +2877,7 @@ export const createPackageWithImages = catchAsyncError(
         ],
         { session },
       );
- 
+
       await PaymentModel.create(
         [
           {
@@ -2858,7 +2895,7 @@ export const createPackageWithImages = catchAsyncError(
         ],
         { session },
       );
- 
+
       await FreelancerModel.findByIdAndUpdate(
         freelancer._id,
         {
@@ -2867,7 +2904,7 @@ export const createPackageWithImages = catchAsyncError(
         },
         { session },
       );
- 
+
       await session.commitTransaction();
       transactionCommitted = true;
 
@@ -2879,7 +2916,7 @@ export const createPackageWithImages = catchAsyncError(
       ).catch(error => {
         console.error('Package created notification failed:', error);
       });
- 
+
 
       let responseMessage: string;
       if (deliveryType === "branch_pickup") {
@@ -2899,7 +2936,7 @@ export const createPackageWithImages = catchAsyncError(
             name: destinationBranchDoc.name,
             code: destinationBranchDoc.code,
           } : null,
-          
+
 
           images: uploadedImages,
 
@@ -2907,12 +2944,12 @@ export const createPackageWithImages = catchAsyncError(
             trackingNumber,
             barcodeFormat: "CODE128",
             generatedAt: new Date().toISOString(),
- 
+
             sender: {
               businessName: freelancer.businessName ?? null,
               phone: (req.user as any)?.phone ?? null,
             },
- 
+
             recipient: {
               name: destination.recipientName,
               phone: destination.recipientPhone,
@@ -2921,7 +2958,7 @@ export const createPackageWithImages = catchAsyncError(
               state: destination.state,
               postalCode: destination.postalCode ?? null,
             },
- 
+
             package: {
               weight,
               type,
@@ -2930,31 +2967,31 @@ export const createPackageWithImages = catchAsyncError(
               deliveryType,
               deliveryPriority: deliveryPriority ?? "standard",
             },
- 
+
             originBranch: {
               id: originBranch._id,
               name: originBranch.name,
               code: originBranch.code,
               address: originBranch.address,
             },
- 
+
             destinationBranch: destinationBranchDoc
               ? {
-                  id: destinationBranchDoc._id,
-                  name: destinationBranchDoc.name,
-                  code: destinationBranchDoc.code,
-                  address: destinationBranchDoc.address,
-                }
+                id: destinationBranchDoc._id,
+                name: destinationBranchDoc.name,
+                code: destinationBranchDoc.code,
+                address: destinationBranchDoc.address,
+              }
               : null,
- 
+
             totalPrice,
             paymentMethod: paymentMethod ?? (deliveryType === "home" ? "cod" : "branch_payment"),
           },
- 
+
           createdAt: packageDoc.createdAt,
         },
       });
- 
+
     } catch (error: any) {
 
       if (uploadedImagePublicIds.length > 0) {
@@ -2971,12 +3008,12 @@ export const createPackageWithImages = catchAsyncError(
           ),
         );
       }
-      
+
       return next(error);
 
     } finally {
       if (!transactionCommitted && session.inTransaction()) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -3003,7 +3040,7 @@ interface ISearchBranchesByCityQuery {
 export const searchBranchesForPickup = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const freelancerUserId = req.user?._id;
-    
+
     if (!freelancerUserId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
@@ -3012,7 +3049,7 @@ export const searchBranchesForPickup = catchAsyncError(
     if (!freelancer) return;
 
     const { city, limit = 20 } = req.query as { city?: string; limit?: string };
-    
+
     if (!city || city.trim().length === 0) {
       return res.status(200).json({
         success: true,
@@ -3049,7 +3086,7 @@ export const searchBranchesForPickup = catchAsyncError(
     // Try to get commune coordinates for distance calculation
     let communeCoords: [number, number] | null = null;
     let communeName: string = searchCity;
-    
+
     try {
       // Try to find the commune in the database or JSON
       const commune = lookupCommune(searchCity);
@@ -3106,7 +3143,7 @@ export const searchBranchesForPickup = catchAsyncError(
       data: formattedBranches,
       total: formattedBranches.length,
       searchedCity: communeName,
-      message: formattedBranches.length === 0 
+      message: formattedBranches.length === 0
         ? `No branches found serving "${city}". Please try a different city or contact support.`
         : `Found ${formattedBranches.length} branch(es) in ${communeName}`,
     });
@@ -3125,7 +3162,7 @@ function haversineDistance(
   const lat2 = toRadians(coord2[1]);
 
   const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
+    Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
