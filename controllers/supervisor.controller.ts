@@ -3553,8 +3553,11 @@ export const getFreelancer = catchAsyncError(
 //  GET ALL FREELANCERS IN MY BRANCH
 export const getMyFreelancers = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+    console.log("GET MY FREELANCERS CALLED");
     const userId = req.user?._id;
     const { branchId } = req.params;
+    console.log("User ID:", userId);
+    console.log("Branch ID:", branchId);
 
     if (!userId) {
       return next(
@@ -3583,7 +3586,7 @@ export const getMyFreelancers = catchAsyncError(
 
         CashierModel.findOne({
           userId,
-          branchId,
+          assignedBranchId: branchId,
         }).lean(),
 
         ManagerModel.findOne({
@@ -3594,6 +3597,8 @@ export const getMyFreelancers = catchAsyncError(
     if (!branch) {
       return next(new ErrorHandler("Branch not found", 404));
     }
+
+    console.log("Cashier found:", cashier);
 
     const hasAccess =
       !!manager ||

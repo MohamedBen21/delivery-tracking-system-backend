@@ -17,23 +17,23 @@ import {
 
 const freelancerRouter = Router();
 
-freelancerRouter.use(isAuthenticated, authorizeRoles("freelancer"));
-
-freelancerRouter.get("/me", getMeFreelancer);
-freelancerRouter.patch("/me", updateMeFreelancer);
-
-freelancerRouter.get("/packages", getMyPackages);
-freelancerRouter.get("/packages/active", getMyActivePackages);
-freelancerRouter.get("/packages/delivered", getMyDeliveredPackages);
-freelancerRouter.get("/packages/:packageId/track", trackPackage);
-freelancerRouter.patch("/packages/:packageId/cancel", cancelPackage);
-
-freelancerRouter.post("/packages", isAuthenticated, authorizeRoles("freelancer", "cashier"), createPackage);
+const isFreelancer = [isAuthenticated, authorizeRoles("freelancer")];
 
 
-freelancerRouter.post("/packages", isAuthenticated, authorizeRoles("freelancer"), createPackageWithImages);
+freelancerRouter.get("/me", isFreelancer, getMeFreelancer);
+freelancerRouter.patch("/me", isFreelancer, updateMeFreelancer);
 
-freelancerRouter.get("/branches/search", searchBranchesForPickup);
+freelancerRouter.get("/packages", isFreelancer, getMyPackages);
+freelancerRouter.get("/packages/active", isFreelancer, getMyActivePackages);
+freelancerRouter.get("/packages/delivered", isFreelancer, getMyDeliveredPackages);
+freelancerRouter.get("/packages/:packageId/track", isFreelancer, trackPackage);
+freelancerRouter.patch("/packages/:packageId/cancel", isFreelancer, cancelPackage);
+
+freelancerRouter.post("/packages", isAuthenticated, authorizeRoles("cashier", "freelancer"), createPackage);
+
+freelancerRouter.post("/packages", isAuthenticated, authorizeRoles("freelancer", "cashier"), createPackageWithImages);
+
+freelancerRouter.get("/branches/search", isFreelancer, searchBranchesForPickup);
 
 // // For autocomplete as they type
 // freelancerRouter.get(

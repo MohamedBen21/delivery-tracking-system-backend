@@ -1183,6 +1183,7 @@ async function resolveClientByPhone(
 export const createPackage = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
+    console.log("Received createPackage request with body:", req.body);
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -1268,6 +1269,11 @@ export const createPackage = catchAsyncError(
 
       if (typeof totalPrice !== "number" || totalPrice <= 0) {
         throw new ErrorHandler("totalPrice must be a positive number.", 400);
+      }
+
+      // ── Declared value validation ───────────────────────────────────────────
+      if (declaredValue !== undefined && (typeof declaredValue !== "number" || declaredValue < 0)) {
+        throw new ErrorHandler("declaredValue must be a non-negative number.", 400);
       }
 
       const VALID_TYPES = ["document", "parcel", "fragile", "heavy", "perishable", "electronic", "clothing"];
@@ -1635,6 +1641,8 @@ export const createPackage = catchAsyncError(
 
     } catch (error: any) {
 
+      console.error("Error in createPackage:", error);
+
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -1649,6 +1657,7 @@ export const createPackage = catchAsyncError(
       return next(error);
 
     } finally {
+
       if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
         await session.abortTransaction().catch(() => { });
       }
@@ -2561,6 +2570,7 @@ interface ICreatePackageBodyWithImages {
 
 export const createPackageWithImages = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+    console.log("Received createPackageWithImages request with body:", req.body);
     const session = await mongoose.startSession();
     session.startTransaction();
 
