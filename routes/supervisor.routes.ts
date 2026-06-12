@@ -52,7 +52,6 @@ import {
   deleteCashier,
   deleteLoader,
   getPackagesPaginatedFromRoute,
-  searchDeliveries,
 } from "../controllers/supervisor.controller";
 
 const supervisorRouter = Router();
@@ -60,7 +59,7 @@ const supervisorRouter = Router();
 const supOrAdmin = [isAuthenticated, authorizeRoles("supervisor", "admin")] as const;
 
 const supAdminDelTrans = [
-  isAuthenticated, 
+  isAuthenticated,
   authorizeRoles("supervisor", "admin", "deliverer", "transporter")
 ] as const;
 
@@ -82,7 +81,7 @@ supervisorRouter.post("/branches/:branchId/deliverers/assign", ...supOrAdmin, as
 supervisorRouter.post("/branches/:branchId/freelancers/assign", ...supOrAdmin, assignFreelancer);
 
 supervisorRouter.post("/branches/:branchId/freelancers", ...supOrAdmin, createFreelancer);
-supervisorRouter.get("/branches/:branchId/freelancers", ...supOrAdmin, getMyFreelancers);
+supervisorRouter.get("/branches/:branchId/freelancers", isAuthenticated, authorizeRoles("cashier", "supervisor", "admin"), getMyFreelancers);
 supervisorRouter.get("/branches/:branchId/freelancers/:freelancerId", ...supOrAdmin, getFreelancer);
 supervisorRouter.patch("/branches/:branchId/freelancers/:freelancerId", ...supOrAdmin, updateFreelancer);
 supervisorRouter.patch(
@@ -135,8 +134,8 @@ supervisorRouter.patch(
 );
 
 supervisorRouter.get("/packages/search", isAuthenticated, searchPackages);
-// supervisorRouter.get("/packages", isAuthenticated , authorizeRoles("deliverer" , "transporter"), getPackagesPaginated);
-supervisorRouter.get("/packages", isAuthenticated , authorizeRoles("deliverer" , "transporter"), getPackagesPaginatedFromRoute);
+supervisorRouter.get("/packages", isAuthenticated, authorizeRoles("deliverer", "transporter", "cashier"), getPackagesPaginated);
+supervisorRouter.get("/packages", isAuthenticated, authorizeRoles("deliverer", "transporter", "cashier"), getPackagesPaginatedFromRoute);
 
 
 // Role-based middleware for supervisor, manager, or admin
@@ -284,13 +283,10 @@ supervisorRouter.delete(
 
 supervisorRouter.get(
   "/routes/get-my-routes",
-  isAuthenticated, 
-  authorizeRoles("supervisor" , "transporter", "deliverer"),
+  isAuthenticated,
+  authorizeRoles("supervisor", "transporter", "deliverer"),
   getMyRoutes
 );
-
-supervisorRouter.get("/deliveries/search", isAuthenticated,authorizeRoles("deliverer"), searchDeliveries);
-
 
 export default supervisorRouter;
 
