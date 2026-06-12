@@ -12131,125 +12131,169 @@ export const getDeliveryHistory = catchAsyncError(
       if (!delivererUserId) {
         return next(new ErrorHandler("Unauthorized — user not found.", 401));
       }
-
+ 
       const deliverer = await DelivererModel.findOne({ userId: delivererUserId }).lean();
       if (!deliverer) {
         return next(new ErrorHandler("Deliverer profile not found.", 404));
       }
-
+ 
       const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
       const skip = (page - 1) * limit;
-
+ 
       const filter: Record<string, any> = {
         assignedDelivererId: deliverer._id,
       };
-
+ 
       type PeriodFilter = "today" | "yesterday" | "last7days" | "last30days" | "last6months" | "custom";
-
+ 
       const period = req.query.period ? (req.query.period as PeriodFilter) : "all";
-
-      // Handle date filtering
+ 
+      // ── Resolve "delivered" date window via PackageHistoryModel ────────────
+      // Maps packageId -> most recent 'delivered' timestamp within the window
+      // (or overall, if period === "all" but we still need it for sorting).
+      let deliveredAtByPackageId: Map<string, Date> | null = null;
+      let deliveredDateRange: { $gte?: Date; $lte?: Date } | null = null;
+ 
       if (period !== "all") {
         const now = new Date();
         let startDate: Date;
         let endDate: Date;
-
+ 
         switch (period) {
           case "today":
             startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
             startDate.setHours(0, 0, 0, 0);
             endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000 - 1);
-            filter.deliveredAt = { $gte: startDate, $lte: endDate };
+            deliveredDateRange = { $gte: startDate, $lte: endDate };
             break;
-            
+ 
           case "yesterday":
             startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
             startDate.setHours(0, 0, 0, 0);
             endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000 - 1);
-            filter.deliveredAt = { $gte: startDate, $lte: endDate };
+            deliveredDateRange = { $gte: startDate, $lte: endDate };
             break;
-            
+ 
           case "last7days":
             startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
             startDate.setHours(0, 0, 0, 0);
-            filter.deliveredAt = { $gte: startDate };
+            deliveredDateRange = { $gte: startDate };
             break;
-            
+ 
           case "last30days":
             startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
             startDate.setHours(0, 0, 0, 0);
-            filter.deliveredAt = { $gte: startDate };
+            deliveredDateRange = { $gte: startDate };
             break;
-            
+ 
           case "last6months":
             startDate = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
             startDate.setHours(0, 0, 0, 0);
-            filter.deliveredAt = { $gte: startDate };
+            deliveredDateRange = { $gte: startDate };
             break;
-            
+ 
           case "custom":
             if (req.query.startDate && req.query.endDate) {
               const customStart = new Date(req.query.startDate as string);
               const customEnd = new Date(req.query.endDate as string);
               customEnd.setHours(23, 59, 59, 999);
-              filter.deliveredAt = {
-                $gte: customStart,
-                $lte: customEnd,
-              };
+              deliveredDateRange = { $gte: customStart, $lte: customEnd };
             }
             break;
         }
+ 
+        if (deliveredDateRange) {
+          const historyMatch: Record<string, any> = {
+            status: "delivered",
+            timestamp: deliveredDateRange,
+          };
+ 
+          const deliveredEntries = await PackageHistoryModel.find(historyMatch)
+            .select("packageId timestamp")
+            .lean();
+ 
+          deliveredAtByPackageId = new Map();
+          const deliveredPackageIds: mongoose.Types.ObjectId[] = [];
+ 
+          for (const entry of deliveredEntries) {
+            const key = entry.packageId.toString();
+            // Keep the latest timestamp if a package has multiple
+            // 'delivered' entries in the window (re-delivery edge case).
+            const existing = deliveredAtByPackageId.get(key);
+            if (!existing || entry.timestamp > existing) {
+              deliveredAtByPackageId.set(key, entry.timestamp);
+            }
+            deliveredPackageIds.push(entry.packageId);
+          }
+ 
+          // Restrict the package query to only packages delivered in this
+          // window. If nothing was delivered in the window, force an
+          // empty result set rather than falling through to "all packages".
+          filter._id = { $in: deliveredPackageIds.length > 0 ? deliveredPackageIds : [new mongoose.Types.ObjectId()] };
+        }
       }
-
+ 
       // Additional filters - these work independently
       if (req.query.status) {
         filter.status = req.query.status as string;
       }
-
+ 
       if (req.query.statuses) {
         filter.status = { $in: (req.query.statuses as string).split(",").map(s => s.trim()) };
       }
-
+ 
       if (req.query.deliveryType) {
         filter.deliveryType = req.query.deliveryType as string;
       }
-
+ 
       if (req.query.deliveryPriority) {
         filter.deliveryPriority = req.query.deliveryPriority as string;
       }
-
+ 
       if (req.query.city) {
         filter["destination.city"] = new RegExp(req.query.city as string, "i");
       }
-
+ 
       if (req.query.search) {
         filter.trackingNumber = new RegExp(req.query.search as string, "i");
       }
-
+ 
       const minWeight = req.query.minWeight ? parseFloat(req.query.minWeight as string) : undefined;
       const maxWeight = req.query.maxWeight ? parseFloat(req.query.maxWeight as string) : undefined;
-      
+ 
       if (minWeight !== undefined && !isNaN(minWeight)) {
         filter.weight = { ...filter.weight, $gte: minWeight };
       }
-      
+ 
       if (maxWeight !== undefined && !isNaN(maxWeight)) {
         filter.weight = { ...filter.weight, $lte: maxWeight };
       }
-
+ 
+      // ── Sorting ──────────────────────────────────────────────────────────
+      // "deliveredAt" is not a real field on IPackage, so it can't be passed
+      // to Mongo's .sort(). If requested (or as the default), we fetch
+      // unsorted/paginated by another stable field, then re-sort the page
+      // in-memory using deliveredAtByPackageId (loaded above if period !==
+      // "all"; loaded on-demand below otherwise).
       const sortBy = (req.query.sortBy as string) || "deliveredAt";
       const order = req.query.order === "desc" ? -1 : 1;
-      const sortMap: Record<string, any> = {
-        deliveredAt: { deliveredAt: order },
+ 
+      const dbSortMap: Record<string, any> = {
         createdAt: { createdAt: order },
         weight: { weight: order },
         totalPrice: { totalPrice: order },
         attemptCount: { attemptCount: order },
       };
-      const sort = sortMap[sortBy] || { deliveredAt: -1 };
-
-      const [total, packages] = await Promise.all([
+ 
+      const sortingByDeliveredAt = sortBy === "deliveredAt";
+      // For DB-level sort, fall back to createdAt when sorting by deliveredAt
+      // (we re-sort in memory afterward); otherwise use the requested field.
+      const sort = sortingByDeliveredAt
+        ? { createdAt: -1 }
+        : (dbSortMap[sortBy] || { createdAt: -1 });
+ 
+      const [total, packagesRaw] = await Promise.all([
         PackageModel.countDocuments(filter),
         PackageModel.find(filter)
           .populate("currentRouteId", "routeNumber status")
@@ -12259,19 +12303,53 @@ export const getDeliveryHistory = catchAsyncError(
           .limit(limit)
           .lean({ virtuals: true }),
       ]);
-
+ 
+      let packages = packagesRaw;
+ 
+      // If sorting by deliveredAt and we don't already have the map (i.e.
+      // period === "all"), fetch delivered timestamps just for this page's
+      // packageIds.
+      if (sortingByDeliveredAt) {
+        if (!deliveredAtByPackageId) {
+          deliveredAtByPackageId = new Map();
+          const pageIds = packages.map((p: any) => p._id);
+          if (pageIds.length > 0) {
+            const entries = await PackageHistoryModel.find({
+              packageId: { $in: pageIds },
+              status: "delivered",
+            })
+              .select("packageId timestamp")
+              .lean();
+ 
+            for (const entry of entries) {
+              const key = entry.packageId.toString();
+              const existing = deliveredAtByPackageId.get(key);
+              if (!existing || entry.timestamp > existing) {
+                deliveredAtByPackageId.set(key, entry.timestamp);
+              }
+            }
+          }
+        }
+ 
+        packages = [...packages].sort((a: any, b: any) => {
+          const aTime = deliveredAtByPackageId!.get(a._id.toString())?.getTime() ?? 0;
+          const bTime = deliveredAtByPackageId!.get(b._id.toString())?.getTime() ?? 0;
+          return order === -1 ? bTime - aTime : aTime - bTime;
+        });
+      }
+ 
       // Stats - consider filtering by period as well for consistency
       let statsFilter: Record<string, any> = {
         assignedDelivererId: deliverer._id,
       };
-      
-      // Apply the same date filter to stats for consistency
-      if (period !== "all" && filter.deliveredAt) {
-        statsFilter.deliveredAt = filter.deliveredAt;
+ 
+      // Apply the same delivered-date-window filter to stats for consistency
+      if (period !== "all" && filter._id) {
+        statsFilter._id = filter._id;
       }
-
+ 
       const allPackagesForStats = await PackageModel.find(statsFilter).lean();
-
+ 
       const stats = {
         totalLifetime: allPackagesForStats.length,
         totalDelivered: allPackagesForStats.filter(p => p.status === "delivered").length,
@@ -12290,7 +12368,7 @@ export const getDeliveryHistory = catchAsyncError(
           .filter(p => p.status === "delivered")
           .reduce((sum, p) => sum + (p.totalPrice || 0), 0),
       };
-
+ 
       const formattedPackages = packages.map((pkg: any) => ({
         id: pkg._id,
         trackingNumber: pkg.trackingNumber,
@@ -12299,7 +12377,7 @@ export const getDeliveryHistory = catchAsyncError(
         isFragile: pkg.isFragile,
         deliveryType: pkg.deliveryType,
         deliveryPriority: pkg.deliveryPriority,
-
+ 
         destination: {
           recipientName: pkg.destination?.recipientName,
           recipientPhone: pkg.destination?.recipientPhone,
@@ -12313,38 +12391,38 @@ export const getDeliveryHistory = catchAsyncError(
               }
             : null,
         },
-
+ 
         weight: pkg.weight,
         totalPrice: pkg.totalPrice,
         paymentStatus: pkg.paymentStatus,
         paymentMethod: pkg.paymentMethod ?? null,
-
+ 
         estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
-        deliveredAt: pkg.deliveredAt ?? null,
+        deliveredAt: deliveredAtByPackageId?.get(pkg._id.toString()) ?? null,
         isOverdue: (pkg as any).isOverdue ?? false,
-
+ 
         attemptCount: pkg.attemptCount,
         maxAttempts: pkg.maxAttempts,
         nextAttemptDate: pkg.nextAttemptDate ?? null,
-
+ 
         currentRoute: pkg.currentRouteId
           ? { id: pkg.currentRouteId._id, routeNumber: pkg.currentRouteId.routeNumber, status: pkg.currentRouteId.status }
           : null,
         currentBranch: pkg.currentBranchId
           ? { id: pkg.currentBranchId._id, name: pkg.currentBranchId.name, code: pkg.currentBranchId.code }
           : null,
-
+ 
         returnInfo: pkg.returnInfo?.isReturn
           ? { reason: pkg.returnInfo.reason, returnDate: pkg.returnInfo.returnDate }
           : null,
-
+ 
         deliveryProgress: (pkg as any).deliveryProgress,
         needsAttention: (pkg as any).needsAttention,
-
+ 
         createdAt: pkg.createdAt,
         updatedAt: pkg.updatedAt,
       }));
-
+ 
       res.status(200).json({
         success: true,
         data: {
@@ -12376,6 +12454,7 @@ export const getDeliveryHistory = catchAsyncError(
     }
   },
 );
+
 
 
 
