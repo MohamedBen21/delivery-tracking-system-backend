@@ -52,6 +52,7 @@ import {
   deleteCashier,
   deleteLoader,
   getPackagesPaginatedFromRoute,
+  completeDeliveryByQrCode,
 } from "../controllers/supervisor.controller";
 
 const supervisorRouter = Router();
@@ -286,6 +287,14 @@ supervisorRouter.get(
   isAuthenticated,
   authorizeRoles("supervisor", "transporter", "deliverer"),
   getMyRoutes
+);
+
+
+supervisorRouter.post(
+  "/complete-delivery-qr",
+  isAuthenticated,
+  authorizeRoles("deliverer"),
+  completeDeliveryByQrCode
 );
 
 export default supervisorRouter;

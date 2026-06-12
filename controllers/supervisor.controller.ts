@@ -25,6 +25,8 @@ import { generateCashReturnQr, getCashReturnInfo, verifyAndProcessCashReturn } f
 import StopQrSessionModel from "../models/stopQrSession.model";
 import CashierModel, { ICashier } from "../models/cashier.model";
 import LoaderModel, { ILoader } from "../models/loader.model";
+import { SocketService } from "../services/socket.service";
+import DeliveryQrSession from "../models/deliveryQrSession.model";
 
 
 interface ILocationBody {
@@ -16014,4 +16016,132 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
       );
     }
   },
+);
+
+
+
+
+
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  HTTP  FOR DELIVERER QR SCAN
+//  POST /api/delivery/complete-qr-bridge
+//
+//  This endpoint acts as a bridge - it validates the deliverer and session,
+//  then calls the existing Socket.IO complete_delivery event.
+//  All business logic (proximity, package updates, route progression, etc.)
+//  is handled by the socket event.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const completeDeliveryByQrCode = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const delivererUserId = req.user?._id;
+
+      if (!delivererUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (req.user?.role !== "deliverer") {
+        return next(new ErrorHandler("Only deliverers can complete deliveries.", 403));
+      }
+
+      const { sessionId, qrCode, routeId, stopIndex, coordinates, notes } = req.body;
+
+
+      if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
+        return next(new ErrorHandler("Valid sessionId is required.", 400));
+      }
+
+      if (!qrCode || typeof qrCode !== "string") {
+        return next(new ErrorHandler("qrCode is required.", 400));
+      }
+
+      if (!routeId || !mongoose.Types.ObjectId.isValid(routeId)) {
+        return next(new ErrorHandler("Valid routeId is required.", 400));
+      }
+
+      if (stopIndex === undefined || stopIndex < 0) {
+        return next(new ErrorHandler("Valid stopIndex is required.", 400));
+      }
+
+      if (!coordinates || coordinates.length !== 2) {
+        return next(new ErrorHandler("Valid coordinates [lng, lat] are required.", 400));
+      }
+
+
+      const deliverer = await DelivererModel.findOne({ userId: delivererUserId }).lean();
+      if (!deliverer) {
+        return next(new ErrorHandler("Deliverer profile not found.", 404));
+      }
+
+      if (!deliverer.isActive || deliverer.isSuspended) {
+        return next(new ErrorHandler("Deliverer account is not active.", 403));
+      }
+
+
+      const qrSession = await DeliveryQrSession.findById(sessionId);
+      if (!qrSession) {
+        return next(new ErrorHandler("QR session not found.", 404));
+      }
+
+
+      const socketService = (global as any).socketService as SocketService | undefined;
+      if (!socketService) {
+        return next(new ErrorHandler("Socket service not available. Please try again later.", 500));
+      }
+
+
+      const delivererSocketId = socketService.getSocketId(delivererUserId.toString(), "deliverer");
+      
+      if (!delivererSocketId) {
+        return next(new ErrorHandler("Deliverer is not connected to socket. Please check your connection.", 400));
+      }
+
+
+      const io = (socketService as any).io;
+      if (!io) {
+        return next(new ErrorHandler("Socket IO not available.", 500));
+      }
+
+
+      io.to(delivererSocketId).emit("complete_delivery", {
+        sessionId,
+        qrCode,
+        routeId,
+        stopIndex,
+        coordinates,
+        notes: notes || "",
+      });
+
+
+      return res.status(200).json({
+        success: true,
+        message: "QR scan submitted for processing. Delivery will be completed shortly.",
+        data: {
+          sessionId,
+          routeId,
+          stopIndex,
+          status: "processing",
+        },
+      });
+    } catch (error: any) {
+      console.error("[HTTP Bridge] Error:", error);
+      
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((err: any) => err.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+      
+      return next(new ErrorHandler(error.message || "Failed to process QR scan.", 500));
+    }
+  }
 );
