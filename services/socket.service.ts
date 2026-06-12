@@ -12,6 +12,7 @@ import PackageModel from "../models/package.model";
 import ManifestModel from "../models/manifest.model";
 import RouteModel from "../models/route.model";
 import StopQrSessionModel from "../models/stopQrSession.model";
+import DeliveryQrSessionModel from "../models/deliveryQrSession.model";
 import { IUser } from "../models/user.model";
 import sendSMS from "../utils/sendSMS";
 import PaymentModel from "../models/payment.model";
@@ -19,6 +20,10 @@ import BranchModel from "../models/branch.model";
 import VehicleModel from "../models/vehicle.model";
 
 import { PresenceService } from "./presence.service";
+
+// You'll need to install: npm install qrcode
+// and: npm install --save-dev @types/qrcode
+import QRCode from "qrcode";
 
 export type DeliveryUserRole =
   | "deliverer"
@@ -89,8 +94,9 @@ export class SocketService {
   private activeTransits: Map<string, ActiveTransit> = new Map();
   private activeManifestTransits: Map<string, ActiveManifestTransit> =
     new Map();
-  private deliveryOTPs: Map<string, { code: string; expiresAt: number }> =
-    new Map();
+  
+  // Store delivery QR sessions in memory for quick verification
+  private deliveryQRSessions: Map<string, { sessionId: string; code: string; expiresAt: number }> = new Map();
 
   private disconnectTimers: Map<string, NodeJS.Timeout> = new Map();
 
@@ -277,11 +283,11 @@ export class SocketService {
         isCompleted: true,
       })),
       
-      deliveryOtp: pkg.deliveryOtp ? {
+      deliveryQr: pkg.deliveryQr ? {
         isActive: pkg.status === 'out_for_delivery' && 
-                  !pkg.deliveryOtp.verified && 
-                  new Date() < pkg.deliveryOtp.expiresAt,
-        expiresAt: pkg.deliveryOtp.expiresAt,
+                  !pkg.deliveryQr.verified && 
+                  new Date() < pkg.deliveryQr.expiresAt,
+        expiresAt: pkg.deliveryQr.expiresAt,
       } : null,
     };
   }
@@ -363,6 +369,123 @@ export class SocketService {
       timestamp: new Date(),
       ...additionalData,
     });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  GENERATE AND SEND DELIVERY QR
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async generateAndSendDeliveryQR(
+    route: any,
+    stopIndex: number,
+    routeId: string,
+  ): Promise<void> {
+    try {
+      const stop = route.stops[stopIndex];
+      if (!stop || !stop.packageIds[0]) return;
+      
+      const packageId = stop.packageIds[0].toString();
+      const pkg = await PackageModel.findById(packageId)
+        .select("destination trackingNumber _id")
+        .lean();
+      
+      if (!pkg) return;
+      
+      const recipientPhone = (pkg as any).destination?.recipientPhone;
+      if (!recipientPhone) {
+        console.warn(`[QR] No phone for package ${packageId}`);
+        return;
+      }
+
+      // Cancel any existing unexpired QR session for this package
+      await DeliveryQrSessionModel.updateMany(
+        {
+          packageId: new mongoose.Types.ObjectId(packageId),
+          verified: false,
+          expiresAt: { $gt: new Date() },
+        },
+        { $set: { expiresAt: new Date() } },
+      );
+
+      // Generate a unique QR code (cryptographically secure)
+      const qrCode = crypto.randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+
+      // Create the session
+      const session = await DeliveryQrSessionModel.create({
+        packageId: new mongoose.Types.ObjectId(packageId),
+        routeId: new mongoose.Types.ObjectId(routeId),
+        stopIndex,
+        delivererId: route.assignedDelivererId,
+        code: qrCode,
+        expiresAt,
+        verified: false,
+      });
+
+      // Build the payload for the QR code
+      const qrPayload = {
+        sessionId: session._id.toString(),
+        code: qrCode,
+        packageId: pkg._id.toString(),
+        trackingNumber: pkg.trackingNumber,
+        timestamp: Date.now(),
+      };
+
+      // Generate QR code as data URL (for storage/display if needed)
+      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrPayload));
+      
+      // Update session with QR image URL
+      await DeliveryQrSessionModel.findByIdAndUpdate(session._id, {
+        qrImageUrl: qrDataUrl,
+      });
+
+      // Update package with QR info
+      await PackageModel.findByIdAndUpdate(packageId, {
+        $set: {
+          "deliveryQr.code": qrCode,
+          "deliveryQr.expiresAt": expiresAt,
+          "deliveryQr.stopIndex": stopIndex,
+          "deliveryQr.routeId": new mongoose.Types.ObjectId(routeId),
+          "deliveryQr.generatedAt": new Date(),
+          "deliveryQr.verified": false,
+          "deliveryQr.sessionId": session._id,
+        },
+      });
+
+      // Create the frontend URL with the payload in the format: /track?tracking=XXX&payload=XXX
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+      const encodedPayload = Buffer.from(JSON.stringify(qrPayload)).toString('base64');
+      const deliveryLink = `${frontendUrl}/track?tracking=${pkg.trackingNumber}&payload=${encodedPayload}`;
+
+      // Send SMS with the link
+      const smsMessage = `Your package ${pkg.trackingNumber} is out for delivery! 
+  Please click the link below to view your QR code for the deliverer:
+  ${deliveryLink}
+
+  This link will expire in 30 minutes.`;
+
+      const smsSent = await sendSMS({
+        to: recipientPhone,
+        message: smsMessage,
+      });
+
+      if (!smsSent) {
+        console.error(`[QR] SMS failed for package ${packageId}`);
+      }
+
+      // Store the session in memory for quick verification
+      this.deliveryQRSessions.set(`delivery_qr_${packageId}`, {
+        sessionId: session._id.toString(),
+        code: qrCode,
+        expiresAt: expiresAt.getTime(),
+      });
+
+      console.log(`[QR] Generated delivery QR for package ${pkg.trackingNumber}, session: ${session._id}`);
+      console.log(`[QR] Link sent to client: ${deliveryLink}`);
+
+    } catch (err) {
+      console.error("[Socket] generateAndSendDeliveryQR error:", err);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -636,7 +759,8 @@ export class SocketService {
           }
         });
 
-        socket.on("client:request_delivery_otp", async (data: { trackingNumber: string }) => {
+        // Client can request to regenerate QR if needed
+        socket.on("client:request_delivery_qr", async (data: { trackingNumber: string }) => {
           try {
             if (!data?.trackingNumber) {
               socket.emit("tracking_error", { message: "Tracking number required" });
@@ -654,33 +778,45 @@ export class SocketService {
 
             if (pkg.status !== "out_for_delivery") {
               socket.emit("tracking_error", { 
-                message: `Cannot request OTP when package status is ${pkg.status}` 
+                message: `Cannot request QR when package status is ${pkg.status}` 
               });
               return;
             }
 
-            if (!pkg.deliveryOtp || pkg.deliveryOtp.verified) {
-              socket.emit("tracking_error", { message: "No active OTP available" });
+            if (!pkg.deliveryQr || pkg.deliveryQr.verified) {
+              socket.emit("tracking_error", { message: "No active QR available" });
               return;
             }
 
-            if (new Date() > pkg.deliveryOtp.expiresAt) {
-              socket.emit("tracking_error", { message: "OTP has expired" });
+            if (new Date() > pkg.deliveryQr.expiresAt) {
+              socket.emit("tracking_error", { message: "QR has expired" });
               return;
             }
 
-            socket.emit("tracking:delivery_otp", {
+            // Return the QR session info so client can regenerate the QR code
+            const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+            const qrPayload = {
+              sessionId: pkg.deliveryQr.sessionId,
+              code: pkg.deliveryQr.code,
               packageId: pkg._id,
               trackingNumber: pkg.trackingNumber,
-              otp: pkg.deliveryOtp.code,
-              expiresAt: pkg.deliveryOtp.expiresAt,
-              message: "Your delivery OTP code",
+              timestamp: pkg.deliveryQr.generatedAt.getTime(),
+            };
+            const encodedPayload = Buffer.from(JSON.stringify(qrPayload)).toString('base64');
+            const qrLink = `${frontendUrl}/track?tracking=${pkg.trackingNumber}&payload=${encodedPayload}`;
+
+            socket.emit("tracking:delivery_qr", {
+              packageId: pkg._id,
+              trackingNumber: pkg.trackingNumber,
+              qrLink,
+              expiresAt: pkg.deliveryQr.expiresAt,
+              message: "Your delivery QR code link",
             });
 
-            console.log(`[Socket] Client ${userId} requested OTP for package ${pkg.trackingNumber}`);
+            console.log(`[Socket] Client ${userId} requested QR for package ${pkg.trackingNumber}`);
 
           } catch (error: any) {
-            console.error('[Socket] client:request_delivery_otp error:', error);
+            console.error('[Socket] client:request_delivery_qr error:', error);
             socket.emit("tracking_error", { message: error.message });
           }
         });
@@ -2195,7 +2331,6 @@ export class SocketService {
 
             const expectedPackageId = firstStop.packageIds[0].toString();
 
-            // Validate package ID if provided
             if (data.packageId && data.packageId !== expectedPackageId) {
               socket.emit("route_error", {
                 code: "PACKAGE_MISMATCH",
@@ -2214,7 +2349,6 @@ export class SocketService {
               lastActiveAt: new Date(),
             });
 
-            // Mark first stop as in_progress and start the first package
             firstStop.status = "in_progress";
             await route.save();
 
@@ -2232,7 +2366,7 @@ export class SocketService {
               this.broadcastPackageStatusToClient(firstPackageId, "out_for_delivery");
             }
 
-            await this.generateAndSendDeliveryOTP(route, 0, data.routeId);
+            await this.generateAndSendDeliveryQR(route, 0, data.routeId);
 
             socket.emit("delivery_route_started", {
               routeId: data.routeId,
@@ -2248,11 +2382,11 @@ export class SocketService {
                 location: firstStop.location.coordinates,
                 recipientName: (firstStop as any).recipientName,
                 recipientPhone: (firstStop as any).recipientPhone,
-                otpSent: true,
+                qrSent: true,
                 status: "in_progress",
               },
               scheduledEnd: route.scheduledEnd,
-              message: "Route started! First package is ready for delivery.",
+              message: "Route started! QR code sent to client for first package.",
               timestamp: new Date(),
             });
 
@@ -2345,7 +2479,6 @@ export class SocketService {
 
             const expectedPackageId = stop.packageIds[0].toString();
 
-            // Validate package ID
             if (!data.packageId) {
               socket.emit("route_error", {
                 code: "PACKAGE_ID_REQUIRED",
@@ -2367,7 +2500,6 @@ export class SocketService {
 
             const packageId = stop.packageIds[0].toString();
 
-            // Check if package is already started
             if (stop.status === "in_progress") {
               socket.emit("route_error", {
                 code: "PACKAGE_ALREADY_STARTED",
@@ -2393,7 +2525,7 @@ export class SocketService {
               this.broadcastPackageStatusToClient(packageId, "out_for_delivery");
             }
 
-            await this.generateAndSendDeliveryOTP(route, data.stopIndex, data.routeId);
+            await this.generateAndSendDeliveryQR(route, data.stopIndex, data.routeId);
 
             socket.emit("package_started", {
               routeId: data.routeId,
@@ -2405,8 +2537,8 @@ export class SocketService {
               recipientName: (stop as any).recipientName,
               recipientPhone: (stop as any).recipientPhone,
               currentStopIndex: route.currentStopIndex,
-              message: "Package started. OTP sent to client. Proceed to delivery location.",
-              otpSent: true,
+              message: "Package started. QR code sent to client. Ask client to show the QR code for verification.",
+              qrSent: true,
               timestamp: new Date(),
             });
 
@@ -2519,7 +2651,7 @@ export class SocketService {
                     packageId: stop.packageIds[0],
                     delivererId: deliverer._id,
                     distanceMeters: Math.round(distanceMeters),
-                    message: "Your deliverer has arrived!",
+                    message: "Your deliverer has arrived! Please show your QR code.",
                     timestamp: new Date(),
                   });
               }
@@ -2530,7 +2662,7 @@ export class SocketService {
                 packageId: stop.packageIds[0],
                 address: stop.address,
                 distanceMeters: Math.round(distanceMeters),
-                message: "Arrival confirmed. Ask the client for the OTP code.",
+                message: "Arrival confirmed. Ask the client to show their QR code.",
                 currentStopIndex: route.currentStopIndex,
                 timestamp: new Date(),
               });
@@ -2546,20 +2678,34 @@ export class SocketService {
           },
         );
 
+        // NEW: Verify delivery QR code (replaces complete_delivery with OTP)
         socket.on(
           "complete_delivery",
           async (data: {
+            sessionId: string;
+            qrCode: string;
             routeId: string;
             stopIndex: number;
             coordinates: [number, number];
-            otp: string;
             notes?: string;
           }) => {
             try {
-              if (
-                !data?.routeId ||
-                !mongoose.Types.ObjectId.isValid(data.routeId)
-              ) {
+              // ── Validate inputs ──────────────────────────────────────────
+              if (!data?.sessionId || !mongoose.Types.ObjectId.isValid(data.sessionId)) {
+                socket.emit("route_error", {
+                  code: "INVALID_SESSION_ID",
+                  message: "Invalid sessionId.",
+                });
+                return;
+              }
+              if (!data?.qrCode || typeof data.qrCode !== "string") {
+                socket.emit("route_error", {
+                  code: "QR_CODE_REQUIRED",
+                  message: "qrCode is required.",
+                });
+                return;
+              }
+              if (!data?.routeId || !mongoose.Types.ObjectId.isValid(data.routeId)) {
                 socket.emit("route_error", {
                   code: "INVALID_ROUTE_ID",
                   message: "Invalid routeId.",
@@ -2573,14 +2719,8 @@ export class SocketService {
                 });
                 return;
               }
-              if (!data?.otp) {
-                socket.emit("route_error", {
-                  code: "OTP_REQUIRED",
-                  message: "OTP required.",
-                });
-                return;
-              }
 
+              // ── Fetch deliverer ──────────────────────────────────────────
               const deliverer = await DelivererModel.findOne({ userId }).lean();
               if (!deliverer) {
                 socket.emit("route_error", {
@@ -2589,6 +2729,51 @@ export class SocketService {
                 });
                 return;
               }
+
+              // ── Validate QR session ──────────────────────────────────────
+              const session = await DeliveryQrSessionModel.findById(data.sessionId);
+              if (!session) {
+                socket.emit("route_error", {
+                  code: "SESSION_NOT_FOUND",
+                  message: "QR session not found.",
+                });
+                return;
+              }
+
+              if (session.verified) {
+                socket.emit("route_error", {
+                  code: "ALREADY_VERIFIED",
+                  message: "This QR code has already been used.",
+                });
+                return;
+              }
+
+              if (session.expiresAt < new Date()) {
+                socket.emit("route_error", {
+                  code: "QR_EXPIRED",
+                  message: "QR code has expired. Please request a new one from the client.",
+                  expiredAt: session.expiresAt,
+                });
+                return;
+              }
+
+              if (session.code !== data.qrCode.trim()) {
+                socket.emit("route_error", {
+                  code: "QR_MISMATCH",
+                  message: "Invalid QR code.",
+                });
+                return;
+              }
+
+              if (session.delivererId.toString() !== deliverer._id.toString()) {
+                socket.emit("route_error", {
+                  code: "WRONG_DELIVERER",
+                  message: "This QR code belongs to a different deliverer.",
+                });
+                return;
+              }
+
+              // ── Fetch and validate route ─────────────────────────────────
               const route = await RouteModel.findOne({
                 _id: data.routeId,
                 assignedDelivererId: deliverer._id,
@@ -2601,14 +2786,16 @@ export class SocketService {
                 });
                 return;
               }
+
               if (data.stopIndex !== route.currentStopIndex) {
                 socket.emit("route_error", {
                   code: "WRONG_STOP",
-                  message: `Expected stop ${route.currentStopIndex}.`,
+                  message: `Expected stop ${route.currentStopIndex}, got ${data.stopIndex}.`,
                   expectedStopIndex: route.currentStopIndex,
                 });
                 return;
               }
+
               const stop = route.stops[data.stopIndex];
               if (!stop || !stop.packageIds[0]) {
                 socket.emit("route_error", {
@@ -2618,6 +2805,15 @@ export class SocketService {
                 return;
               }
 
+              if (session.packageId.toString() !== stop.packageIds[0].toString()) {
+                socket.emit("route_error", {
+                  code: "PACKAGE_MISMATCH",
+                  message: "QR code is for a different package.",
+                });
+                return;
+              }
+
+              // ── Proximity check (50m) ────────────────────────────────────
               const distanceMeters =
                 this.calculateDistance(
                   data.coordinates,
@@ -2626,44 +2822,19 @@ export class SocketService {
               if (distanceMeters > 50) {
                 socket.emit("route_error", {
                   code: "TOO_FAR",
-                  message: `Must be within 50m. Current: ${Math.round(distanceMeters)}m.`,
+                  message: `Must be within 50m to complete delivery. Current: ${Math.round(distanceMeters)}m.`,
                   distanceMeters: Math.round(distanceMeters),
                   requiredMeters: 50,
                 });
                 return;
               }
 
-              const packageId = stop.packageIds[0].toString();
-              const otpKey = `delivery_otp_${packageId}`;
-              const stored = this.deliveryOTPs.get(otpKey);
-              if (!stored) {
-                socket.emit("route_error", {
-                  code: "OTP_NOT_FOUND",
-                  message: "No OTP found. Request a new code.",
-                });
-                return;
-              }
-              if (Date.now() > stored.expiresAt) {
-                this.deliveryOTPs.delete(otpKey);
-                await this.generateAndSendDeliveryOTP(
-                  route,
-                  data.stopIndex,
-                  data.routeId,
-                );
-                socket.emit("route_error", {
-                  code: "OTP_EXPIRED",
-                  message: "OTP expired. New code sent.",
-                });
-                return;
-              }
-              if (stored.code !== data.otp.trim()) {
-                socket.emit("route_error", {
-                  code: "OTP_MISMATCH",
-                  message: "Incorrect OTP.",
-                });
-                return;
-              }
+              // ── Mark QR as verified ──────────────────────────────────────
+              session.verified = true;
+              session.verifiedAt = new Date();
+              await session.save();
 
+              const packageId = stop.packageIds[0].toString();
               const pkg = await PackageModel.findById(packageId);
               if (!pkg) {
                 socket.emit("route_error", {
@@ -2672,21 +2843,36 @@ export class SocketService {
                 });
                 return;
               }
+
+              // Update package with verification
+              await PackageModel.findByIdAndUpdate(packageId, {
+                $set: {
+                  "deliveryQr.verified": true,
+                  "deliveryQr.verifiedAt": new Date(),
+                },
+              });
+
+              // ── Complete delivery ────────────────────────────────────────
               await pkg.markAsDelivered(deliverer.userId, data.notes);
+              
               await PaymentModel.findOneAndUpdate(
                 { packageId },
                 {
                   $set: { status: "collected", delivererId: deliverer.userId },
                 },
               );
+
               await route.completeStop(
                 data.stopIndex,
                 [new mongoose.Types.ObjectId(packageId)],
                 [],
                 data.notes,
               );
-              this.deliveryOTPs.delete(otpKey);
 
+              // Remove from memory
+              this.deliveryQRSessions.delete(`delivery_qr_${packageId}`);
+
+              // Broadcast to client
               this.broadcastPackageStatusToClient(packageId, "delivered", {
                 deliveredAt: new Date(),
               });
@@ -2700,6 +2886,7 @@ export class SocketService {
                   timestamp: new Date(),
                 });
 
+              // Update deliverer stats
               const delivererDoc = await DelivererModel.findById(deliverer._id);
               if (delivererDoc) {
                 const isCOD = pkg.paymentMethod === "cod";
@@ -2720,6 +2907,7 @@ export class SocketService {
                   currentRouteId: null,
                   lastActiveAt: new Date(),
                 });
+
                 socket.emit("delivery_route_completed", {
                   routeId: data.routeId,
                   routeNumber: route.routeNumber,
@@ -2734,6 +2922,7 @@ export class SocketService {
                   message: "Route completed successfully!",
                   timestamp: new Date(),
                 });
+
                 this.io
                   .to(this.getBranchRoom(deliverer.branchId.toString()))
                   .emit("deliverer_route_completed", {
@@ -2744,15 +2933,15 @@ export class SocketService {
                     onTimePerformance: route.onTimePerformance,
                     timestamp: new Date(),
                   });
-                this.io
-                  .to(routeRoom)
-                  .emit("delivery_route_completed", {
-                    routeId: data.routeId,
-                    routeNumber: route.routeNumber,
-                    timestamp: new Date(),
-                  });
+
+                this.io.to(routeRoom).emit("delivery_route_completed", {
+                  routeId: data.routeId,
+                  routeNumber: route.routeNumber,
+                  timestamp: new Date(),
+                });
+
                 console.log(
-                  `[Socket] Deliverer ${userId} COMPLETED delivery route ${data.routeId}`,
+                  `[Socket] Deliverer ${userId} COMPLETED delivery route ${data.routeId} via QR`,
                 );
               } else {
                 const nextStop = route.stops[data.stopIndex + 1];
@@ -2775,7 +2964,7 @@ export class SocketService {
                     this.broadcastPackageStatusToClient(nextPackageId, "out_for_delivery");
                   }
 
-                  await this.generateAndSendDeliveryOTP(
+                  await this.generateAndSendDeliveryQR(
                     route,
                     data.stopIndex + 1,
                     data.routeId,
@@ -2793,12 +2982,12 @@ export class SocketService {
                       packageId: nextPackageId,
                       address: nextStop.address,
                       location: nextStop.location.coordinates,
-                      otpSent: true,
+                      qrSent: true,
                       status: nextStop.status,
                     },
                     remainingStops: route.stops.length - (data.stopIndex + 1),
-                    message: `Package delivered! Next package ready: ${route.stops.length - (data.stopIndex + 1)} stops remaining.`,  
                     currentStopIndex: route.currentStopIndex,
+                    message: `Package delivered! Next package QR sent to client.`,
                     timestamp: new Date(),
                   });
                 } else {
@@ -2808,6 +2997,7 @@ export class SocketService {
                     packageId,
                     distanceMeters: Math.round(distanceMeters),
                     remainingStops: route.stops.length - (data.stopIndex + 1),
+                    currentStopIndex: route.currentStopIndex,
                     message: `Package delivered! ${route.stops.length - (data.stopIndex + 1)} stops remaining.`,
                     timestamp: new Date(),
                   });
@@ -2819,13 +3009,14 @@ export class SocketService {
                   timestamp: new Date(),
                 });
                 console.log(
-                  `[Socket] Deliverer ${userId} completed delivery stop ${data.stopIndex}`,
+                  `[Socket] Deliverer ${userId} completed delivery stop ${data.stopIndex} via QR`,
                 );
               }
             } catch (err: any) {
+              console.error("[Socket] verify_delivery_qr failed:", err);
               socket.emit("route_error", {
-                code: "COMPLETE_FAILED",
-                message: err.message || "Failed to complete delivery.",
+                code: "VERIFY_QR_FAILED",
+                message: err.message || "Failed to verify delivery QR.",
               });
             }
           },
@@ -2927,6 +3118,14 @@ export class SocketService {
                 reason: data.reason,
               });
 
+              // Invalidate the QR session
+              if (pkg.deliveryQr?.sessionId) {
+                await DeliveryQrSessionModel.findByIdAndUpdate(pkg.deliveryQr.sessionId, {
+                  $set: { expiresAt: new Date() },
+                });
+                this.deliveryQRSessions.delete(`delivery_qr_${packageId}`);
+              }
+
               const updatedPkgAfterFail =
                 await PackageModel.findById(packageId).lean();
               const attemptsExhausted =
@@ -2948,7 +3147,7 @@ export class SocketService {
                   deliverer.userId,
                   "medium",
                 );
-              this.deliveryOTPs.delete(`delivery_otp_${packageId}`);
+              
               await route.failStop(data.stopIndex, data.reason, [
                 new mongoose.Types.ObjectId(packageId),
               ]);
@@ -3048,6 +3247,7 @@ export class SocketService {
                     routeNumber: route.routeNumber,
                     status: "completed",
                     hasPackagesToReturn: true,
+                    currentStopIndex: route.currentStopIndex,
                     message:
                       "Route finished. Please return the failed package to your branch.",
                     timestamp: new Date(),
@@ -3071,7 +3271,7 @@ export class SocketService {
                       this.broadcastPackageStatusToClient(nextPackageId, "out_for_delivery");
                     }
 
-                    await this.generateAndSendDeliveryOTP(
+                    await this.generateAndSendDeliveryQR(
                       route,
                       route.currentStopIndex,
                       data.routeId,
@@ -3090,7 +3290,7 @@ export class SocketService {
                           packageId: nextStop.packageIds[0],
                           address: nextStop.address,
                           location: nextStop.location.coordinates,
-                          otpSent: true,
+                          qrSent: true,
                           status: "in_progress",
                         }
                       : null,
@@ -3126,7 +3326,7 @@ export class SocketService {
                     this.broadcastPackageStatusToClient(nextPackageId, "out_for_delivery");
                   }
 
-                  await this.generateAndSendDeliveryOTP(
+                  await this.generateAndSendDeliveryQR(
                     route,
                     route.currentStopIndex,
                     data.routeId,
@@ -3146,7 +3346,7 @@ export class SocketService {
                         address: nextStop.address,
                         location: nextStop.location.coordinates,
                         isRetry: route.currentStopIndex === requeuedStopIndex,
-                        otpSent: true,
+                        qrSent: true,
                         status: nextStop.status === "in_progress" ? "in_progress" : "pending",
                       }
                     : null,
@@ -3269,6 +3469,14 @@ export class SocketService {
                 return;
               }
 
+              // Invalidate QR session
+              if (pkg.deliveryQr?.sessionId) {
+                await DeliveryQrSessionModel.findByIdAndUpdate(pkg.deliveryQr.sessionId, {
+                  $set: { expiresAt: new Date() },
+                });
+                this.deliveryQRSessions.delete(`delivery_qr_${packageId}`);
+              }
+
               const cancellationDetails = {
                 cancelledBy: deliverer.userId,
                 cancelledAt: new Date().toISOString(),
@@ -3303,8 +3511,6 @@ export class SocketService {
                   },
                 },
               );
-
-              this.deliveryOTPs.delete(`delivery_otp_${packageId}`);
 
               await route.failStop(data.stopIndex, data.reason, [
                 new mongoose.Types.ObjectId(packageId),
@@ -3437,9 +3643,6 @@ export class SocketService {
                   `and COMPLETED route ${data.routeId}`,
                 );
               } else {
-                // REMOVED: Auto-start next package
-                // The next package will stay in "pending" status until deliverer manually starts it
-                
                 socket.emit("package_cancelled", {
                   routeId: data.routeId,
                   routeNumber: route.routeNumber,
@@ -3456,6 +3659,7 @@ export class SocketService {
                   },
                   nextStop: null,
                   remainingStops: route.stops.length - (data.stopIndex + 1),
+                  currentStopIndex: route.currentStopIndex,
                   message: `Package permanently cancelled. ${route.stops.length - (data.stopIndex + 1)} stops remaining. Next package needs to be started manually.`,
                   timestamp: new Date(),
                 });
@@ -3479,63 +3683,6 @@ export class SocketService {
               socket.emit("route_error", {
                 code: "CANCEL_PACKAGE_FAILED",
                 message: err.message || "Failed to cancel package.",
-              });
-            }
-          },
-        );
-
-        socket.on(
-          "resend_delivery_otp",
-          async (data: { routeId: string; stopIndex: number }) => {
-            try {
-              const deliverer = await DelivererModel.findOne({ userId }).lean();
-              if (!deliverer) return;
-              const route = await RouteModel.findOne({
-                _id: data?.routeId,
-                assignedDelivererId: deliverer._id,
-                status: "active",
-              }).lean();
-              if (!route) {
-                socket.emit("route_error", {
-                  code: "ROUTE_NOT_FOUND",
-                  message: "Active route not found.",
-                });
-                return;
-              }
-              if (data.stopIndex !== route.currentStopIndex) {
-                socket.emit("route_error", {
-                  code: "WRONG_STOP",
-                  message: "Can only resend OTP for current stop.",
-                });
-                return;
-              }
-              const stop = route.stops[data.stopIndex];
-              if (!stop?.packageIds[0]) {
-                socket.emit("route_error", {
-                  code: "STOP_NOT_FOUND",
-                  message: "Stop or package not found.",
-                });
-                return;
-              }
-              this.deliveryOTPs.delete(
-                `delivery_otp_${stop.packageIds[0].toString()}`,
-              );
-              await this.generateAndSendDeliveryOTP(
-                route as any,
-                data.stopIndex,
-                data.routeId,
-              );
-              socket.emit("delivery_otp_resent", {
-                routeId: data.routeId,
-                stopIndex: data.stopIndex,
-                packageId: stop.packageIds[0],
-                message: "New OTP sent to client.",
-                timestamp: new Date(),
-              });
-            } catch (err: any) {
-              socket.emit("route_error", {
-                code: "RESEND_OTP_FAILED",
-                message: "Failed to resend OTP.",
               });
             }
           },
@@ -3717,7 +3864,7 @@ export class SocketService {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      //  PACKAGE / MANIFEST TRACKING
+      //  PACKAGE / MANIFEST TRACKING (keep existing)
       // ══════════════════════════════════════════════════════════════════════
 
       socket.on("track_package", async (data: { packageId: string }) => {
@@ -3885,7 +4032,7 @@ export class SocketService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  //  PRIVATE HELPERS
+  //  PRIVATE HELPERS (keep existing)
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async joinRoleRooms(
@@ -4187,47 +4334,6 @@ export class SocketService {
     }
   }
 
-  private async generateAndSendDeliveryOTP(
-    route: any,
-    stopIndex: number,
-    routeId: string,
-  ): Promise<void> {
-    try {
-      const stop = route.stops[stopIndex];
-      if (!stop || !stop.packageIds[0]) return;
-      const packageId = stop.packageIds[0].toString();
-      const pkg = await PackageModel.findById(packageId)
-        .select("destination trackingNumber")
-        .lean();
-      if (!pkg) return;
-      const recipientPhone = (pkg as any).destination?.recipientPhone;
-      if (!recipientPhone) {
-        console.warn(`[OTP] No phone for package ${packageId}`);
-        return;
-      }
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiresAt = Date.now() + 10 * 60 * 1000;
-      this.deliveryOTPs.set(`delivery_otp_${packageId}`, { code, expiresAt });
-      await PackageModel.findByIdAndUpdate(packageId, {
-        $set: {
-          "deliveryOtp.code": code,
-          "deliveryOtp.expiresAt": new Date(expiresAt),
-          "deliveryOtp.stopIndex": stopIndex,
-          "deliveryOtp.routeId": new mongoose.Types.ObjectId(routeId),
-          "deliveryOtp.generatedAt": new Date(),
-          "deliveryOtp.verified": false,
-        },
-      });
-      const smsSent = await sendSMS({
-        to: recipientPhone,
-        message: `Your delivery code for package ${(pkg as any).trackingNumber} is: ${code}. Valid for 10 minutes.`,
-      });
-      if (!smsSent) console.error(`[OTP] SMS failed for ${packageId}`);
-    } catch (err) {
-      console.error("[Socket] generateAndSendDeliveryOTP error:", err);
-    }
-  }
-
   private buildFailedStopPayload(
     routeId: string,
     stopIndex: number,
@@ -4298,27 +4404,15 @@ export class SocketService {
 
     const pkg = await PackageModel.findById(activePackageId)
       .select(
-        "trackingNumber status destination attemptCount maxAttempts estimatedDeliveryTime deliveryOtp",
+        "trackingNumber status destination attemptCount maxAttempts estimatedDeliveryTime deliveryQr",
       )
       .lean();
 
-    const otpKey = `delivery_otp_${activePackageId.toString()}`;
-    const memEntry = this.deliveryOTPs.get(otpKey);
-    const dbOtp = pkg?.deliveryOtp;
-
-    const otpAlive =
-      (!!memEntry && Date.now() < memEntry.expiresAt) ||
-      (!memEntry &&
-        !!dbOtp?.code &&
-        !dbOtp.verified &&
-        dbOtp.expiresAt > new Date());
-
-    if (!memEntry && otpAlive && dbOtp?.code) {
-      this.deliveryOTPs.set(otpKey, {
-        code: dbOtp.code,
-        expiresAt: dbOtp.expiresAt.getTime(),
-      });
-    }
+    // Check if QR is still active
+    const qrActive = pkg?.deliveryQr && 
+                     pkg.status === "out_for_delivery" &&
+                     !pkg.deliveryQr.verified &&
+                     new Date() < pkg.deliveryQr.expiresAt;
 
     socket.join(this.getRouteRoom(route._id.toString()));
 
@@ -4364,12 +4458,10 @@ export class SocketService {
               attemptCount: pkg.attemptCount,
               maxAttempts: pkg.maxAttempts,
               estimatedDeliveryTime: pkg.estimatedDeliveryTime,
-              otp: {
-                alive: otpAlive,
-                expiresAt: memEntry
-                  ? new Date(memEntry.expiresAt)
-                  : (dbOtp?.expiresAt ?? null),
-                verified: dbOtp?.verified ?? false,
+              qr: {
+                active: qrActive,
+                expiresAt: pkg.deliveryQr?.expiresAt ?? null,
+                verified: pkg.deliveryQr?.verified ?? false,
               },
             }
           : null,
@@ -4377,7 +4469,7 @@ export class SocketService {
         message:
           route.status === "paused"
             ? "Your route was paused. Tap Resume to continue."
-            : "You have an active delivery. Pick up where you left off.",
+            : "You have an active delivery. Ask client to show QR code.",
         timestamp: new Date(),
       });
     } else {
@@ -4435,7 +4527,7 @@ export class SocketService {
     console.log(
       `[Socket] Deliverer ${userId} resumed — route ${route.routeNumber} ` +
         `stop ${route.currentStopIndex}/${route.stops.length - 1} ` +
-        `pkg ${activePackageId} started=${isPackageStarted} otpAlive=${otpAlive}`,
+        `pkg ${activePackageId} started=${isPackageStarted} qrActive=${qrActive}`,
     );
   }
 
