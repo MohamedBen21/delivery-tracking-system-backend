@@ -12056,7 +12056,6 @@ export const getTodayDeliveries = catchAsyncError(
 //  last6months, or no filter (all time).
 // ─────────────────────────────────────────────────────────────────────────────
 
-
 export const getDeliveryHistory = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -12070,70 +12069,72 @@ export const getDeliveryHistory = catchAsyncError(
         return next(new ErrorHandler("Deliverer profile not found.", 404));
       }
 
-
       const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
       const skip = (page - 1) * limit;
-
 
       const filter: Record<string, any> = {
         assignedDelivererId: deliverer._id,
       };
 
-
       type PeriodFilter = "today" | "yesterday" | "last7days" | "last30days" | "last6months" | "custom";
 
       const period = req.query.period ? (req.query.period as PeriodFilter) : "all";
 
+      // Handle date filtering
       if (period !== "all") {
         const now = new Date();
         let startDate: Date;
+        let endDate: Date;
 
         switch (period) {
           case "today":
             startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            startDate.setHours(0, 0, 0, 0);
+            endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000 - 1);
+            filter.deliveredAt = { $gte: startDate, $lte: endDate };
             break;
+            
           case "yesterday":
             startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-            filter.deliveredAt = {
-              $gte: startDate,
-              $lt: new Date(startDate.getTime() + 24 * 60 * 60 * 1000),
-            };
+            startDate.setHours(0, 0, 0, 0);
+            endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000 - 1);
+            filter.deliveredAt = { $gte: startDate, $lte: endDate };
             break;
+            
           case "last7days":
             startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
             startDate.setHours(0, 0, 0, 0);
+            filter.deliveredAt = { $gte: startDate };
             break;
+            
           case "last30days":
             startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
             startDate.setHours(0, 0, 0, 0);
+            filter.deliveredAt = { $gte: startDate };
             break;
+            
           case "last6months":
             startDate = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+            startDate.setHours(0, 0, 0, 0);
+            filter.deliveredAt = { $gte: startDate };
             break;
+            
           case "custom":
             if (req.query.startDate && req.query.endDate) {
+              const customStart = new Date(req.query.startDate as string);
+              const customEnd = new Date(req.query.endDate as string);
+              customEnd.setHours(23, 59, 59, 999);
               filter.deliveredAt = {
-                $gte: new Date(req.query.startDate as string),
-                $lte: new Date(req.query.endDate as string),
+                $gte: customStart,
+                $lte: customEnd,
               };
-              startDate = new Date(req.query.startDate as string);
             }
             break;
-          default:
-            break;
-        }
-
-        if (startDate! && period !== "custom" && period !== "yesterday") {
-          filter.$or = [
-            { deliveredAt: { $gte: startDate } },
-            { createdAt: { $gte: startDate } },
-            { updatedAt: { $gte: startDate } },
-          ];
         }
       }
 
-
+      // Additional filters - these work independently
       if (req.query.status) {
         filter.status = req.query.status as string;
       }
@@ -12142,26 +12143,21 @@ export const getDeliveryHistory = catchAsyncError(
         filter.status = { $in: (req.query.statuses as string).split(",").map(s => s.trim()) };
       }
 
-
       if (req.query.deliveryType) {
         filter.deliveryType = req.query.deliveryType as string;
       }
-
 
       if (req.query.deliveryPriority) {
         filter.deliveryPriority = req.query.deliveryPriority as string;
       }
 
-
       if (req.query.city) {
         filter["destination.city"] = new RegExp(req.query.city as string, "i");
       }
 
-
       if (req.query.search) {
         filter.trackingNumber = new RegExp(req.query.search as string, "i");
       }
-
 
       const minWeight = req.query.minWeight ? parseFloat(req.query.minWeight as string) : undefined;
       const maxWeight = req.query.maxWeight ? parseFloat(req.query.maxWeight as string) : undefined;
@@ -12174,7 +12170,6 @@ export const getDeliveryHistory = catchAsyncError(
         filter.weight = { ...filter.weight, $lte: maxWeight };
       }
 
-
       const sortBy = (req.query.sortBy as string) || "deliveredAt";
       const order = req.query.order === "desc" ? -1 : 1;
       const sortMap: Record<string, any> = {
@@ -12185,7 +12180,6 @@ export const getDeliveryHistory = catchAsyncError(
         attemptCount: { attemptCount: order },
       };
       const sort = sortMap[sortBy] || { deliveredAt: -1 };
-
 
       const [total, packages] = await Promise.all([
         PackageModel.countDocuments(filter),
@@ -12198,10 +12192,17 @@ export const getDeliveryHistory = catchAsyncError(
           .lean({ virtuals: true }),
       ]);
 
-
-      const allPackagesForStats = await PackageModel.find({
+      // Stats - consider filtering by period as well for consistency
+      let statsFilter: Record<string, any> = {
         assignedDelivererId: deliverer._id,
-      }).lean();
+      };
+      
+      // Apply the same date filter to stats for consistency
+      if (period !== "all" && filter.deliveredAt) {
+        statsFilter.deliveredAt = filter.deliveredAt;
+      }
+
+      const allPackagesForStats = await PackageModel.find(statsFilter).lean();
 
       const stats = {
         totalLifetime: allPackagesForStats.length,
@@ -12222,7 +12223,6 @@ export const getDeliveryHistory = catchAsyncError(
           .reduce((sum, p) => sum + (p.totalPrice || 0), 0),
       };
 
-
       const formattedPackages = packages.map((pkg: any) => ({
         id: pkg._id,
         trackingNumber: pkg.trackingNumber,
@@ -12240,9 +12240,9 @@ export const getDeliveryHistory = catchAsyncError(
           state: pkg.destination?.state,
           coordinates: pkg.deliveryType === "home" && pkg.destination.location?.coordinates
             ? {
-              type: pkg.destination.location.type || "Point",
-              coordinates: pkg.destination.location.coordinates,
-            }
+                type: pkg.destination.location.type || "Point",
+                coordinates: pkg.destination.location.coordinates,
+              }
             : null,
         },
         description: pkg.description ?? null,

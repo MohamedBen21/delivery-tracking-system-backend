@@ -176,6 +176,17 @@ export interface IPackage extends Document {
 
   deliveryOtp?: IDeliveryOtp;
 
+  deliveryQr?: {
+    code: string;
+    expiresAt: Date;
+    stopIndex: number;
+    routeId: mongoose.Types.ObjectId;
+    generatedAt: Date;
+    verified: boolean;
+    verifiedAt?: Date;
+    sessionId: mongoose.Types.ObjectId;
+  };
+
   updateStatus: (
     newStatus: PackageStatus,
     userId?: mongoose.Types.ObjectId,
@@ -716,6 +727,18 @@ const packageSchema = new Schema<IPackage>({
 
   claimedAt: {
     type: Date,
+  },
+
+
+  deliveryQr: {
+    code: { type: String },
+    expiresAt: { type: Date },
+    stopIndex: { type: Number },
+    routeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Route' },
+    generatedAt: { type: Date, default: Date.now },
+    verified: { type: Boolean, default: false },
+    verifiedAt: { type: Date },
+    sessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'DeliveryQrSession' },
   },
 
 }, {

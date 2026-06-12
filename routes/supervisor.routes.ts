@@ -98,7 +98,7 @@ supervisorRouter.get("/branches/:branchId/packages/by-status", ...supOrAdmin, ge
 supervisorRouter.get("/branches/:branchId/packages/by-branch-role", ...supOrAdmin, getPackagesByBranch);
 supervisorRouter.get("/branches/:branchId/packages/by-sender", ...supOrAdmin, getPackagesBySender);
 supervisorRouter.get("/branches/:branchId/packages/by-receiver", ...supOrAdmin, getPackagesByReceiver);
-supervisorRouter.get("/branches/:branchId/packages/:packageId", ...supOrAdmin, getPackage);
+supervisorRouter.get("/branches/:branchId/packages/:packageId", authorizeRoles("supervisor","freelancer"), getPackage);
 supervisorRouter.patch("/branches/:branchId/packages/:packageId", ...supOrAdmin, updatePackage);
 supervisorRouter.patch(
   "/branches/:branchId/packages/:packageId/toggle-cancel",
