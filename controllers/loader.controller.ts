@@ -2542,3 +2542,104 @@ export const getPackagesToManifest = catchAsyncError(
     });
   },
 );
+
+
+
+
+
+export const getPackagesToManifestGroupedByDestination = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const loaderUserId = req.user?._id;
+    if (!loaderUserId) return next(new ErrorHandler("Unauthorized.", 401));
+
+    const loader = await resolveLoader(loaderUserId, next, true);
+    if (!loader) return;
+
+    const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
+    
+    // Get all packages that need to be manifested
+    const packages = await PackageModel.find({
+      currentBranchId: activeBranchId,
+      status: { $in: ["at_origin_branch", "accepted"] },
+      destinationBranchId: { $ne: activeBranchId },
+      $or: [
+        { currentManifestId: { $exists: false } },
+        { currentManifestId: null },
+      ],
+    })
+      .populate("destinationBranchId", "name code address")
+      .lean();
+    
+    // Group packages by destination branch
+    const groupedByDestination: Record<string, {
+      branchId: string;
+      branchName: string;
+      branchCode: string;
+      packages: any[];
+      totalWeight: number;
+      packageCount: number;
+      fragileCount: number;
+      expressCount: number;
+    }> = {};
+    
+    for (const pkg of packages) {
+      const destinationBranch = pkg.destinationBranchId as any;
+      const destBranchId = destinationBranch?._id?.toString() || destinationBranch?.toString();
+      
+      if (!destBranchId) continue;
+      
+      if (!groupedByDestination[destBranchId]) {
+        groupedByDestination[destBranchId] = {
+          branchId: destBranchId,
+          branchName: destinationBranch?.name || "Unknown",
+          branchCode: destinationBranch?.code || "UNK",
+          packages: [],
+          totalWeight: 0,
+          packageCount: 0,
+          fragileCount: 0,
+          expressCount: 0,
+        };
+      }
+      
+      groupedByDestination[destBranchId].packages.push({
+        trackingNumber: pkg.trackingNumber,
+        weight: pkg.weight,
+        isFragile: pkg.isFragile,
+        type: pkg.type,
+        deliveryPriority: pkg.deliveryPriority,
+        description: pkg.description,
+        recipientName: pkg.destination?.recipientName,
+      });
+      
+      groupedByDestination[destBranchId].totalWeight += pkg.weight || 0;
+      groupedByDestination[destBranchId].packageCount++;
+      
+      if (pkg.isFragile) {
+        groupedByDestination[destBranchId].fragileCount++;
+      }
+      
+      if (pkg.deliveryPriority === "express" || pkg.deliveryPriority === "same_day") {
+        groupedByDestination[destBranchId].expressCount++;
+      }
+    }
+    
+    // Convert to array and sort by package count (most packages first)
+    const destinations = Object.values(groupedByDestination)
+      .sort((a, b) => b.packageCount - a.packageCount);
+    
+    return res.status(200).json({
+      success: true,
+      message: `Found packages for ${destinations.length} destination(s).`,
+      data: {
+        totalPackages: packages.length,
+        destinations,
+        currentBranch: {
+          id: activeBranchId,
+          name: loader.temporaryBranchId 
+            ? "Temporary Assignment" 
+            : "Home Branch",
+        },
+      },
+    });
+  },
+);
