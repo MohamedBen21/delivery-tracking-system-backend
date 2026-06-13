@@ -3596,7 +3596,7 @@ export class SocketService {
                 address: stop.address,
                 reason: data.reason,
                 notes: data.notes,
-                stopnIndex: route.currentStopIndex,
+                stopIndex: route.currentStopIndex,
                 isLastStop,
                 message: `Package ${updatedPkg?.trackingNumber || packageId} has been successfully cancelled.`,
                 timestamp: new Date(),
