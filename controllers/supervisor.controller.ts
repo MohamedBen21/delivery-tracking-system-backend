@@ -6428,6 +6428,7 @@ export const getPackageHistory = catchAsyncError(
         readableStatus: READABLE_STATUS_MAP[packageDoc.status] ?? packageDoc.status,
         deliveryType: packageDoc.deliveryType,
         recipient: packageDoc.destination?.recipientName || 'N/A',
+        description: packageDoc.description ?? null,
       },
       data: entries,
       pagination: {
@@ -10204,7 +10205,7 @@ export const searchPackages = catchAsyncError(
             : null,
         },
 
-
+        description: pkg.description ?? null,
         deliveryType: pkg.deliveryType,
         deliveryPriority: pkg.deliveryPriority,
         estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
@@ -12392,6 +12393,7 @@ export const getDeliveryHistory = catchAsyncError(
             : null,
         },
  
+        description: pkg.description ?? null,
         weight: pkg.weight,
         totalPrice: pkg.totalPrice,
         paymentStatus: pkg.paymentStatus,
@@ -15999,6 +16001,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
             }
             : null,
         },
+        description: pkg.description ?? null,
         deliveryType: pkg.deliveryType,
         deliveryPriority: pkg.deliveryPriority,
         estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,

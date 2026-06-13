@@ -3087,15 +3087,15 @@ export class SocketService {
                   data.coordinates,
                   stop.location.coordinates,
                 ) * 1000;
-              if (distanceMeters > 50) {
-                socket.emit("route_error", {
-                  code: "TOO_FAR",
-                  message: `Must be within 50m. Current: ${Math.round(distanceMeters)}m.`,
-                  distanceMeters: Math.round(distanceMeters),
-                  requiredMeters: 50,
-                });
-                return;
-              }
+              // if (distanceMeters > 50) {
+              //   socket.emit("route_error", {
+              //     code: "TOO_FAR",
+              //     message: `Must be within 50m. Current: ${Math.round(distanceMeters)}m.`,
+              //     distanceMeters: Math.round(distanceMeters),
+              //     requiredMeters: 50,
+              //   });
+              //   return;
+              // }
 
               const packageId = stop.packageIds[0].toString();
               const pkg = await PackageModel.findById(packageId);
@@ -3253,30 +3253,6 @@ export class SocketService {
                     timestamp: new Date(),
                   });
                 } else {
-                  if (nextStop) {
-                    nextStop.status = "in_progress";
-                    await route.save();
-
-                    const nextPackageId = nextStop.packageIds[0].toString();
-                    const nextPackage = await PackageModel.findById(nextPackageId);
-                    if (nextPackage) {
-                      await nextPackage.updateStatus(
-                        "out_for_delivery",
-                        new mongoose.Types.ObjectId(userId),
-                        deliverer.branchId,
-                        "Next package auto-started after failed delivery",
-                        nextStop.address
-                      );
-                      
-                      this.broadcastPackageStatusToClient(nextPackageId, "out_for_delivery");
-                    }
-
-                    await this.generateAndSendDeliveryQR(
-                      route,
-                      route.currentStopIndex,
-                      data.routeId,
-                    );
-                  }
                   socket.emit("delivery_attempt_failed", {
                     ...failPayload,
                     maxReached: true,
@@ -3290,8 +3266,8 @@ export class SocketService {
                           packageId: nextStop.packageIds[0],
                           address: nextStop.address,
                           location: nextStop.location.coordinates,
-                          qrSent: true,
-                          status: "in_progress",
+                          qrSent: false,
+                          status: nextStop.status === "in_progress" ? "in_progress" : "pending",
                         }
                       : null,
                     remainingStops: totalStopsNow - route.currentStopIndex,
@@ -3308,30 +3284,6 @@ export class SocketService {
                   });
                 }
               } else {
-                if (nextStop) {
-                  nextStop.status = "in_progress";
-                  await route.save();
-
-                  const nextPackageId = nextStop.packageIds[0].toString();
-                  const nextPackage = await PackageModel.findById(nextPackageId);
-                  if (nextPackage) {
-                    await nextPackage.updateStatus(
-                      "out_for_delivery",
-                      new mongoose.Types.ObjectId(userId),
-                      deliverer.branchId,
-                      "Next package auto-started after failed delivery attempt",
-                      nextStop.address
-                    );
-                    
-                    this.broadcastPackageStatusToClient(nextPackageId, "out_for_delivery");
-                  }
-
-                  await this.generateAndSendDeliveryQR(
-                    route,
-                    route.currentStopIndex,
-                    data.routeId,
-                  );
-                }
                 socket.emit("delivery_attempt_failed", {
                   ...failPayload,
                   maxReached: false,
@@ -3346,7 +3298,7 @@ export class SocketService {
                         address: nextStop.address,
                         location: nextStop.location.coordinates,
                         isRetry: route.currentStopIndex === requeuedStopIndex,
-                        qrSent: true,
+                        qrSent: false,
                         status: nextStop.status === "in_progress" ? "in_progress" : "pending",
                       }
                     : null,
@@ -3389,41 +3341,71 @@ export class SocketService {
             routeId: string;
             stopIndex: number;
             coordinates: [number, number];
+            currentPage: string;
             reason: string;
             notes?: string;
           }) => {
+            console.log(`[Socket] Deliverer ${userId} requested package cancellation at stop ${data.stopIndex} of route ${data.routeId}`);
             try {
               if (!data?.routeId || !data?.reason) {
-                socket.emit("route_error", {
-                  code: "MISSING_DATA",
-                  message: "routeId and reason are required.",
-                });
+                if(data.currentPage === "home") {
+                  socket.emit("route_error_home", {
+                    code: "MISSING_DATA",
+                    message: "routeId and reason are required.",
+                  });
+                }else {
+                  socket.emit("route_error", {
+                    code: "MISSING_DATA",
+                    message: "routeId and reason are required.",
+                  });
+                }
                 return;
               }
               if (
                 !data?.routeId ||
                 !mongoose.Types.ObjectId.isValid(data.routeId)
               ) {
-                socket.emit("route_error", {
+                if(data.currentPage === "home") {
+                  socket.emit("route_error_home", {
                   code: "INVALID_ROUTE_ID",
                   message: "Invalid routeId.",
                 });
+                }else{
+                  socket.emit("route_error", {
+                  code: "INVALID_ROUTE_ID",
+                  message: "Invalid routeId.",
+                });
+                }
                 return;
               }
               if (data.stopIndex === undefined || data.stopIndex < 0) {
-                socket.emit("route_error", {
+                if(data.currentPage === "home") {
+                  socket.emit("route_error_home", {
                   code: "INVALID_STOP",
                   message: "Invalid stopIndex.",
                 });
+                }else {
+                  socket.emit("route_error", {
+                  code: "INVALID_STOP",
+                  message: "Invalid stopIndex.",
+                });
+                }
                 return;
               }
 
               const deliverer = await DelivererModel.findOne({ userId }).lean();
               if (!deliverer) {
-                socket.emit("route_error", {
+                if(data.currentPage === "home") {
+                  socket.emit("route_error_home", {
                   code: "NOT_FOUND",
                   message: "Deliverer not found.",
                 });
+                }else {
+                  socket.emit("route_error", {
+                  code: "NOT_FOUND",
+                  message: "Deliverer not found.",
+                });
+                }
                 return;
               }
 
@@ -3433,28 +3415,50 @@ export class SocketService {
                 status: "active",
               });
               if (!route) {
-                socket.emit("route_error", {
+                if(data.currentPage === "home") {
+                  socket.emit("route_error_home", {
                   code: "ROUTE_NOT_FOUND",
                   message: "Active route not found.",
                 });
+                }else {
+                  socket.emit("route_error", {
+                  code: "ROUTE_NOT_FOUND",
+                  message: "Active route not found.",
+                });
+                }
                 return;
               }
 
               if (data.stopIndex !== route.currentStopIndex) {
-                socket.emit("route_error", {
+                if(data.currentPage === "home") {
+                  socket.emit("route_error_home", {
                   code: "WRONG_STOP",
                   message: `Expected stop ${route.currentStopIndex}, got ${data.stopIndex}.`,
                   expectedStopIndex: route.currentStopIndex,
                 });
+                }else {
+                  socket.emit("route_error", {
+                  code: "WRONG_STOP",
+                  message: `Expected stop ${route.currentStopIndex}, got ${data.stopIndex}.`,
+                  expectedStopIndex: route.currentStopIndex,
+                });
+                }
                 return;
               }
 
               const stop = route.stops[data.stopIndex];
               if (!stop || !stop.packageIds[0]) {
-                socket.emit("route_error", {
+                if(data.currentPage === "home") {
+                  socket.emit("route_error_home", {
                   code: "STOP_NOT_FOUND",
                   message: "Stop or package not found.",
                 });
+                }else {
+                  socket.emit("route_error", {
+                  code: "STOP_NOT_FOUND",
+                  message: "Stop or package not found.",
+                });
+                }
                 return;
               }
 
@@ -3462,10 +3466,17 @@ export class SocketService {
 
               const pkg = await PackageModel.findById(packageId);
               if (!pkg) {
-                socket.emit("route_error", {
+                if(data.currentPage === "home") {
+                  socket.emit("route_error_home", {
                   code: "PACKAGE_NOT_FOUND",
                   message: "Package not found.",
                 });
+                }else {
+                  socket.emit("route_error", {
+                  code: "PACKAGE_NOT_FOUND",
+                  message: "Package not found.",
+                });
+                }
                 return;
               }
 
@@ -3521,11 +3532,24 @@ export class SocketService {
                 lastActiveAt: new Date(),
               });
 
+              route.stops.push({
+                clientId: stop.clientId,
+                location: stop.location,
+                address: stop.address,
+                packageIds: stop.packageIds,
+                action: stop.action,
+                status: "pending" as const,
+                order: route.stops.length + 1,
+                ...(stop.branchId ? { branchId: stop.branchId } : {}),
+              } as any);
+              await route.save();
+
               const updatedPkg = await PackageModel.findById(packageId).lean();
               const isLastStop = data.stopIndex === route.stops.length - 1;
               const routeRoom = this.getRouteRoom(data.routeId);
 
-              socket.emit("cancellation_success", {
+              if(data.currentPage === "home") {
+                socket.emit("cancellation_success_home", {
                 success: true,
                 routeId: data.routeId,
                 packageId,
@@ -3541,6 +3565,24 @@ export class SocketService {
                 message: `Package ${updatedPkg?.trackingNumber || packageId} has been successfully cancelled.`,
                 timestamp: new Date(),
               });
+              }else{
+                socket.emit("cancellation_success", {
+                success: true,
+                routeId: data.routeId,
+                packageId,
+                trackingNumber: updatedPkg?.trackingNumber,
+                stopIndex: data.stopIndex,
+                stopId: stop._id,
+                branchId: stop.branchId,
+                address: stop.address,
+                reason: data.reason,
+                notes: data.notes,
+                currentStopIndex: route.currentStopIndex,
+                isLastStop,
+                message: `Package ${updatedPkg?.trackingNumber || packageId} has been successfully cancelled.`,
+                timestamp: new Date(),
+              });
+              }
 
               this.io
                 .to(this.getPackageRoom(packageId))
