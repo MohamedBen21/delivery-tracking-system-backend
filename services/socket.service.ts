@@ -2461,12 +2461,33 @@ export class SocketService {
             }
 
             if (data.stopIndex !== route.currentStopIndex) {
-              socket.emit("route_error", {
-                code: "WRONG_STOP",
-                message: `Expected stop ${route.currentStopIndex}, got ${data.stopIndex}.`,
-                expectedStopIndex: route.currentStopIndex,
-              });
-              return;
+              if (route.currentStopIndex >= route.stops.length) {
+                const firstUnresolvedIndex = route.stops.findIndex(
+                  (s, idx) => idx >= 0 && s.status === "failed"
+                );
+
+                if (
+                  firstUnresolvedIndex !== -1 &&
+                  firstUnresolvedIndex === data.stopIndex
+                ) {
+                  route.currentStopIndex = firstUnresolvedIndex;
+                  await route.save();
+                } else {
+                  socket.emit("route_error", {
+                    code: "WRONG_STOP",
+                    message: `Expected stop ${route.currentStopIndex}, got ${data.stopIndex}.`,
+                    expectedStopIndex: route.currentStopIndex,
+                  });
+                  return;
+                }
+              } else {
+                socket.emit("route_error", {
+                  code: "WRONG_STOP",
+                  message: `Expected stop ${route.currentStopIndex}, got ${data.stopIndex}.`,
+                  expectedStopIndex: route.currentStopIndex,
+                });
+                return;
+              }
             }
 
             const stop = route.stops[data.stopIndex];
