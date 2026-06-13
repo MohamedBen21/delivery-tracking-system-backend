@@ -12339,7 +12339,7 @@ export const getDeliveryHistory = catchAsyncError(
         });
       }
  
-      // Stats - consider filtering by period as well for consistency
+      // ── Stats - Apply the SAME filters as the main query ─────────────────────
       let statsFilter: Record<string, any> = {
         assignedDelivererId: deliverer._id,
       };
@@ -12347,6 +12347,31 @@ export const getDeliveryHistory = catchAsyncError(
       // Apply the same delivered-date-window filter to stats for consistency
       if (period !== "all" && filter._id) {
         statsFilter._id = filter._id;
+      }
+ 
+      // ✅ CRITICAL FIX: Copy all relevant filters from main filter to stats
+      if (filter.status) {
+        statsFilter.status = filter.status;
+      }
+ 
+      if (filter.deliveryType) {
+        statsFilter.deliveryType = filter.deliveryType;
+      }
+ 
+      if (filter.deliveryPriority) {
+        statsFilter.deliveryPriority = filter.deliveryPriority;
+      }
+ 
+      if (filter["destination.city"]) {
+        statsFilter["destination.city"] = filter["destination.city"];
+      }
+ 
+      if (filter.weight) {
+        statsFilter.weight = filter.weight;
+      }
+ 
+      if (filter.trackingNumber) {
+        statsFilter.trackingNumber = filter.trackingNumber;
       }
  
       const allPackagesForStats = await PackageModel.find(statsFilter).lean();
