@@ -17,6 +17,8 @@ import {
   getMyShift,
   getManifestDetail,
   getMyStats,
+  getPackagesToManifest,
+  getPackagesToManifestGroupedByDestination,
 } from "../controllers/loader.controller";
 
 const loaderRouter = Router();
@@ -47,5 +49,9 @@ loaderRouter.post("/manifests/:manifestId/scan-out", scanPackageOut);
 loaderRouter.post("/manifests/:manifestId/re-manifest", remanifestPackage);
 loaderRouter.post("/manifests/:manifestId/close", closeManifest);
 loaderRouter.post("/manifests/:manifestId/discrepancy", flagDiscrepancy);
+
+
+loaderRouter.get("/packages/to-manifest", getPackagesToManifest);
+loaderRouter.get("/packages/to-manifest/grouped", getPackagesToManifestGroupedByDestination);
 
 export default loaderRouter;

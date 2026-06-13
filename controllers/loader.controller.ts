@@ -2412,3 +2412,133 @@ export const getMyStats = catchAsyncError(
     });
   },
 );
+
+
+export const getPackagesToManifest = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const loaderUserId = req.user?._id;
+    if (!loaderUserId) return next(new ErrorHandler("Unauthorized.", 401));
+
+    const loader = await resolveLoader(loaderUserId, next, true);
+    if (!loader) return;
+
+    const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
+    
+    // Pagination parameters
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const skip = (page - 1) * limit;
+    
+    // Filter parameters
+    const {
+      search,
+      packageType,
+      isFragile,
+      sortBy = "createdAt",
+      sortOrder = "desc",
+    } = req.query;
+    
+    // Build the query for packages that need to be manifested
+    const query: any = {
+      currentBranchId: activeBranchId,
+      status: { $in: ["at_origin_branch", "accepted"] },
+      $or: [
+        { currentManifestId: { $exists: false } },
+        { currentManifestId: null },
+      ],
+    };
+    
+    // Ensure package is not destined for the same branch
+    // (packages that need to be shipped elsewhere)
+    query.destinationBranchId = { $ne: activeBranchId };
+    
+    // Optional filters
+    if (search) {
+      query.$or = [
+        { trackingNumber: { $regex: search, $options: "i" } },
+        { "destination.recipientName": { $regex: search, $options: "i" } },
+        { "destination.recipientPhone": { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } },
+      ];
+    }
+    
+    if (packageType) {
+      query.type = packageType;
+    }
+    
+    if (isFragile === "true") {
+      query.isFragile = true;
+    } else if (isFragile === "false") {
+      query.isFragile = false;
+    }
+    
+    // Sorting configuration
+    const sortConfig: any = {};
+    const sortFields: Record<string, string> = {
+      trackingNumber: "trackingNumber",
+      createdAt: "createdAt",
+      weight: "weight",
+      type: "type",
+      "destination.recipientName": "destination.recipientName",
+      deliveryPriority: "deliveryPriority",
+    };
+    
+    const sortField = sortFields[sortBy as string] || "createdAt";
+    sortConfig[sortField] = sortOrder === "asc" ? 1 : -1;
+    
+    // Execute queries in parallel
+    const [packages, totalCount] = await Promise.all([
+      PackageModel.find(query)
+        .select(
+          "trackingNumber weight isFragile type description declaredValue " +
+          "destination deliveryPriority status createdAt originBranchId " +
+          "destinationBranchId currentBranchId"
+        )
+        .populate("destinationBranchId", "name code address")
+        .populate("originBranchId", "name code")
+        .sort(sortConfig)
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      PackageModel.countDocuments(query),
+    ]);
+    
+    // Calculate package statistics
+    const stats = {
+      total: totalCount,
+      totalWeight: packages.reduce((sum, pkg) => sum + (pkg.weight || 0), 0),
+      fragileCount: packages.filter((pkg) => pkg.isFragile).length,
+      byPriority: {
+        standard: packages.filter((pkg) => pkg.deliveryPriority === "standard").length,
+        express: packages.filter((pkg) => pkg.deliveryPriority === "express").length,
+        same_day: packages.filter((pkg) => pkg.deliveryPriority === "same_day").length,
+      },
+      byType: packages.reduce((acc: Record<string, number>, pkg) => {
+        const type = pkg.type || "parcel";
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+      }, {}),
+    };
+    
+    return res.status(200).json({
+      success: true,
+      message: `Found ${totalCount} package(s) ready to be manifested.`,
+      data: {
+        packages,
+        stats,
+        pagination: {
+          page,
+          limit,
+          total: totalCount,
+          pages: Math.ceil(totalCount / limit),
+        },
+        branchContext: {
+          branchId: activeBranchId,
+          branchName: loader.temporaryBranchId 
+            ? "Temporary assignment" 
+            : "Home branch",
+        },
+      },
+    });
+  },
+);
