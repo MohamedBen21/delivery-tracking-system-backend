@@ -2395,6 +2395,7 @@ export class SocketService {
               .emit("deliverer_route_started", {
                 routeId: data.routeId,
                 routeNumber: route.routeNumber,
+                stopIndex:route.currentStopIndex,
                 delivererId: deliverer._id,
                 userId,
                 totalStops: route.stops.length,

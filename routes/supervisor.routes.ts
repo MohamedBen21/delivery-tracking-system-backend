@@ -135,7 +135,7 @@ supervisorRouter.patch(
 );
 
 supervisorRouter.get("/packages/search", isAuthenticated, searchPackages);
-supervisorRouter.get("/packages", isAuthenticated, authorizeRoles("deliverer", "transporter", "cashier"), getPackagesPaginated);
+// supervisorRouter.get("/packages", isAuthenticated, authorizeRoles("deliverer", "transporter", "cashier"), getPackagesPaginated);
 supervisorRouter.get("/packages", isAuthenticated, authorizeRoles("deliverer", "transporter", "cashier"), getPackagesPaginatedFromRoute);
 
 
