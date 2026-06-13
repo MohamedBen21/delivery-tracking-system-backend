@@ -2551,14 +2551,13 @@ export class SocketService {
 
             socket.emit("package_started", {
               routeId: data.routeId,
-              stopIndex: data.stopIndex,
               stopId: stop._id,
               packageId,
               address: stop.address,
               location: stop.location.coordinates,
               recipientName: (stop as any).recipientName,
               recipientPhone: (stop as any).recipientPhone,
-              currentStopIndex: route.currentStopIndex,
+              stopIndex: route.currentStopIndex,
               message: "Package started. QR code sent to client. Ask client to show the QR code for verification.",
               qrSent: true,
               timestamp: new Date(),
