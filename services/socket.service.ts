@@ -2372,7 +2372,7 @@ export class SocketService {
               routeId: data.routeId,
               routeNumber: route.routeNumber,
               status: "active",
-              currentStopIndex: 0,
+              stopIndex: 0,
               totalStops: route.stops.length,
               currentStop: {
                 stopId: firstStop._id,

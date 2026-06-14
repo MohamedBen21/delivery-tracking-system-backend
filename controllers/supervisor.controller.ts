@@ -13,7 +13,7 @@ import PackageModel, { DeliveryType, IIssue, PackageStatus, PackageType, Payment
 import FreelancerModel from "../models/freelancer.model";
 import clientModel from "../models/client.model";
 import PackageHistoryModel from "../models/package-history.model";
-import RouteModel, { RouteStatus, RouteType } from "../models/route.model";
+import RouteModel, { IRouteStop, RouteStatus, RouteType } from "../models/route.model";
 import VehicleModel from "../models/vehicle.model";
 import { deleteImage } from "../utils/Multer.util";
 import { buildUserFieldUpdates } from "./manager.controller";
@@ -16251,4 +16251,589 @@ export const completeDeliveryByQrCode = catchAsyncError(
       return next(new ErrorHandler(error.message || "Failed to process QR scan.", 500));
     }
   }
+);
+
+
+
+
+
+export const searchDeliveries = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const delivererUserId = req.user?._id;
+      if (!delivererUserId) {
+        return next(new ErrorHandler("Unauthorized — user not found.", 401));
+      }
+
+      const deliverer = await DelivererModel.findOne({ userId: delivererUserId }).lean();
+      if (!deliverer) {
+        return next(new ErrorHandler("Deliverer profile not found.", 404));
+      }
+
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const skip = (page - 1) * limit;
+
+      const rawSearch = (req.query.q as string)?.trim() ?? "";
+
+      // Date range filters (yesterday, last7days, etc.)
+      type PeriodFilter = "today" | "yesterday" | "last7days" | "last30days" | "last6months" | "custom" | "all";
+      const period = req.query.period ? (req.query.period as PeriodFilter) : "all";
+
+      let dateFilter: Record<string, any> = {};
+
+      if (period !== "all") {
+        const now = new Date();
+        let startDate: Date;
+        let endDate: Date = new Date();
+
+        switch (period) {
+          case "today":
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
+            dateFilter = { $gte: startDate, $lt: endDate };
+            break;
+          case "yesterday":
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+            endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
+            dateFilter = { $gte: startDate, $lt: endDate };
+            break;
+          case "last7days":
+            startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            startDate.setHours(0, 0, 0, 0);
+            dateFilter = { $gte: startDate };
+            break;
+          case "last30days":
+            startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            startDate.setHours(0, 0, 0, 0);
+            dateFilter = { $gte: startDate };
+            break;
+          case "last6months":
+            startDate = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+            dateFilter = { $gte: startDate };
+            break;
+          case "custom":
+            if (req.query.startDate && req.query.endDate) {
+              dateFilter = {
+                $gte: new Date(req.query.startDate as string),
+                $lte: new Date(req.query.endDate as string),
+              };
+            }
+            break;
+        }
+      }
+
+      // First, get all routes assigned to this deliverer, ordered newest to oldest
+      const routesPipeline: any[] = [
+        {
+          $match: {
+            assignedDelivererId: deliverer._id,
+            status: { $in: ['completed', 'active', 'paused', 'cancelled'] },
+          },
+        },
+        { $sort: { createdAt: -1 } },
+        {
+          $project: {
+            _id: 1,
+            routeNumber: 1,
+            status: 1,
+            createdAt: 1,
+            stops: 1,
+          },
+        },
+      ];
+
+      const routes = await RouteModel.aggregate(routesPipeline);
+
+      if (routes.length === 0) {
+        res.status(200).json({
+          success: true,
+          data: {
+            packages: [],
+            total: 0,
+            page,
+            limit,
+            totalPages: 0,
+            hasMore: false,
+            query: rawSearch || null,
+            period: period === "all" ? "all_time" : period,
+          },
+        });
+        return;
+      }
+
+
+      const allPackageIds: mongoose.Types.ObjectId[] = [];
+      routes.forEach(route => {
+        route.stops?.forEach((stop: IRouteStop) => {
+          if (stop.packageIds && stop.packageIds.length > 0) {
+            allPackageIds.push(...stop.packageIds);
+          }
+        });
+      });
+
+      if (allPackageIds.length === 0) {
+        res.status(200).json({
+          success: true,
+          data: {
+            packages: [],
+            total: 0,
+            page,
+            limit,
+            totalPages: 0,
+            hasMore: false,
+            query: rawSearch || null,
+            period: period === "all" ? "all_time" : period,
+          },
+        });
+        return;
+      }
+
+      // Build the match stage for packages (same as searchPackages)
+      const matchStage: Record<string, any> = {
+        _id: { $in: allPackageIds },
+      };
+
+      // Company filter (optional)
+      if (req.query.companyId) {
+        if (!mongoose.Types.ObjectId.isValid(req.query.companyId as string)) {
+          return next(new ErrorHandler("Invalid companyId.", 400));
+        }
+        matchStage.companyId = new mongoose.Types.ObjectId(req.query.companyId as string);
+      }
+
+      // Client filter
+      if (req.query.clientId) {
+        if (!mongoose.Types.ObjectId.isValid(req.query.clientId as string)) {
+          return next(new ErrorHandler("Invalid clientId.", 400));
+        }
+        matchStage.clientId = new mongoose.Types.ObjectId(req.query.clientId as string);
+      }
+
+      // Date filter from period
+      if (Object.keys(dateFilter).length > 0) {
+        matchStage.createdAt = dateFilter;
+      }
+
+      // Status groups for deliverer-friendly filtering
+      const FAILED_STATUS_GROUP = ["failed_delivery", "cancelled", "returned"];
+      const DELIVERED_STATUS_GROUP = ["delivered"];
+      const IN_PROGRESS_STATUS_GROUP = ["out_for_delivery", "at_destination_branch", "in_transit_to_branch"];
+      const PENDING_STATUS_GROUP = ["pending", "accepted", "at_origin_branch"];
+
+      // Status filter - supports single, multiple, or grouped statuses
+      const VALID_STATUSES: PackageStatus[] = [
+        "pending", "accepted", "at_origin_branch", "in_transit_to_branch",
+        "at_destination_branch", "out_for_delivery", "delivered", 'failed_delivery_attempt',
+        "failed_delivery", "rescheduled", "returned", "cancelled",
+        "lost", "damaged", "on_hold",
+      ];
+
+      // Helper function to expand status groups
+      const expandStatusGroup = (statusValue: string): string[] => {
+        switch (statusValue.toLowerCase()) {
+          case "failed":
+          case "failed_group":
+            return FAILED_STATUS_GROUP;
+          case "delivered_group":
+            return DELIVERED_STATUS_GROUP;
+          case "in_progress":
+          case "in_progress_group":
+            return IN_PROGRESS_STATUS_GROUP;
+          case "pending_group":
+            return PENDING_STATUS_GROUP;
+          default:
+            return [statusValue];
+        }
+      };
+
+      if (req.query.statuses) {
+        const rawStatuses = (req.query.statuses as string).split(",").map(s => s.trim());
+        // Expand any group keywords and collect all individual statuses
+        const expandedStatuses: string[] = [];
+        for (const status of rawStatuses) {
+          const expanded = expandStatusGroup(status);
+          expandedStatuses.push(...expanded);
+        }
+        // Remove duplicates
+        const uniqueStatuses = [...new Set(expandedStatuses)];
+        // Validate each status
+        const invalidStatuses = uniqueStatuses.filter(s => !VALID_STATUSES.includes(s as PackageStatus));
+        if (invalidStatuses.length > 0) {
+          return next(new ErrorHandler(`Invalid status(es): ${invalidStatuses.join(", ")}`, 400));
+        }
+        matchStage.status = { $in: uniqueStatuses };
+      } else if (req.query.status) {
+        const s = req.query.status as string;
+        // Check if it's a group keyword
+        const expanded = expandStatusGroup(s);
+        if (expanded.length > 1 || expanded[0] !== s) {
+          // It was a group keyword
+          const invalidStatuses = expanded.filter(stat => !VALID_STATUSES.includes(stat as PackageStatus));
+          if (invalidStatuses.length > 0) {
+            return next(new ErrorHandler(`Invalid status(es) in group: ${invalidStatuses.join(", ")}`, 400));
+          }
+          matchStage.status = { $in: expanded };
+        } else {
+          // Single status
+          if (!VALID_STATUSES.includes(s as PackageStatus)) {
+            return next(new ErrorHandler(`Invalid status: ${s}`, 400));
+          }
+          matchStage.status = s;
+        }
+      }
+
+      // Type filter - supports multiple
+      const VALID_TYPES: PackageType[] = [
+        "document", "parcel", "fragile", "heavy",
+        "perishable", "electronic", "clothing",
+      ];
+
+      if (req.query.types) {
+        const typesArray = (req.query.types as string).split(",").map(t => t.trim());
+        const invalidTypes = typesArray.filter(t => !VALID_TYPES.includes(t as PackageType));
+        if (invalidTypes.length > 0) {
+          return next(new ErrorHandler(`Invalid type(s): ${invalidTypes.join(", ")}`, 400));
+        }
+        matchStage.type = { $in: typesArray };
+      } else if (req.query.type) {
+        const t = req.query.type as string;
+        if (!VALID_TYPES.includes(t as PackageType)) {
+          return next(new ErrorHandler(`Invalid package type: ${t}`, 400));
+        }
+        matchStage.type = t;
+      }
+
+      // Payment status filter - supports multiple
+      const VALID_PAYMENT_STATUSES: PaymentStatus[] = [
+        "pending", "paid", "partially_paid", "refunded", "failed",
+      ];
+
+      if (req.query.paymentStatuses) {
+        const psArray = (req.query.paymentStatuses as string).split(",").map(ps => ps.trim());
+        const invalidPS = psArray.filter(ps => !VALID_PAYMENT_STATUSES.includes(ps as PaymentStatus));
+        if (invalidPS.length > 0) {
+          return next(new ErrorHandler(`Invalid paymentStatus(es): ${invalidPS.join(", ")}`, 400));
+        }
+        matchStage.paymentStatus = { $in: psArray };
+      } else if (req.query.paymentStatus) {
+        const ps = req.query.paymentStatus as string;
+        if (!VALID_PAYMENT_STATUSES.includes(ps as PaymentStatus)) {
+          return next(new ErrorHandler(`Invalid paymentStatus: ${ps}`, 400));
+        }
+        matchStage.paymentStatus = ps;
+      }
+
+      // Delivery priority filter - supports multiple
+      const VALID_PRIORITIES = ["standard", "express", "same_day"];
+
+      if (req.query.deliveryPriorities) {
+        const dpArray = (req.query.deliveryPriorities as string).split(",").map(dp => dp.trim());
+        const invalidDP = dpArray.filter(dp => !VALID_PRIORITIES.includes(dp));
+        if (invalidDP.length > 0) {
+          return next(new ErrorHandler(`Invalid deliveryPriority(es): ${invalidDP.join(", ")}`, 400));
+        }
+        matchStage.deliveryPriority = { $in: dpArray };
+      } else if (req.query.deliveryPriority) {
+        const dp = req.query.deliveryPriority as string;
+        if (!VALID_PRIORITIES.includes(dp)) {
+          return next(new ErrorHandler(`Invalid deliveryPriority: ${dp}`, 400));
+        }
+        matchStage.deliveryPriority = dp;
+      }
+
+      // Delivery type filter - supports multiple
+      const VALID_DELIVERY_TYPES: DeliveryType[] = ["home", "branch_pickup"];
+
+      if (req.query.deliveryTypes) {
+        const dtArray = (req.query.deliveryTypes as string).split(",").map(dt => dt.trim());
+        const invalidDT = dtArray.filter(dt => !VALID_DELIVERY_TYPES.includes(dt as DeliveryType));
+        if (invalidDT.length > 0) {
+          return next(new ErrorHandler(`Invalid deliveryType(s): ${invalidDT.join(", ")}`, 400));
+        }
+        matchStage.deliveryType = { $in: dtArray };
+      } else if (req.query.deliveryType) {
+        const dt = req.query.deliveryType as string;
+        if (!VALID_DELIVERY_TYPES.includes(dt as DeliveryType)) {
+          return next(new ErrorHandler(`Invalid deliveryType: ${dt}`, 400));
+        }
+        matchStage.deliveryType = dt;
+      }
+
+      // Fragile filter
+      if (req.query.isFragile !== undefined) {
+        matchStage.isFragile = req.query.isFragile === "true";
+      }
+
+      // Return filter
+      if (req.query.isReturn !== undefined) {
+        matchStage["returnInfo.isReturn"] = req.query.isReturn === "true";
+      }
+
+      // Issues filter
+      if (req.query.hasIssues !== undefined) {
+        if (req.query.hasIssues === "true") {
+          matchStage["issues"] = { $elemMatch: { resolved: false } };
+        } else {
+          matchStage["issues"] = {
+            $not: { $elemMatch: { resolved: false } },
+          };
+        }
+      }
+
+      // Needs attention filter
+      if (req.query.needsAttention === "true") {
+        matchStage.status = {
+          $in: ["failed_delivery", "damaged", "lost", "on_hold"],
+        };
+      }
+
+      // Weight filter
+      if (req.query.minWeight || req.query.maxWeight) {
+        matchStage.weight = {
+          ...(req.query.minWeight && { $gte: parseFloat(req.query.minWeight as string) }),
+          ...(req.query.maxWeight && { $lte: parseFloat(req.query.maxWeight as string) }),
+        };
+      }
+
+      // Volume filter
+      if (req.query.minVolume || req.query.maxVolume) {
+        matchStage.volume = {
+          ...(req.query.minVolume && { $gte: parseFloat(req.query.minVolume as string) }),
+          ...(req.query.maxVolume && { $lte: parseFloat(req.query.maxVolume as string) }),
+        };
+      }
+
+      // Dimensions filters
+      if (req.query.minLength || req.query.maxLength) {
+        matchStage["dimensions.length"] = {
+          ...(req.query.minLength && { $gte: parseFloat(req.query.minLength as string) }),
+          ...(req.query.maxLength && { $lte: parseFloat(req.query.maxLength as string) }),
+        };
+      }
+
+      if (req.query.minWidth || req.query.maxWidth) {
+        matchStage["dimensions.width"] = {
+          ...(req.query.minWidth && { $gte: parseFloat(req.query.minWidth as string) }),
+          ...(req.query.maxWidth && { $lte: parseFloat(req.query.maxWidth as string) }),
+        };
+      }
+
+      if (req.query.minHeight || req.query.maxHeight) {
+        matchStage["dimensions.height"] = {
+          ...(req.query.minHeight && { $gte: parseFloat(req.query.minHeight as string) }),
+          ...(req.query.maxHeight && { $lte: parseFloat(req.query.maxHeight as string) }),
+        };
+      }
+
+      // Location filters
+      if (req.query.city) {
+        matchStage["destination.city"] = new RegExp(req.query.city as string, "i");
+      }
+
+      if (req.query.state) {
+        matchStage["destination.state"] = new RegExp(req.query.state as string, "i");
+      }
+
+      // Build the aggregation pipeline for packages
+      const pipeline: any[] = [
+        { $match: matchStage },
+
+        // Add computed fields (same as searchPackages)
+        {
+          $addFields: {
+            _estimatedTimeRemaining: {
+              $cond: {
+                if: {
+                  $and: [
+                    { $ifNull: ["$estimatedDeliveryTime", false] },
+                    { $ne: ["$status", "delivered"] },
+                  ],
+                },
+                then: {
+                  $max: [
+                    0,
+                    {
+                      $round: [
+                        {
+                          $divide: [
+                            { $subtract: ["$estimatedDeliveryTime", new Date()] },
+                            3600000,
+                          ],
+                        },
+                        0,
+                      ],
+                    },
+                  ],
+                },
+                else: null,
+              },
+            },
+            _isOverdue: {
+              $cond: {
+                if: {
+                  $and: [
+                    { $ifNull: ["$estimatedDeliveryTime", false] },
+                    { $ne: ["$status", "delivered"] },
+                    { $lt: ["$estimatedDeliveryTime", new Date()] },
+                  ],
+                },
+                then: true,
+                else: false,
+              },
+            },
+          },
+        },
+
+        // Overdue filter
+        ...(req.query.isOverdue !== undefined
+          ? [{ $match: { _isOverdue: req.query.isOverdue === "true" } }]
+          : []),
+
+        // Text search across tracking number, recipient name/phone
+        ...(rawSearch
+          ? [
+              {
+                $match: {
+                  $or: [
+                    { trackingNumber: { $regex: rawSearch, $options: "i" } },
+                    { "destination.recipientName": { $regex: rawSearch, $options: "i" } },
+                    { "destination.recipientPhone": { $regex: rawSearch, $options: "i" } },
+                    { "destination.alternativePhone": { $regex: rawSearch, $options: "i" } },
+                  ],
+                },
+              },
+              {
+                $addFields: {
+                  _searchScore: {
+                    $add: [
+                      { $cond: [{ $regexMatch: { input: "$trackingNumber", regex: `^${rawSearch}$`, options: "i" } }, 10, 0] },
+                      { $cond: [{ $regexMatch: { input: "$trackingNumber", regex: `^${rawSearch}`, options: "i" } }, 5, 0] },
+                      { $cond: [{ $regexMatch: { input: { $toLower: "$destination.recipientName" }, regex: `^${rawSearch.toLowerCase()}` } }, 3, 0] },
+                    ],
+                  },
+                },
+              },
+            ]
+          : [{ $addFields: { _searchScore: 0 } }]),
+
+        // Sort
+        {
+          $sort: {
+            _searchScore: -1,
+            _estimatedTimeRemaining: 1,
+            createdAt: -1,
+          },
+        },
+
+        // Facet for pagination
+        {
+          $facet: {
+            metadata: [{ $count: "total" }],
+            data: [
+              { $skip: skip },
+              { $limit: limit },
+              {
+                $project: {
+                  _estimatedTimeRemaining: 0,
+                  _isOverdue: 0,
+                  _searchScore: 0,
+                },
+              },
+            ],
+          },
+        },
+      ];
+
+      const [result] = await PackageModel.aggregate(pipeline);
+
+      const total: number = result.metadata[0]?.total ?? 0;
+      const packages: any[] = result.data ?? [];
+
+      // Format packages (same format as searchPackages)
+      const formattedPackages = packages.map((pkg) => ({
+        id: pkg._id,
+        trackingNumber: pkg.trackingNumber,
+        status: pkg.status,
+        type: pkg.type,
+        isFragile: pkg.isFragile,
+
+        senderId: pkg.senderId,
+        senderType: pkg.senderType,
+        clientId: pkg.clientId ?? null,
+
+        weight: pkg.weight,
+        volume: pkg.volume ?? null,
+        dimensions: pkg.dimensions ?? null,
+
+        destination: {
+          recipientName: pkg.destination.recipientName,
+          recipientPhone: pkg.destination.recipientPhone,
+          alternativePhone: pkg.destination.alternativePhone ?? null,
+          address: pkg.destination.address,
+          city: pkg.destination.city,
+          state: pkg.destination.state,
+          postalCode: pkg.destination.postalCode ?? null,
+          notes: pkg.destination.notes ?? null,
+          coordinates: pkg.deliveryType === "home" && pkg.destination.location?.coordinates
+            ? {
+                type: pkg.destination.location.type || "Point",
+                coordinates: pkg.destination.location.coordinates,
+              }
+            : null,
+        },
+
+        description: pkg.description ?? null,
+        deliveryType: pkg.deliveryType,
+        deliveryPriority: pkg.deliveryPriority,
+        estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
+
+        totalPrice: pkg.totalPrice,
+        paymentStatus: pkg.paymentStatus,
+        paymentMethod: pkg.paymentMethod ?? null,
+
+        assignedDelivererId: pkg.assignedDelivererId ?? null,
+        assignedTransporterId: pkg.assignedTransporterId ?? null,
+        assignedVehicleId: pkg.assignedVehicleId ?? null,
+
+        attemptCount: pkg.attemptCount,
+        maxAttempts: pkg.maxAttempts,
+        nextAttemptDate: pkg.nextAttemptDate ?? null,
+
+        returnInfo: pkg.returnInfo,
+
+        unresolvedIssuesCount: (pkg.issues as any[]).filter((i: any) => !i.resolved).length,
+
+        createdAt: pkg.createdAt,
+        updatedAt: pkg.updatedAt,
+        deliveredAt: pkg.deliveredAt ?? null,
+      }));
+
+      res.status(200).json({
+        success: true,
+        data: {
+          packages: formattedPackages,
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+          hasMore: total > skip + limit,
+          query: rawSearch || null,
+          period: period === "all" ? "all_time" : period,
+        },
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+      return next(new ErrorHandler(error.message || "Error searching deliverer deliveries.", 500));
+    }
+  },
 );
