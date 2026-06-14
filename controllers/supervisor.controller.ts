@@ -16155,29 +16155,40 @@ export const completeDeliveryByQrCode = catchAsyncError(
         return next(new ErrorHandler("Only deliverers can complete deliveries.", 403));
       }
 
-      const { sessionId, qrCode, routeId, stopIndex, coordinates, notes } = req.body;
+      // Accept the payload exactly as it comes from the QR link
+      const { payload, coordinates, notes } = req.body;
 
-
-      if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
-        return next(new ErrorHandler("Valid sessionId is required.", 400));
-      }
-
-      if (!qrCode || typeof qrCode !== "string") {
-        return next(new ErrorHandler("qrCode is required.", 400));
-      }
-
-      if (!routeId || !mongoose.Types.ObjectId.isValid(routeId)) {
-        return next(new ErrorHandler("Valid routeId is required.", 400));
-      }
-
-      if (stopIndex === undefined || stopIndex < 0) {
-        return next(new ErrorHandler("Valid stopIndex is required.", 400));
+      if (!payload || typeof payload !== "string") {
+        return next(new ErrorHandler("Valid payload is required.", 400));
       }
 
       if (!coordinates || coordinates.length !== 2) {
         return next(new ErrorHandler("Valid coordinates [lng, lat] are required.", 400));
       }
 
+      // Decode the payload (it comes as base64 from the QR link)
+      let qrPayload;
+      try {
+        const decodedString = Buffer.from(payload, 'base64').toString();
+        qrPayload = JSON.parse(decodedString);
+      } catch (error) {
+        return next(new ErrorHandler("Invalid payload format. Unable to decode QR data.", 400));
+      }
+
+      // Extract the QR payload fields (exactly what's in generateAndSendDeliveryQR)
+      const { sessionId, code, packageId, trackingNumber, timestamp } = qrPayload;
+
+      if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
+        return next(new ErrorHandler("Valid sessionId is required in payload.", 400));
+      }
+
+      if (!code || typeof code !== "string") {
+        return next(new ErrorHandler("QR code is required in payload.", 400));
+      }
+
+      if (!packageId || !mongoose.Types.ObjectId.isValid(packageId)) {
+        return next(new ErrorHandler("Valid packageId is required in payload.", 400));
+      }
 
       const deliverer = await DelivererModel.findOne({ userId: delivererUserId }).lean();
       if (!deliverer) {
@@ -16188,18 +16199,47 @@ export const completeDeliveryByQrCode = catchAsyncError(
         return next(new ErrorHandler("Deliverer account is not active.", 403));
       }
 
+      // Find the route that has this package at the current stop
+      const route = await RouteModel.findOne({
+        assignedDelivererId: deliverer._id,
+        status: "active",
+        "stops.packageIds": new mongoose.Types.ObjectId(packageId),
+      });
+
+      if (!route) {
+        return next(new ErrorHandler("No active route found for this package.", 404));
+      }
+
+      // Find which stop contains this package
+      const stopIndex = route.stops.findIndex((stop: any) =>
+        stop.packageIds.some((id: mongoose.Types.ObjectId) => id.toString() === packageId)
+      );
+
+      if (stopIndex === -1) {
+        return next(new ErrorHandler("Package not found in current route stops.", 404));
+      }
+
+      if (stopIndex !== route.currentStopIndex) {
+        return next(new ErrorHandler(
+          `Expected stop ${route.currentStopIndex}, but package is at stop ${stopIndex}. Please complete current stop first.`,
+          400
+        ));
+      }
 
       const qrSession = await DeliveryQrSession.findById(sessionId);
       if (!qrSession) {
         return next(new ErrorHandler("QR session not found.", 404));
       }
 
+      // Verify the QR session matches the package
+      if (qrSession.packageId.toString() !== packageId) {
+        return next(new ErrorHandler("QR session does not match the package.", 400));
+      }
 
       const socketService = (global as any).socketService as SocketService | undefined;
       if (!socketService) {
         return next(new ErrorHandler("Socket service not available. Please try again later.", 500));
       }
-
 
       const delivererSocketId = socketService.getSocketId(delivererUserId.toString(), "deliverer");
       
@@ -16207,29 +16247,29 @@ export const completeDeliveryByQrCode = catchAsyncError(
         return next(new ErrorHandler("Deliverer is not connected to socket. Please check your connection.", 400));
       }
 
-
       const io = (socketService as any).io;
       if (!io) {
         return next(new ErrorHandler("Socket IO not available.", 500));
       }
 
-
+      // Emit with the structure the socket handler expects
       io.to(delivererSocketId).emit("complete_delivery", {
         sessionId,
-        qrCode,
-        routeId,
+        qrCode: code,
+        routeId: route._id.toString(),
         stopIndex,
-        coordinates,
+        coordinates, // This comes from the deliverer's device, not the QR
         notes: notes || "",
       });
-
 
       return res.status(200).json({
         success: true,
         message: "QR scan submitted for processing. Delivery will be completed shortly.",
         data: {
           sessionId,
-          routeId,
+          packageId,
+          trackingNumber,
+          routeId: route._id,
           stopIndex,
           status: "processing",
         },

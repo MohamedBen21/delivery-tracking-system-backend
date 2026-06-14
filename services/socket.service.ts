@@ -400,7 +400,7 @@ export class SocketService {
       // Cancel any existing unexpired QR session for this package
       await DeliveryQrSessionModel.updateMany(
         {
-          packageId: new mongoose.Types.ObjectId(packageId),
+          packageId: packageId,
           verified: false,
           expiresAt: { $gt: new Date() },
         },
