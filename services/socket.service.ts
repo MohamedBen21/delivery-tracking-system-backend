@@ -2832,20 +2832,20 @@ export class SocketService {
               }
 
               // ── Proximity check (50m) ────────────────────────────────────
-              const distanceMeters =
-                this.calculateDistance(
-                  data.coordinates,
-                  stop.location.coordinates,
-                ) * 1000;
-              if (distanceMeters > 50) {
-                socket.emit("route_error", {
-                  code: "TOO_FAR",
-                  message: `Must be within 50m to complete delivery. Current: ${Math.round(distanceMeters)}m.`,
-                  distanceMeters: Math.round(distanceMeters),
-                  requiredMeters: 50,
-                });
-                return;
-              }
+              // const distanceMeters =
+              //   this.calculateDistance(
+              //     data.coordinates,
+              //     stop.location.coordinates,
+              //   ) * 1000;
+              // if (distanceMeters > 50) {
+              //   socket.emit("route_error", {
+              //     code: "TOO_FAR",
+              //     message: `Must be within 50m to complete delivery. Current: ${Math.round(distanceMeters)}m.`,
+              //     distanceMeters: Math.round(distanceMeters),
+              //     requiredMeters: 50,
+              //   });
+              //   return;
+              // }
 
               // ── Mark QR as verified ──────────────────────────────────────
               session.verified = true;
