@@ -2992,7 +2992,7 @@ export class SocketService {
                     routeId: data.routeId,
                     completedStopIndex: data.stopIndex,
                     packageId,
-                    distanceMeters: Math.round(distanceMeters),
+                    // distanceMeters: Math.round(distanceMeters),
                     nextStop: {
                       stopIndex: data.stopIndex + 1,
                       stopId: nextStop._id,
@@ -3013,7 +3013,7 @@ export class SocketService {
                     routeId: data.routeId,
                     completedStopIndex: data.stopIndex,
                     packageId,
-                    distanceMeters: Math.round(distanceMeters),
+                    // distanceMeters: Math.round(distanceMeters),
                     remainingStops: route.stops.length - (data.stopIndex + 1),
                     currentStopIndex: route.currentStopIndex,
                     message: `Package delivered! ${route.stops.length - (data.stopIndex + 1)} stops remaining.`,
