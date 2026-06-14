@@ -1725,32 +1725,35 @@ export class SocketService {
         );
 
         socket.on(
-          "complete_stop",
+          "complete_delivery",
           async (data: {
+            sessionId: string;
+            qrCode: string;
             routeId: string;
             stopIndex: number;
             coordinates: [number, number];
-            completedPackageIds?: string[];
-            failedPackageIds?: string[];
-            completedManifestIds?: string[];
-            discrepancyManifestIds?: string[];
             notes?: string;
           }) => {
             try {
-              if (
-                !data?.routeId ||
-                !mongoose.Types.ObjectId.isValid(data.routeId)
-              ) {
+              // ── Validate inputs ──────────────────────────────────────────
+              if (!data?.sessionId || !mongoose.Types.ObjectId.isValid(data.sessionId)) {
                 socket.emit("route_error", {
-                  code: "INVALID_ROUTE_ID",
-                  message: "Invalid routeId.",
+                  code: "INVALID_SESSION_ID",
+                  message: "Invalid sessionId.",
                 });
                 return;
               }
-              if (data.stopIndex === undefined || data.stopIndex < 0) {
+              if (!data?.qrCode || typeof data.qrCode !== "string") {
                 socket.emit("route_error", {
-                  code: "INVALID_STOP",
-                  message: "Invalid stopIndex.",
+                  code: "QR_CODE_REQUIRED",
+                  message: "qrCode is required.",
+                });
+                return;
+              }
+              if (!data?.routeId || !mongoose.Types.ObjectId.isValid(data.routeId)) {
+                socket.emit("route_error", {
+                  code: "INVALID_ROUTE_ID",
+                  message: "Invalid routeId.",
                 });
                 return;
               }
@@ -1762,35 +1765,69 @@ export class SocketService {
                 return;
               }
 
-              const transporter = await TransporterModel.findOne({
-                userId,
-              }).lean();
-              if (!transporter) {
+              // ── Fetch deliverer ──────────────────────────────────────────
+              const deliverer = await DelivererModel.findOne({ userId }).lean();
+              if (!deliverer) {
                 socket.emit("route_error", {
                   code: "NOT_FOUND",
-                  message: "Transporter not found.",
+                  message: "Deliverer not found.",
                 });
                 return;
               }
 
+              // ── Validate QR session ──────────────────────────────────────
+              const session = await DeliveryQrSessionModel.findById(data.sessionId);
+              if (!session) {
+                socket.emit("route_error", {
+                  code: "SESSION_NOT_FOUND",
+                  message: "QR session not found.",
+                });
+                return;
+              }
+
+              if (session.verified) {
+                socket.emit("route_error", {
+                  code: "ALREADY_VERIFIED",
+                  message: "This QR code has already been used.",
+                });
+                return;
+              }
+
+              if (session.expiresAt < new Date()) {
+                socket.emit("route_error", {
+                  code: "QR_EXPIRED",
+                  message: "QR code has expired. Please request a new one from the client.",
+                  expiredAt: session.expiresAt,
+                });
+                return;
+              }
+
+              if (session.code !== data.qrCode.trim()) {
+                socket.emit("route_error", {
+                  code: "QR_MISMATCH",
+                  message: "Invalid QR code.",
+                });
+                return;
+              }
+
+              if (session.delivererId.toString() !== deliverer._id.toString()) {
+                socket.emit("route_error", {
+                  code: "WRONG_DELIVERER",
+                  message: "This QR code belongs to a different deliverer.",
+                });
+                return;
+              }
+
+              // ── Fetch and validate route ─────────────────────────────────
               const route = await RouteModel.findOne({
                 _id: data.routeId,
-                assignedTransporterId: transporter._id,
+                assignedDelivererId: deliverer._id,
                 status: "active",
               });
               if (!route) {
                 socket.emit("route_error", {
                   code: "ROUTE_NOT_FOUND",
                   message: "Active route not found.",
-                });
-                return;
-              }
-
-              if (isHubRoute(route.type)) {
-                socket.emit("route_error", {
-                  code: "USE_QR_FLOW",
-                  message:
-                    "Hub routes require QR verification. Use 'request_stop_qr' → 'scan_stop_qr' instead.",
                 });
                 return;
               }
@@ -1805,218 +1842,205 @@ export class SocketService {
               }
 
               const stop = route.stops[data.stopIndex];
-              if (!stop) {
+              if (!stop || !stop.packageIds[0]) {
                 socket.emit("route_error", {
                   code: "STOP_NOT_FOUND",
-                  message: "Stop not found.",
+                  message: "Stop or package not found.",
                 });
                 return;
               }
 
-              if (
-                !["arrived", "in_progress", "pending"].includes(stop.status)
-              ) {
+              if (session.packageId.toString() !== stop.packageIds[0].toString()) {
                 socket.emit("route_error", {
-                  code: "INVALID_STOP_STATUS",
-                  message: `Stop status '${stop.status}' cannot be completed.`,
+                  code: "PACKAGE_MISMATCH",
+                  message: "QR code is for a different package.",
                 });
                 return;
               }
 
-              const distanceMeters =
-                this.calculateDistance(
-                  data.coordinates,
-                  stop.location.coordinates,
-                ) * 1000;
-              if (distanceMeters > 50) {
+              // ── Proximity check (commented out) ──────────────────────────
+              // const distanceMeters =
+              //   this.calculateDistance(
+              //     data.coordinates,
+              //     stop.location.coordinates,
+              //   ) * 1000;
+              // if (distanceMeters > 50) {
+              //   socket.emit("route_error", {
+              //     code: "TOO_FAR",
+              //     message: `Must be within 50m to complete delivery. Current: ${Math.round(distanceMeters)}m.`,
+              //     distanceMeters: Math.round(distanceMeters),
+              //     requiredMeters: 50,
+              //   });
+              //   return;
+              // }
+
+              // ── Mark QR as verified ──────────────────────────────────────
+              session.verified = true;
+              session.verifiedAt = new Date();
+              await session.save();
+
+              const packageId = stop.packageIds[0].toString();
+              const pkg = await PackageModel.findById(packageId);
+              if (!pkg) {
                 socket.emit("route_error", {
-                  code: "TOO_FAR",
-                  message: `Must be within 50m. Current: ${Math.round(distanceMeters)}m.`,
-                  distanceMeters: Math.round(distanceMeters),
-                  requiredMeters: 50,
-                  stopLocation: stop.location.coordinates,
+                  code: "PACKAGE_NOT_FOUND",
+                  message: "Package not found.",
                 });
                 return;
               }
 
+              // Update package with verification
+              await PackageModel.findByIdAndUpdate(packageId, {
+                $set: {
+                  "deliveryQr.verified": true,
+                  "deliveryQr.verifiedAt": new Date(),
+                },
+              });
+
+              // ── Mark package as delivered ────────────────────────────────
+              await pkg.markAsDelivered(deliverer.userId, data.notes);
+              
+              // Update payment
+              await PaymentModel.findOneAndUpdate(
+                { packageId },
+                {
+                  $set: { status: "collected", delivererId: deliverer.userId },
+                },
+              );
+
+              // Remove from memory
+              this.deliveryQRSessions.delete(`delivery_qr_${packageId}`);
+
+              // Broadcast to client
+              this.broadcastPackageStatusToClient(packageId, "delivered", {
+                deliveredAt: new Date(),
+              });
+
+              this.io
+                .to(this.getPackageRoom(packageId))
+                .emit("package_delivered", {
+                  packageId,
+                  deliveredAt: new Date(),
+                  message: "Your package has been delivered!",
+                  timestamp: new Date(),
+                });
+
+              // Update deliverer stats
+              const delivererDoc = await DelivererModel.findById(deliverer._id);
+              if (delivererDoc) {
+                const isCOD = pkg.paymentMethod === "cod";
+                await delivererDoc.recordDeliveryPayment(pkg.totalPrice, isCOD);
+                delivererDoc.totalDeliveries += 1;
+                delivererDoc.successfulDeliveries += 1;
+                delivererDoc.lastActiveAt = new Date();
+                await delivererDoc.save();
+              }
+
+              // ── Complete the stop in route (similar to complete_stop) ────
               const isLastStop = data.stopIndex === route.stops.length - 1;
               const routeRoom = this.getRouteRoom(data.routeId);
 
-              const stopPackageSet = new Set(
-                (stop.packageIds as mongoose.Types.ObjectId[]).map((id) =>
-                  id.toString(),
-                ),
-              );
-
-              const completedOids: mongoose.Types.ObjectId[] = [];
-              for (const idStr of data.completedPackageIds ?? []) {
-                if (
-                  !mongoose.Types.ObjectId.isValid(idStr) ||
-                  !stopPackageSet.has(idStr)
-                ) {
-                  socket.emit("route_error", {
-                    code: "INVALID_PACKAGE_ID",
-                    message: `Invalid or out-of-stop package: ${idStr}`,
-                  });
-                  return;
-                }
-                completedOids.push(new mongoose.Types.ObjectId(idStr));
-              }
-
-              const failedOids: mongoose.Types.ObjectId[] = [];
-              for (const idStr of data.failedPackageIds ?? []) {
-                if (
-                  !mongoose.Types.ObjectId.isValid(idStr) ||
-                  !stopPackageSet.has(idStr)
-                ) {
-                  socket.emit("route_error", {
-                    code: "INVALID_PACKAGE_ID",
-                    message: `Invalid or out-of-stop package: ${idStr}`,
-                  });
-                  return;
-                }
-                failedOids.push(new mongoose.Types.ObjectId(idStr));
-              }
-
-              const finalCompleted =
-                completedOids.length > 0
-                  ? completedOids
-                  : (stop.packageIds as mongoose.Types.ObjectId[]);
-
               await route.completeStop(
                 data.stopIndex,
-                finalCompleted,
-                failedOids,
+                [new mongoose.Types.ObjectId(packageId)],
+                [],
                 data.notes,
               );
 
               if (isLastStop) {
                 await route.completeRoute(data.notes);
-                await TransporterModel.findByIdAndUpdate(transporter._id, {
+                await DelivererModel.findByIdAndUpdate(deliverer._id, {
                   availabilityStatus: "available",
                   currentRouteId: null,
                   lastActiveAt: new Date(),
                 });
 
-                socket.emit("route_completed", {
+                socket.emit("delivery_route_completed", {
                   routeId: data.routeId,
                   routeNumber: route.routeNumber,
                   totalStops: route.stops.length,
                   completedStops: route.completedStops,
                   failedStops: route.failedStops,
-                  skippedStops: route.skippedStops,
                   actualStart: route.actualStart,
                   actualEnd: route.actualEnd,
                   actualTime: route.actualTime,
                   onTimePerformance: route.onTimePerformance,
+                  currentStopIndex: route.currentStopIndex,
                   message: "Route completed successfully!",
                   timestamp: new Date(),
                 });
 
-                const branchIds = new Set<string>();
-                route.stops.forEach((s: any) => {
-                  if (s.branchId) branchIds.add(s.branchId.toString());
-                });
-                branchIds.forEach((bId) => {
-                  this.io
-                    .to(this.getBranchRoom(bId))
-                    .emit("transporter_route_completed", {
-                      routeId: data.routeId,
-                      routeNumber: route.routeNumber,
-                      transporterId: transporter._id,
-                      userId,
-                      onTimePerformance: route.onTimePerformance,
-                      timestamp: new Date(),
-                    });
-                });
-
                 this.io
-                  .to(this.getCompanyRoom(transporter.companyId.toString()))
-                  .emit("transporter_route_completed", {
+                  .to(this.getBranchRoom(deliverer.branchId.toString()))
+                  .emit("deliverer_route_completed", {
                     routeId: data.routeId,
                     routeNumber: route.routeNumber,
-                    transporterId: transporter._id,
+                    delivererId: deliverer._id,
                     userId,
                     onTimePerformance: route.onTimePerformance,
                     timestamp: new Date(),
                   });
-                this.io
-                  .to(routeRoom)
-                  .emit("route_completed", {
-                    routeId: data.routeId,
-                    routeNumber: route.routeNumber,
-                    timestamp: new Date(),
-                  });
+
+                this.io.to(routeRoom).emit("delivery_route_completed", {
+                  routeId: data.routeId,
+                  routeNumber: route.routeNumber,
+                  timestamp: new Date(),
+                });
 
                 console.log(
-                  `[Socket] Transporter ${userId} COMPLETED route ${data.routeId}`,
+                  `[Socket] Deliverer ${userId} COMPLETED delivery route ${data.routeId} via QR`,
                 );
               } else {
                 const nextStop = route.stops[data.stopIndex + 1];
-                socket.emit("stop_completed", {
+                socket.emit("delivery_stop_completed", {
                   routeId: data.routeId,
                   completedStopIndex: data.stopIndex,
                   completedStopId: stop._id,
-                  branchId: stop.branchId,
-                  completedPackages: finalCompleted.length,
-                  failedPackages: failedOids.length,
-                  distanceMeters: Math.round(distanceMeters),
+                  packageId,
                   nextStop: nextStop
                     ? {
                         stopIndex: data.stopIndex + 1,
                         stopId: nextStop._id,
-                        branchId: nextStop.branchId,
+                        clientId: nextStop.clientId,
+                        packageId: nextStop.packageIds[0],
                         address: nextStop.address,
                         location: nextStop.location.coordinates,
-                        packageCount: nextStop.packageIds.length,
-                        order: nextStop.order,
+                        status: nextStop.status,
                       }
                     : null,
                   remainingStops: route.stops.length - (data.stopIndex + 1),
                   timestamp: new Date(),
                 });
 
-                if (stop.branchId) {
+                if (stop.clientId) {
                   this.io
-                    .to(this.getBranchRoom(stop.branchId.toString()))
-                    .emit("transporter_left_branch", {
+                    .to(this.getBranchRoom(deliverer.branchId.toString()))
+                    .emit("deliverer_left_client", {
                       routeId: data.routeId,
-                      routeNumber: route.routeNumber,
-                      transporterId: transporter._id,
-                      completedPackages: finalCompleted.length,
-                      failedPackages: failedOids.length,
+                      delivererId: deliverer._id,
+                      stopIndex: data.stopIndex,
+                      packageId,
                       timestamp: new Date(),
                     });
                 }
-                if (nextStop?.branchId) {
-                  this.io
-                    .to(this.getBranchRoom(nextStop.branchId.toString()))
-                    .emit("transporter_en_route_to_branch", {
-                      routeId: data.routeId,
-                      routeNumber: route.routeNumber,
-                      transporterId: transporter._id,
-                      packageCount: nextStop.packageIds.length,
-                      estimatedArrival: nextStop.expectedArrival,
-                      timestamp: new Date(),
-                    });
-                }
-                this.io.to(routeRoom).emit("stop_completed", {
+
+                this.io.to(routeRoom).emit("delivery_stop_completed", {
                   routeId: data.routeId,
                   stopIndex: data.stopIndex,
-                  stopId: stop._id,
+                  packageId,
                   nextStopIndex: data.stopIndex + 1,
                   timestamp: new Date(),
                 });
 
                 console.log(
-                  `[Socket] Transporter ${userId} completed stop ${data.stopIndex}/${route.stops.length - 1}`,
+                  `[Socket] Deliverer ${userId} completed delivery stop ${data.stopIndex}/${route.stops.length - 1} via QR`,
                 );
               }
             } catch (err: any) {
-              console.error("[Socket] complete_stop failed:", err);
+              console.error("[Socket] complete_delivery failed:", err);
               socket.emit("route_error", {
-                code: "COMPLETE_STOP_FAILED",
-                message: err.message || "Failed to complete stop.",
+                code: "COMPLETE_DELIVERY_FAILED",
+                message: err.message || "Failed to complete delivery.",
               });
             }
           },
