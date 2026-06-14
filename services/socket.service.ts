@@ -2460,37 +2460,34 @@ export class SocketService {
               return;
             }
 
-            if (data.stopIndex !== route.currentStopIndex) {
-              if (route.currentStopIndex >= route.stops.length) {
-                const firstUnresolvedIndex = route.stops.findIndex(
-                  (s, idx) => idx >= 0 && s.status === "failed"
-                );
+            let targetStopIndex = data.stopIndex;
+            if (data.packageId) {
+              const matchingStopIndex = route.stops.findIndex(
+                (s) =>
+                  (s.status === "pending" || s.status === "in_progress") &&
+                  s.packageIds.some((pid) => pid.toString() === data.packageId)
+              );
+              if (matchingStopIndex !== -1) {
+                targetStopIndex = matchingStopIndex;
+              }
+            }
 
-                if (
-                  firstUnresolvedIndex !== -1 &&
-                  firstUnresolvedIndex === data.stopIndex
-                ) {
-                  route.currentStopIndex = firstUnresolvedIndex;
-                  await route.save();
-                } else {
-                  socket.emit("route_error", {
-                    code: "WRONG_STOP",
-                    message: `Expected stop ${route.currentStopIndex}, got ${data.stopIndex}.`,
-                    expectedStopIndex: route.currentStopIndex,
-                  });
-                  return;
-                }
+            if (targetStopIndex !== route.currentStopIndex) {
+              const targetStop = route.stops[targetStopIndex];
+              if (targetStop && targetStop.status === "pending") {
+                route.currentStopIndex = targetStopIndex;
+                await route.save();
               } else {
                 socket.emit("route_error", {
                   code: "WRONG_STOP",
-                  message: `Expected stop ${route.currentStopIndex}, got ${data.stopIndex}.`,
+                  message: `Expected stop ${route.currentStopIndex}, got ${targetStopIndex}.`,
                   expectedStopIndex: route.currentStopIndex,
                 });
                 return;
               }
             }
 
-            const stop = route.stops[data.stopIndex];
+            const stop = route.stops[targetStopIndex];
             if (!stop || !stop.packageIds[0]) {
               socket.emit("route_error", {
                 code: "STOP_NOT_FOUND",
@@ -2547,7 +2544,7 @@ export class SocketService {
               this.broadcastPackageStatusToClient(packageId, "out_for_delivery");
             }
 
-            await this.generateAndSendDeliveryQR(route, data.stopIndex, data.routeId);
+            await this.generateAndSendDeliveryQR(route, targetStopIndex, data.routeId);
 
             socket.emit("package_started", {
               routeId: data.routeId,
@@ -2563,7 +2560,7 @@ export class SocketService {
               timestamp: new Date(),
             });
 
-            console.log(`[Socket] Deliverer ${userId} started package ${packageId} at stop ${data.stopIndex}`);
+            console.log(`[Socket] Deliverer ${userId} started package ${packageId} at stop ${targetStopIndex}`);
           } catch (err: any) {
             socket.emit("route_error", {
               code: "START_PACKAGE_FAILED",
@@ -3586,6 +3583,7 @@ export class SocketService {
                 timestamp: new Date(),
               });
               }else{
+                console.log(route.currentStopIndex,)
                 socket.emit("cancellation_success", {
                 success: true,
                 routeId: data.routeId,
@@ -4465,7 +4463,7 @@ export class SocketService {
 
     const pkg = await PackageModel.findById(activePackageId)
       .select(
-        "trackingNumber status destination attemptCount maxAttempts estimatedDeliveryTime deliveryQr",
+        "trackingNumber status destination attemptCount maxAttempts totalPrice paymentStatus estimatedDeliveryTime deliveryQr",
       )
       .lean();
 
@@ -4514,6 +4512,8 @@ export class SocketService {
               status: pkg.status,
               recipientName: pkg.destination?.recipientName,
               recipientPhone: pkg.destination?.recipientPhone,
+              totalPrice: pkg.totalPrice,
+              paymentStatus: pkg.paymentStatus,
               address: pkg.destination?.address,
               city: pkg.destination?.city,
               attemptCount: pkg.attemptCount,
@@ -4533,7 +4533,7 @@ export class SocketService {
             : "You have an active delivery. Ask client to show QR code.",
         timestamp: new Date(),
       });
-    } else {
+    }/*  else {
       socket.emit("session_resumed", {
         role: "deliverer",
         routeId: route._id,
@@ -4583,7 +4583,7 @@ export class SocketService {
             : "You have an active route. Tap 'Start Package' to begin delivery.",
         timestamp: new Date(),
       });
-    }
+    } */
 
     console.log(
       `[Socket] Deliverer ${userId} resumed — route ${route.routeNumber} ` +
