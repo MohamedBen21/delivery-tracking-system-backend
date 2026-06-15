@@ -54,8 +54,8 @@ import {
   getPackagesPaginatedFromRoute,
   completeDeliveryByQrCode,
   searchDeliveries,
-  // getManifestsHistory,
-  // getTransportationsHistory,
+  getManifestsHistory,
+  getTransportationsHistory,
   getOrCreateTodayTransportation,
 } from "../controllers/supervisor.controller";
 
@@ -311,20 +311,20 @@ supervisorRouter.get(
 );
 
 
-// supervisorRouter.get(
-//   "/transportation/history",
-//   isAuthenticated,
-//   authorizeRoles( "transporter"),
-//   getTransportationsHistory
-// );
+supervisorRouter.get(
+  "/transportation/history",
+  isAuthenticated,
+  authorizeRoles( "transporter"),
+  getTransportationsHistory
+);
 
 
-// supervisorRouter.get(
-//   "/manifest/history",
-//   isAuthenticated,
-//   authorizeRoles( "transporter"),
-//   getManifestsHistory
-// );
+supervisorRouter.get(
+  "/manifest/history",
+  isAuthenticated,
+  authorizeRoles( "transporter"),
+  getManifestsHistory
+);
 
 export default supervisorRouter;
 
