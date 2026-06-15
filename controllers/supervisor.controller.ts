@@ -17189,6 +17189,339 @@ export const getOrCreateTodayTransportation = catchAsyncError(
 
 //search manifest 
 
+/**
+ * GET /transportation/history
+ *
+ * Returns paginated transportation history for a specific transporter.
+ * Includes all past transportations (completed, cancelled, etc.) with
+ * comprehensive filtering options.
+ *
+ * Query params:
+ *   - transporterId     (required) - ID of the transporter
+ *   - page             (optional, default: 1) - Page number
+ *   - limit            (optional, default: 20, max: 100) - Items per page
+ *   - sortBy           (optional, default: createdAt) - Field to sort by
+ *   - sortOrder        (optional, default: desc) - 'asc' or 'desc'
+ *   
+ *   - status           (optional) - Filter by transportation status
+ *   - routeStatus      (optional) - Filter by underlying route status
+ *   - dateFrom         (optional) - Start date for date range filter
+ *   - dateTo           (optional) - End date for date range filter
+ *   - minWeight        (optional) - Minimum total weight (kg)
+ *   - maxWeight        (optional) - Maximum total weight (kg)
+ *   - minVolume        (optional) - Minimum total volume
+ *   - maxVolume        (optional) - Maximum total volume
+ *   - minPackageCount  (optional) - Minimum package count
+ *   - maxPackageCount  (optional) - Maximum package count
+ *   - minManifestCount (optional) - Minimum manifest count
+ *   - maxManifestCount (optional) - Maximum manifest count
+ *   - sourceBranchId   (optional) - Filter by source branch
+ *   - destinationBranchId (optional) - Filter by destination branch
+ *
+ * Response shape:
+ *   {
+ *     success: true,
+ *     data: {
+ *       transportations: ITransportation[],
+ *       pagination: {
+ *         page: number,
+ *         limit: number,
+ *         total: number,
+ *         pages: number,
+ *         hasNext: boolean,
+ *         hasPrev: boolean
+ *       },
+ *       summary: {
+ *         totalTransportations: number,
+ *         completedCount: number,
+ *         cancelledCount: number,
+ *         totalWeightTransported: number,
+ *         totalManifestsTransported: number,
+ *         totalPackagesTransported: number,
+ *         averageDeliveryTimeMinutes: number | null,
+ *         totalDistance: number
+ *       }
+ *     }
+ *   }
+ */
+
+export const getTransportationsHistory = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    // ── Validation ────────────────────────────────────────────────────────────
+    const isValidId = (val: string) => mongoose.Types.ObjectId.isValid(val);
+    const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
+
+    if (!req.query.transporterId || !isValidId(req.query.transporterId as string)) {
+      return next(new ErrorHandler("Valid transporterId is required.", 400));
+    }
+    const transporterId = toObjectId(req.query.transporterId as string);
+
+    // Validate transporter exists
+    const transporter = await TransporterModel.findById(transporterId).lean();
+    if (!transporter) {
+      return next(new ErrorHandler("Transporter not found.", 404));
+    }
+
+    // Pagination parameters
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+    const skip = (page - 1) * limit;
+
+    // Sorting
+    const validSortFields = [
+      'createdAt', 'updatedAt', 'departedAt', 'actualDeliveryTime',
+      'estimatedDeliveryTime', 'totalWeight', 'packageCount', 'manifestCount',
+      'status', 'transportationCode'
+    ];
+    const sortBy = (req.query.sortBy as string) && validSortFields.includes(req.query.sortBy as string)
+      ? req.query.sortBy as string
+      : 'createdAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+    const sort: Record<string, 1 | -1> = { [sortBy]: sortOrder };
+
+    // Status validation
+    const VALID_TRANSPORTATION_STATUSES: TransportationStatus[] = [
+      "pending", "in_transit", "arrived", "completed", "cancelled",
+    ];
+    const VALID_ROUTE_STATUSES: RouteStatus[] = [
+      "planned", "assigned", "active", "paused", "completed", "cancelled",
+    ];
+
+    // Date range validation
+    const dateFrom = req.query.dateFrom ? new Date(req.query.dateFrom as string) : null;
+    const dateTo = req.query.dateTo ? new Date(req.query.dateTo as string) : null;
+
+    if (dateFrom && isNaN(dateFrom.getTime())) {
+      return next(new ErrorHandler("Invalid dateFrom format.", 400));
+    }
+    if (dateTo && isNaN(dateTo.getTime())) {
+      return next(new ErrorHandler("Invalid dateTo format.", 400));
+    }
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      return next(new ErrorHandler("dateFrom cannot be after dateTo.", 400));
+    }
+
+    // Numeric filters
+    const parseNum = (key: string): number | null => {
+      if (req.query[key] === undefined) return null;
+      const n = parseFloat(req.query[key] as string);
+      return isNaN(n) ? null : n;
+    };
+
+    const numericKeys = [
+      "minWeight", "maxWeight", "minVolume", "maxVolume",
+      "minPackageCount", "maxPackageCount", "minManifestCount", "maxManifestCount",
+    ];
+    for (const key of numericKeys) {
+      if (req.query[key] !== undefined && parseNum(key) === null) {
+        return next(new ErrorHandler(`Invalid ${key}: must be a number.`, 400));
+      }
+    }
+
+    const minWeight = parseNum("minWeight");
+    const maxWeight = parseNum("maxWeight");
+    const minVolume = parseNum("minVolume");
+    const maxVolume = parseNum("maxVolume");
+    const minPackageCount = parseNum("minPackageCount");
+    const maxPackageCount = parseNum("maxPackageCount");
+    const minManifestCount = parseNum("minManifestCount");
+    const maxManifestCount = parseNum("maxManifestCount");
+
+    // Branch filters
+    const sourceBranchId = req.query.sourceBranchId as string;
+    const destinationBranchId = req.query.destinationBranchId as string;
+
+    if (sourceBranchId && !isValidId(sourceBranchId)) {
+      return next(new ErrorHandler("Invalid sourceBranchId format.", 400));
+    }
+    if (destinationBranchId && !isValidId(destinationBranchId)) {
+      return next(new ErrorHandler("Invalid destinationBranchId format.", 400));
+    }
+
+    // ── Build Query ───────────────────────────────────────────────────────────
+    const query: any = { assignedTransporterId: transporterId };
+
+    // Status filter
+    if (req.query.status) {
+      const status = req.query.status as string;
+      if (!VALID_TRANSPORTATION_STATUSES.includes(status as TransportationStatus)) {
+        return next(new ErrorHandler(`Invalid status: ${status}.`, 400));
+      }
+      query.status = status;
+    }
+
+    // Date range filter (using createdAt, but also consider actualDeliveryTime for completed trips)
+    if (dateFrom || dateTo) {
+      query.$or = [
+        { createdAt: {} as any },
+        { actualDeliveryTime: {} as any },
+      ];
+      if (dateFrom) {
+        query.$or[0].createdAt.$gte = dateFrom;
+        query.$or[1].actualDeliveryTime.$gte = dateFrom;
+      }
+      if (dateTo) {
+        query.$or[0].createdAt.$lte = dateTo;
+        query.$or[1].actualDeliveryTime.$lte = dateTo;
+      }
+    }
+
+    // Numeric filters
+    if (minWeight !== null) query.totalWeight = { $gte: minWeight };
+    if (maxWeight !== null) {
+      query.totalWeight = { ...(query.totalWeight || {}), $lte: maxWeight };
+    }
+    if (minVolume !== null) query.totalVolume = { $gte: minVolume };
+    if (maxVolume !== null) {
+      query.totalVolume = { ...(query.totalVolume || {}), $lte: maxVolume };
+    }
+    if (minPackageCount !== null) query.packageCount = { $gte: minPackageCount };
+    if (maxPackageCount !== null) {
+      query.packageCount = { ...(query.packageCount || {}), $lte: maxPackageCount };
+    }
+    if (minManifestCount !== null) query.manifestCount = { $gte: minManifestCount };
+    if (maxManifestCount !== null) {
+      query.manifestCount = { ...(query.manifestCount || {}), $lte: maxManifestCount };
+    }
+
+    // Branch filters (need to populate sourceRouteId to filter)
+    let routeStatusFilter: string | null = null;
+    if (req.query.routeStatus) {
+      const rs = req.query.routeStatus as string;
+      if (!VALID_ROUTE_STATUSES.includes(rs as RouteStatus)) {
+        return next(new ErrorHandler(`Invalid routeStatus: ${rs}.`, 400));
+      }
+      routeStatusFilter = rs;
+    }
+
+    // ── Execute Queries ───────────────────────────────────────────────────────
+    
+    // First, get transportations with basic filters
+    let transportationsQuery = TransportationModel.find(query)
+      .sort(sort)
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // If we need to filter by route status, source branch, or destination branch,
+    // we need to populate and filter after (or use aggregation)
+    const needsAdvancedFiltering = routeStatusFilter || sourceBranchId || destinationBranchId;
+
+    let transportations: any[] = [];
+    let total = 0;
+
+    if (needsAdvancedFiltering) {
+      // Get all matching transportations first (without pagination) to filter by route data
+      const allTransportations = await TransportationModel.find(query).lean();
+      
+      // Get all route IDs
+      const routeIds = allTransportations.map(t => t.sourceRouteId).filter(id => id);
+      
+      // Fetch routes with their stops data
+      const routes = await RouteModel.find(
+        { _id: { $in: routeIds } },
+        { status: 1, originBranchId: 1, destinationBranchId: 1, stops: 1 }
+      ).lean();
+      
+      const routeMap = new Map();
+      routes.forEach(route => {
+        routeMap.set(route._id.toString(), route);
+      });
+      
+      // Filter transportations based on route data
+      const filtered = allTransportations.filter(t => {
+        const route = routeMap.get(t.sourceRouteId?.toString());
+        if (!route) return false;
+        
+        if (routeStatusFilter && route.status !== routeStatusFilter) return false;
+        
+        if (sourceBranchId && route.originBranchId?.toString() !== sourceBranchId) return false;
+        
+        if (destinationBranchId) {
+          const destId = route.destinationBranchId?.toString() || route.stops[route.stops.length - 1]?.branchId?.toString();
+          if (destId !== destinationBranchId) return false;
+        }
+        
+        return true;
+      });
+      
+      total = filtered.length;
+      
+      // Apply pagination to filtered results
+      transportations = filtered.slice(skip, skip + limit);
+      
+      // Enhance with route data
+      transportations = transportations.map(t => ({
+        ...t,
+        _route: routeMap.get(t.sourceRouteId?.toString()),
+      }));
+    } else {
+      // Simple query - count and get paginated results
+      const [countResult, transportationsResult] = await Promise.all([
+        TransportationModel.countDocuments(query),
+        transportationsQuery,
+      ]);
+      
+      total = countResult;
+      transportations = transportationsResult;
+    }
+
+    // ── Calculate Summary Statistics ──────────────────────────────────────────
+    
+    // Get all transportations for this transporter (for summary)
+    const allTransporterTransportations = await TransportationModel.find({
+      assignedTransporterId: transporterId,
+    }).lean();
+    
+    const completedTransportations = allTransporterTransportations.filter(t => t.status === 'completed');
+    const cancelledTransportations = allTransporterTransportations.filter(t => t.status === 'cancelled');
+    
+    // Calculate average delivery time (only for completed trips with both departedAt and actualDeliveryTime)
+    const completedWithTimes = completedTransportations.filter(t => t.departedAt && t.actualDeliveryTime);
+    const totalDeliveryMinutes = completedWithTimes.reduce((sum, t) => {
+      const minutes = Math.round((t.actualDeliveryTime!.getTime() - t.departedAt!.getTime()) / 60000);
+      return sum + minutes;
+    }, 0);
+    const averageDeliveryTimeMinutes = completedWithTimes.length > 0
+      ? Math.round(totalDeliveryMinutes / completedWithTimes.length)
+      : null;
+    
+    const summary = {
+      totalTransportations: allTransporterTransportations.length,
+      completedCount: completedTransportations.length,
+      cancelledCount: cancelledTransportations.length,
+      totalWeightTransported: completedTransportations.reduce((sum, t) => sum + (t.totalWeight || 0), 0),
+      totalManifestsTransported: completedTransportations.reduce((sum, t) => sum + (t.manifestCount || 0), 0),
+      totalPackagesTransported: completedTransportations.reduce((sum, t) => sum + (t.packageCount || 0), 0),
+      averageDeliveryTimeMinutes,
+      totalDistance: allTransporterTransportations.reduce((sum, t) => sum + ((t as any).totalDistance || 0), 0),
+    };
+    
+    // ── Response ──────────────────────────────────────────────────────────────
+    
+    const totalPages = Math.ceil(total / limit);
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        transportations: transportations.map(t => {
+          const obj = { ...t };
+          delete obj._route;
+          return obj;
+        }),
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: totalPages,
+          hasNext: page < totalPages,
+          hasPrev: page > 1,
+        },
+        summary,
+      },
+    });
+  },
+);
 
 
 
