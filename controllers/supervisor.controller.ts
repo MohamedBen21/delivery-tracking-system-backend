@@ -56,6 +56,7 @@ interface ICreateDeliverer {
 
   currentLocation?: ILocationBody;
   documents?: IDelivererDocumentsBody;
+  currentVehicleId?: string;
 }
 
 interface IUpdateDeliverer {
@@ -69,6 +70,7 @@ interface IUpdateDeliverer {
   currentLocation?: ILocationBody;
   documents?: IDelivererDocumentsBody;
   availabilityStatus?: "available" | "on_route" | "off_duty" | "on_break" | "maintenance";
+  currentVehicleId?: string;
 }
 
 
@@ -105,6 +107,7 @@ export const createDeliverer = catchAsyncError(
         // imageUrl,
         currentLocation,
         documents,
+        currentVehicleId,
       } = req.body as ICreateDeliverer;
 
       if (!email || !phone || !password || !firstName || !lastName) {
@@ -220,6 +223,7 @@ export const createDeliverer = catchAsyncError(
             branchId,
             ...(currentLocation && { currentLocation }),
             ...(documents && { documents }),
+            ...(currentVehicleId && { currentVehicleId }),
             availabilityStatus: "off_duty",
             verificationStatus: "verified",
             isActive: true,
@@ -416,6 +420,7 @@ export const updateDeliverer = catchAsyncError(
       // if (body.imageUrl !== undefined) userUpdates.imageUrl = body.imageUrl;
 
       if (body.currentLocation) delivererUpdates.currentLocation = body.currentLocation;
+      if (body.currentVehicleId !== undefined) delivererUpdates.currentVehicleId = body.currentVehicleId;
 
       if (body.documents) {
         deliverer.documents = {
@@ -748,6 +753,7 @@ interface ICreateTransporter {
   // imageUrl?: string;
 
   documents?: ITransporterDocumentsBody;
+  currentVehicleId?: string;
 }
 
 interface IUpdateTransporter {
@@ -762,6 +768,7 @@ interface IUpdateTransporter {
   documents?: ITransporterDocumentsBody;
   availabilityStatus?: "available" | "on_route" | "off_duty" | "on_break" | "maintenance";
   currentBranchId?: string;
+  currentVehicleId?: string;
 }
 
 
@@ -796,6 +803,7 @@ export const createTransporter = catchAsyncError(
         lastName,
         // imageUrl,
         documents,
+        currentVehicleId,
       } = req.body as ICreateTransporter;
 
       if (!email || !phone || !password || !firstName || !lastName) {
@@ -898,9 +906,9 @@ export const createTransporter = catchAsyncError(
           {
             userId: user[0]._id,
             companyId,
-            // If created by supervisor, assign to their branch
-            ...(supervisor && { currentBranchId: supervisor.branchId }),
+            currentBranchId: userRole === "supervisor" ? supervisor?.branchId : undefined,
             ...(documents && { documents }),
+            ...(currentVehicleId && { currentVehicleId }),
             availabilityStatus: "off_duty",
             verificationStatus: "verified",
             isActive: true,
@@ -1091,6 +1099,8 @@ export const updateTransporter = catchAsyncError(
       }
 
       if (body.availabilityStatus) transporterUpdates.availabilityStatus = body.availabilityStatus;
+      if (body.currentVehicleId !== undefined) transporterUpdates.currentVehicleId = body.currentVehicleId;
+      if (body.currentBranchId !== undefined) transporterUpdates.currentBranchId = body.currentBranchId;
 
       // Only managers and admins can change branch assignment
       if (body.currentBranchId !== undefined && (userRole === "admin" || userRole === "manager")) {
