@@ -27,6 +27,7 @@ import CashierModel, { ICashier } from "../models/cashier.model";
 import LoaderModel, { ILoader } from "../models/loader.model";
 import { SocketService } from "../services/socket.service";
 import DeliveryQrSession from "../models/deliveryQrSession.model";
+import TransportationModel, { ITransportation, TransportationStatus } from "../models/transportation.model";
 
 
 interface ILocationBody {
@@ -11722,6 +11723,7 @@ export const getManifestsPaginated = catchAsyncError(
             name: m.destinationBranchId.name,
             code: m.destinationBranchId.code,
             city: m.destinationBranchId.address?.city,
+            coordinates: m.destinationBranchId.location?.coordinates,
           }
           : null,
         status: m.status,
@@ -16877,3 +16879,307 @@ export const searchDeliveries = catchAsyncError(
     }
   },
 );
+
+
+
+
+
+
+/**
+ * GET /transportation/today
+ *
+ * Returns the transporter's transportation "trip" for today, creating it
+ * from their newest route (scheduled or actually started today) if it
+ * doesn't exist yet. Calling this repeatedly is idempotent — it will not
+ * create duplicate Transportation docs for the same route.
+ *
+ * Query params (all optional):
+ *   - transporterId   (required in practice — who we're fetching for)
+ *   - minWeight / maxWeight         → totalWeight
+ *   - minVolume / maxVolume         → totalVolume
+ *   - minPackageCount / maxPackageCount
+ *   - minManifestCount / maxManifestCount
+ *   - routeStatus                   → underlying route's status (planned|assigned|active|paused|completed|cancelled)
+ *   - status                        → transportation's own status (pending|in_transit|arrived|completed|cancelled)
+ *
+ * Response shape:
+ *   { success: true, data: <Transportation fields> | null, message?: string }
+ *
+ * `data` is null in two cases:
+ *   1. No route for this transporter is scheduled/started today (their
+ *      schedule for the day hasn't begun or has ended).
+ *   2. A transportation exists / was created, but it doesn't pass the
+ *      supplied filters.
+ */
+export const getOrCreateTodayTransportation = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+
+    // ── Section 1: pure validation (no DB writes) ────────────────────────────
+
+    const isValidId = (val: string) => mongoose.Types.ObjectId.isValid(val);
+    const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
+
+    if (!req.query.transporterId || !isValidId(req.query.transporterId as string)) {
+      return next(new ErrorHandler("Valid transporterId is required.", 400));
+    }
+    const transporterId = toObjectId(req.query.transporterId as string);
+
+    const VALID_TRANSPORTATION_STATUSES: TransportationStatus[] = [
+      "pending", "in_transit", "arrived", "completed", "cancelled",
+    ];
+    const VALID_ROUTE_STATUSES: RouteStatus[] = [
+      "planned", "assigned", "active", "paused", "completed", "cancelled",
+    ];
+
+    if (req.query.status) {
+      const s = req.query.status as string;
+      if (!VALID_TRANSPORTATION_STATUSES.includes(s as TransportationStatus))
+        return next(new ErrorHandler(`Invalid status: ${s}.`, 400));
+    }
+
+    if (req.query.routeStatus) {
+      const s = req.query.routeStatus as string;
+      if (!VALID_ROUTE_STATUSES.includes(s as RouteStatus))
+        return next(new ErrorHandler(`Invalid routeStatus: ${s}.`, 400));
+    }
+
+    const parseNum = (key: string): number | null => {
+      if (req.query[key] === undefined) return null;
+      const n = parseFloat(req.query[key] as string);
+      return isNaN(n) ? null : n;
+    };
+
+    const minWeight = parseNum("minWeight");
+    const maxWeight = parseNum("maxWeight");
+    const minVolume = parseNum("minVolume");
+    const maxVolume = parseNum("maxVolume");
+    const minPackageCount = parseNum("minPackageCount");
+    const maxPackageCount = parseNum("maxPackageCount");
+    const minManifestCount = parseNum("minManifestCount");
+    const maxManifestCount = parseNum("maxManifestCount");
+
+    // ["minWeight", req.query.minWeight], ["maxWeight", ...], etc — anything
+    // passed but not parseable as a number is a 400, same as getManifestsPaginated.
+    const numericKeys = [
+      "minWeight", "maxWeight", "minVolume", "maxVolume",
+      "minPackageCount", "maxPackageCount",
+      "minManifestCount", "maxManifestCount",
+    ];
+    for (const key of numericKeys) {
+      if (req.query[key] !== undefined && parseNum(key) === null) {
+        return next(new ErrorHandler(`Invalid ${key}: must be a number.`, 400));
+      }
+    }
+
+    // ── "Today" window ─────────────────────────────────────────────────────
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+
+    // ── Section 2: DB work — find route, get-or-create transportation ────────
+
+    const session = await mongoose.startSession();
+    let transactionCommitted = false;
+
+    let resultDoc: ITransportation | null = null;
+    let noRouteToday = false;
+
+    try {
+      session.startTransaction();
+
+      // Newest route for this transporter scheduled OR actually started today.
+      // "Newest" = latest scheduledStart, since that's the day's schedule order.
+      const todaysRoute = await RouteModel.findOne({
+        assignedTransporterId: transporterId,
+        $or: [
+          { scheduledStart: { $gte: startOfToday, $lte: endOfToday } },
+          { actualStart: { $gte: startOfToday, $lte: endOfToday } },
+        ],
+        // any status — pending/active/completed/cancelled are all valid "today" routes
+      })
+        .sort({ scheduledStart: -1 })
+        .session(session);
+
+      if (!todaysRoute) {
+        noRouteToday = true;
+      } else {
+
+        // Idempotent: reuse an existing Transportation for this route if present.
+        let transportation = await TransportationModel.findOne({
+          sourceRouteId: todaysRoute._id,
+        }).session(session);
+
+        if (!transportation) {
+          // Flatten manifestIds across all stops (hub_to_hub usually has one
+          // stop; hub_to_branch may have several).
+          const manifestIds = todaysRoute.stops.reduce<mongoose.Types.ObjectId[]>(
+            (acc, stop) => acc.concat(stop.manifestIds || []),
+            [],
+          );
+
+          // Sum rollups directly from manifest docs — both fields already
+          // exist on IManifest, no aggregation needed.
+          let totalWeight = 0;
+          let totalPackages = 0;
+          if (manifestIds.length > 0) {
+            const manifests = await ManifestModel.find({ _id: { $in: manifestIds } })
+              .select("totalDeclaredWeight packageCount")
+              .session(session);
+
+            for (const m of manifests) {
+              totalWeight += m.totalDeclaredWeight || 0;
+              totalPackages += m.packageCount || 0;
+            }
+          }
+
+          // Source / destination location: pull from route's first/last stop.
+          // hub_to_hub routes typically have exactly one stop (the destination
+          // hub); origin coordinates aren't stored on the route itself, so we
+          // fall back to the first stop's location for both if there's only one.
+          const firstStop = todaysRoute.stops[0];
+          const lastStop = todaysRoute.stops[todaysRoute.stops.length - 1];
+
+          if (!firstStop || !lastStop) {
+            throw new ErrorHandler("Today's route has no stops; cannot build transportation.", 422);
+          }
+
+          const sourcePoint = {
+            branchId: todaysRoute.originBranchId,
+            location: firstStop.location,
+          };
+          const destinationPoint = {
+            branchId: todaysRoute.destinationBranchId ?? lastStop.branchId,
+            location: lastStop.location,
+          };
+
+          const created = await TransportationModel.create(
+            [{
+              companyId: todaysRoute.companyId,
+              sourceRouteId: todaysRoute._id,
+              source: sourcePoint,
+              destination: destinationPoint,
+              manifestIds,
+              manifestCount: manifestIds.length,
+              packageCount: totalPackages,
+              totalWeight,
+              totalVolume: 0, // TODO: no volume field on Manifest/Package yet — confirm source
+              assignedTransporterId: todaysRoute.assignedTransporterId,
+              assignedVehicleId: todaysRoute.assignedVehicleId,
+              status: "pending",
+              estimatedDeliveryTime: todaysRoute.scheduledEnd,
+              actualDeliveryTime: todaysRoute.actualEnd,
+              departedAt: todaysRoute.actualStart,
+            }],
+            { session },
+          );
+          transportation = created[0];
+        }
+
+        resultDoc = transportation;
+      }
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+    } catch (error: any) {
+      if (error instanceof ErrorHandler) {
+        return next(error);
+      }
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400,
+          ),
+        );
+      }
+      return next(new ErrorHandler(error.message || "Error fetching transportation.", 500));
+    } finally {
+      if (!transactionCommitted && session.inTransaction()) {
+        await session.abortTransaction();
+      }
+      session.endSession();
+    }
+
+    // ── Section 3: response shaping (no further DB writes) ───────────────────
+
+    if (noRouteToday || !resultDoc) {
+      res.status(200).json({
+        success: true,
+        data: null,
+        message: "No transportation scheduled for today.",
+      });
+      return;
+    }
+
+    // Apply filters to the single result. If it doesn't pass, the response
+    // is null (filtered out) rather than an error — same null contract as
+    // the "no route today" case above.
+    const t = resultDoc;
+
+    if (req.query.status && t.status !== (req.query.status as string)) {
+      res.status(200).json({ success: true, data: null, message: "Transportation does not match status filter." });
+      return;
+    }
+    if (minWeight !== null && t.totalWeight < minWeight) {
+      res.status(200).json({ success: true, data: null, message: "Transportation does not match minWeight filter." });
+      return;
+    }
+    if (maxWeight !== null && t.totalWeight > maxWeight) {
+      res.status(200).json({ success: true, data: null, message: "Transportation does not match maxWeight filter." });
+      return;
+    }
+    if (minVolume !== null && t.totalVolume < minVolume) {
+      res.status(200).json({ success: true, data: null, message: "Transportation does not match minVolume filter." });
+      return;
+    }
+    if (maxVolume !== null && t.totalVolume > maxVolume) {
+      res.status(200).json({ success: true, data: null, message: "Transportation does not match maxVolume filter." });
+      return;
+    }
+    if (minPackageCount !== null && t.packageCount < minPackageCount) {
+      res.status(200).json({ success: true, data: null, message: "Transportation does not match minPackageCount filter." });
+      return;
+    }
+    if (maxPackageCount !== null && t.packageCount > maxPackageCount) {
+      res.status(200).json({ success: true, data: null, message: "Transportation does not match maxPackageCount filter." });
+      return;
+    }
+    if (minManifestCount !== null && t.manifestCount < minManifestCount) {
+      res.status(200).json({ success: true, data: null, message: "Transportation does not match minManifestCount filter." });
+      return;
+    }
+    if (maxManifestCount !== null && t.manifestCount > maxManifestCount) {
+      res.status(200).json({ success: true, data: null, message: "Transportation does not match maxManifestCount filter." });
+      return;
+    }
+    if (req.query.routeStatus) {
+      // Re-check the underlying route's current status (it may have changed
+      // since the transportation was created — e.g. transporter started driving).
+      const route = await RouteModel.findById(t.sourceRouteId).select("status").lean();
+      if (!route || route.status !== (req.query.routeStatus as string)) {
+        res.status(200).json({ success: true, data: null, message: "Transportation does not match routeStatus filter." });
+        return;
+      }
+    }
+
+    // Return ONLY transportation-model fields, as requested.
+    const data = (t as any).toObject ? (t as any).toObject({ virtuals: true }) : t;
+
+    res.status(200).json({
+      success: true,
+      data,
+    });
+  },
+);
+
+
+
+
+//search manifest 
+
+
+
+
+
