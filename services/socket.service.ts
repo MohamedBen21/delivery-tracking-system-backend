@@ -2120,15 +2120,15 @@ export class SocketService {
                   data.coordinates,
                   stop.location.coordinates,
                 ) * 1000;
-              if (distanceMeters > 500) {
-                socket.emit("route_error", {
-                  code: "TOO_FAR",
-                  message: `Must be within 500m to scan. Current: ${Math.round(distanceMeters)}m.`,
-                  distanceMeters: Math.round(distanceMeters),
-                  requiredMeters: 500,
-                });
-                return;
-              }
+              // if (distanceMeters > 500) {
+              //   socket.emit("route_error", {
+              //     code: "TOO_FAR",
+              //     message: `Must be within 500m to scan. Current: ${Math.round(distanceMeters)}m.`,
+              //     distanceMeters: Math.round(distanceMeters),
+              //     requiredMeters: 500,
+              //   });
+              //   return;
+              // }
 
               session.verified = true;
               session.verifiedAt = new Date();
@@ -2238,6 +2238,17 @@ export class SocketService {
 
               if (isLastStop) {
                 await route.completeRoute(data.notes);
+
+                // ── Update transportation status to arrived ─────────────────────
+                const transportation = await TransportationModel.findOne({
+                  sourceRouteId: route._id,
+                });
+
+                if (transportation) {
+                  transportation.status = 'arrived';
+                  transportation.actualDeliveryTime = new Date();
+                  await transportation.save();
+                }
 
                 if (route.type === "hub_to_hub" && stop.branchId) {
                   await TransporterModel.findByIdAndUpdate(transporter._id, {
@@ -5567,7 +5578,7 @@ export class SocketService {
           {
             $set: {
               status: newStatus,
-              ...(newStatus === 'completed' && { actualDeliveryTime: new Date() }),
+              ...(newStatus === 'arrived' && { actualDeliveryTime: new Date() }),
             },
           },
           { new: true, lean: true }

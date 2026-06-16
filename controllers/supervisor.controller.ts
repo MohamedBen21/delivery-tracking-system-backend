@@ -18340,6 +18340,7 @@ export const getManifestsPaginatedFromRoute = catchAsyncError(
           return next(new ErrorHandler("Transporter profile not found.", 404));
         }
 
+        // ── ONLY GET ROUTES THAT ARE NOT COMPLETED OR CANCELLED ──────────
         const activeRoute = await RouteModel.findOne({
           assignedTransporterId: transporter._id,
           status: { $in: ['planned', 'assigned', 'active', 'paused'] }

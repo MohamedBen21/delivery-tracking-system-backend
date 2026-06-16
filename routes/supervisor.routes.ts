@@ -61,6 +61,8 @@ import {
   startRouteByQrCode,
   generateStopVerificationQR,
   generateStartRouteQR,
+  getManifestsPaginatedFromRoute,
+  getManifestsPaginated,
 } from "../controllers/supervisor.controller";
 
 const supervisorRouter = Router();
@@ -309,6 +311,22 @@ supervisorRouter.post(
   isAuthenticated,
   generateStartRouteQR
 );
+
+
+
+supervisorRouter.get(
+  "/manifests",
+  isAuthenticated,
+  authorizeRoles("transporter", "supervisor", "admin", "manager"),
+  getManifestsPaginatedFromRoute
+);
+
+// supervisorRouter.get(
+//   "/manifests",
+//   isAuthenticated,
+//   authorizeRoles("transporter", "supervisor", "admin", "manager"),
+//   getManifestsPaginated
+// );
 
 export default supervisorRouter;
 
