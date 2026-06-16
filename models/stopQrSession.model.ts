@@ -38,7 +38,7 @@ const stopQrSessionSchema = new Schema<IStopQrSession>(
     stopIndex: {
       type: Number,
       required: [true, "Stop index is required"],
-      min: 0,
+      min: -1, // -1 is used for start-route QR sessions
     },
     stopId: {
       type: Schema.Types.ObjectId,

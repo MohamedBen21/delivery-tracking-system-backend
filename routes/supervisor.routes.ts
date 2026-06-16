@@ -54,6 +54,11 @@ import {
   getPackagesPaginatedFromRoute,
   completeDeliveryByQrCode,
   searchDeliveries,
+  getManifestsHistory,
+  getTransportationsHistory,
+  getOrCreateTodayTransportation,
+  arriveAtStopByQrCode,
+  startRouteByQrCode,
 } from "../controllers/supervisor.controller";
 
 const supervisorRouter = Router();
@@ -300,6 +305,43 @@ supervisorRouter.post(
 
 supervisorRouter.get("/deliveries/search", isAuthenticated, authorizeRoles("deliverer"), searchDeliveries);
 
+supervisorRouter.get(
+  "/transportation/today",
+  isAuthenticated,
+  authorizeRoles( "transporter"),
+  getOrCreateTodayTransportation
+);
+
+
+supervisorRouter.get(
+  "/transportation/history",
+  isAuthenticated,
+  authorizeRoles( "transporter"),
+  getTransportationsHistory
+);
+
+
+supervisorRouter.get(
+  "/manifest/history",
+  isAuthenticated,
+  authorizeRoles( "transporter"),
+  getManifestsHistory
+);
+
+
+supervisorRouter.post(
+  "/transporter/start-route-qr",
+  isAuthenticated,
+  authorizeRoles("transporter"),
+  startRouteByQrCode
+);
+
+supervisorRouter.post(
+  "/transporter/arrive-at-stop-qr",
+  isAuthenticated,
+  authorizeRoles("transporter"),
+  arriveAtStopByQrCode
+);
 
 export default supervisorRouter;
 

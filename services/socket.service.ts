@@ -489,6 +489,211 @@ export class SocketService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  //  GENERATE AND SEND START-ROUTE QR (to supervisor of origin branch)
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  //  Called when a transporter starts a route. Generates a "start_route" QR
+  //  session (stopIndex: -1) and emits it to the supervisor(s) at the route's
+  //  origin branch. The supervisor scans this QR (via startRouteByQrCode) to
+  //  confirm the transporter is departing with the load.
+  //
+  private async generateAndSendStartRouteQR(
+    route: any,
+    routeId: string,
+    transporterId: mongoose.Types.ObjectId,
+  ): Promise<void> {
+    try {
+      if (!route.originBranchId) {
+        console.warn(`[QR] No originBranchId for route ${routeId}, skipping start_route QR`);
+        return;
+      }
+
+      const originBranchId = route.originBranchId.toString();
+
+      // Cancel any existing unexpired start_route QR session for this route
+      await StopQrSessionModel.updateMany(
+        {
+          routeId: new mongoose.Types.ObjectId(routeId),
+          stopIndex: -1,
+          verified: false,
+          expiresAt: { $gt: new Date() },
+        },
+        { $set: { expiresAt: new Date() } },
+      );
+
+      const qrCode = crypto.randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+
+      const totalManifests = route.stops.reduce(
+        (sum: number, s: any) => sum + (s.manifestIds?.length ?? 0),
+        0,
+      );
+      const totalPackages = route.stops.reduce(
+        (sum: number, s: any) => sum + (s.packageIds?.length ?? 0),
+        0,
+      );
+
+      const session = await StopQrSessionModel.create({
+        routeId: new mongoose.Types.ObjectId(routeId),
+        stopIndex: -1,
+        stopId: route._id, // no specific stop for start_route; use route id as placeholder
+        transporterId,
+        branchId: route.originBranchId,
+        manifestCount: totalManifests,
+        packageCount: totalPackages,
+        isLastStop: false,
+        code: qrCode,
+        expiresAt,
+        verified: false,
+      });
+
+      const qrPayload = {
+        sessionId: session._id.toString(),
+        code: qrCode,
+        routeId,
+        stopIndex: -1,
+        type: "start_route",
+        timestamp: Date.now(),
+      };
+
+      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrPayload));
+
+      this.io
+        .to(this.getBranchRoom(originBranchId))
+        .emit("supervisor:show_start_route_qr", {
+          sessionId: session._id,
+          qrCode,
+          qrImage: qrDataUrl,
+          payload: qrPayload,
+          routeId,
+          routeNumber: route.routeNumber,
+          routeType: route.type,
+          transporterId,
+          originBranchId,
+          totalStops: route.stops.length,
+          manifestCount: totalManifests,
+          packageCount: totalPackages,
+          expiresAt,
+          message: `Transporter is departing on route ${route.routeNumber}. Please scan to confirm departure.`,
+          timestamp: new Date(),
+        });
+
+      console.log(
+        `[QR] Generated start_route QR for route ${route.routeNumber}, session: ${session._id}, sent to branch ${originBranchId}`,
+      );
+    } catch (err) {
+      console.error("[Socket] generateAndSendStartRouteQR error:", err);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  GENERATE AND SEND STOP-VERIFICATION QR (to supervisor of destination branch)
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  //  Called when a transporter requests a QR for a hub stop. Generates a
+  //  "stop_verification" QR session for the given stop and emits it to the
+  //  supervisor(s) at the stop's destination branch. The supervisor scans this
+  //  QR (via arriveAtStopByQrCode) to confirm receipt of the manifests/packages.
+  //
+  //  Returns the created session so the caller can reuse it instead of
+  //  creating a duplicate StopQrSessionModel document.
+  //
+  private async generateAndSendStopVerificationQR(
+    route: any,
+    stopIndex: number,
+    routeId: string,
+    transporterId: mongoose.Types.ObjectId,
+  ): Promise<any | null> {
+    try {
+      const stop = route.stops[stopIndex];
+      if (!stop) return null;
+
+      if (!stop.branchId) {
+        console.warn(`[QR] No branchId for stop ${stopIndex} on route ${routeId}, skipping stop_verification QR`);
+        return null;
+      }
+
+      const destinationBranchId = stop.branchId.toString();
+
+      // Cancel any existing unexpired QR session for this stop
+      await StopQrSessionModel.updateMany(
+        {
+          routeId: new mongoose.Types.ObjectId(routeId),
+          stopIndex,
+          verified: false,
+          expiresAt: { $gt: new Date() },
+        },
+        { $set: { expiresAt: new Date() } },
+      );
+
+      const qrCode = crypto.randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+      const isLastStop = stopIndex === route.stops.length - 1;
+
+      const manifestCount = stop.manifestIds?.length ?? 0;
+      const packageCount = stop.packageIds?.length ?? 0;
+
+      const session = await StopQrSessionModel.create({
+        routeId: new mongoose.Types.ObjectId(routeId),
+        stopIndex,
+        stopId: stop._id,
+        transporterId,
+        branchId: stop.branchId,
+        manifestCount,
+        packageCount,
+        isLastStop,
+        code: qrCode,
+        expiresAt,
+        verified: false,
+      });
+
+      const qrPayload = {
+        sessionId: session._id.toString(),
+        code: qrCode,
+        routeId,
+        stopIndex,
+        type: "stop_verification",
+        timestamp: Date.now(),
+      };
+
+      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrPayload));
+
+      this.io
+        .to(this.getBranchRoom(destinationBranchId))
+        .emit("supervisor:show_stop_qr", {
+          sessionId: session._id,
+          qrCode,
+          qrImage: qrDataUrl,
+          payload: qrPayload,
+          routeId,
+          routeNumber: route.routeNumber,
+          routeType: route.type,
+          stopIndex,
+          stopId: stop._id,
+          branchId: stop.branchId,
+          transporterId,
+          manifestCount,
+          packageCount,
+          isLastStop,
+          expiresAt,
+          message: isLastStop
+            ? "Transporter has arrived with the final delivery. Please scan to confirm receipt."
+            : `Transporter has arrived at stop ${stopIndex + 1}. Please scan to confirm receipt.`,
+          timestamp: new Date(),
+        });
+
+      console.log(
+        `[QR] Generated stop_verification QR for route ${route.routeNumber} stop ${stopIndex}, session: ${session._id}, sent to branch ${destinationBranchId}`,
+      );
+
+      return session;
+    } catch (err) {
+      console.error("[Socket] generateAndSendStopVerificationQR error:", err);
+      return null;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   //  SETUP
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -828,8 +1033,112 @@ export class SocketService {
 
       if (role === "transporter") {
 
-        socket.on("start_route", async (data: { routeId: string }) => {
+        // ════════════════════════════════════════════════════════════════════
+        //  REQUEST START ROUTE QR
+        // ════════════════════════════════════════════════════════════════════
+        //
+        //  Generates a "start_route" QR session and sends it to the
+        //  supervisor(s) at the route's origin branch. The transporter then
+        //  asks the supervisor to scan it; the resulting decoded payload is
+        //  sent back via start_route to actually begin the route.
+        //
+        socket.on(
+          "request_start_route",
+          async (data: { routeId: string }) => {
+            try {
+              if (
+                !data?.routeId ||
+                !mongoose.Types.ObjectId.isValid(data.routeId)
+              ) {
+                socket.emit("route_error", {
+                  code: "INVALID_ROUTE_ID",
+                  message: "Invalid routeId.",
+                });
+                return;
+              }
+
+              const transporter = await TransporterModel.findOne({
+                userId,
+              }).lean();
+              if (!transporter) {
+                socket.emit("route_error", {
+                  code: "NOT_FOUND",
+                  message: "Transporter not found.",
+                });
+                return;
+              }
+
+              const route = await RouteModel.findOne({
+                _id: data.routeId,
+                assignedTransporterId: transporter._id,
+                status: { $in: ["planned", "assigned"] },
+              });
+              if (!route) {
+                socket.emit("route_error", {
+                  code: "ROUTE_NOT_FOUND",
+                  message: "Route not found, not assigned to you, or already started.",
+                });
+                return;
+              }
+
+              if (!route.originBranchId) {
+                socket.emit("route_error", {
+                  code: "NO_ORIGIN_BRANCH",
+                  message: "This route has no origin branch configured.",
+                });
+                return;
+              }
+
+              await this.generateAndSendStartRouteQR(
+                route,
+                data.routeId,
+                transporter._id,
+              );
+
+              socket.emit("start_route_qr_requested", {
+                routeId: data.routeId,
+                routeNumber: route.routeNumber,
+                originBranchId: route.originBranchId,
+                message: "QR code sent to the supervisor. Please ask them to scan it to confirm departure.",
+                timestamp: new Date(),
+              });
+
+              console.log(
+                `[Socket] Transporter ${userId} requested start_route QR for route ${data.routeId}`,
+              );
+            } catch (err: any) {
+              socket.emit("route_error", {
+                code: "REQUEST_START_ROUTE_FAILED",
+                message: err.message || "Failed to request start route QR.",
+              });
+            }
+          },
+        );
+
+        socket.on(
+          "start_route",
+          async (data: {
+            sessionId: string;
+            qrCode: string;
+            routeId: string;
+            coordinates: [number, number];
+          }) => {
           try {
+            // ── Validate inputs ──────────────────────────────────────────
+            if (!data?.sessionId || !mongoose.Types.ObjectId.isValid(data.sessionId)) {
+              socket.emit("route_error", {
+                code: "INVALID_SESSION_ID",
+                message: "Invalid sessionId.",
+              });
+              return;
+            }
+            if (!data?.qrCode || typeof data.qrCode !== "string") {
+              socket.emit("route_error", {
+                code: "QR_CODE_REQUIRED",
+                message: "qrCode is required.",
+              });
+              return;
+            }
             if (
               !data?.routeId ||
               !mongoose.Types.ObjectId.isValid(data.routeId)
@@ -837,6 +1146,13 @@ export class SocketService {
               socket.emit("route_error", {
                 code: "INVALID_ROUTE_ID",
                 message: "Invalid routeId.",
+              });
+              return;
+            }
+            if (!data?.coordinates || data.coordinates.length !== 2) {
+              socket.emit("route_error", {
+                code: "NO_COORDINATES",
+                message: "Coordinates required.",
               });
               return;
             }
@@ -852,17 +1168,100 @@ export class SocketService {
               return;
             }
 
+            // ── Validate QR session ──────────────────────────────────────
+            const session = await StopQrSessionModel.findById(data.sessionId);
+            if (!session) {
+              socket.emit("route_error", {
+                code: "SESSION_NOT_FOUND",
+                message: "QR session not found.",
+              });
+              return;
+            }
+            if (session.verified) {
+              socket.emit("route_error", {
+                code: "ALREADY_VERIFIED",
+                message: "This QR code has already been used.",
+              });
+              return;
+            }
+            if (session.expiresAt < new Date()) {
+              socket.emit("route_error", {
+                code: "QR_EXPIRED",
+                message: "QR code has expired. Please request a new one.",
+                expiredAt: session.expiresAt,
+              });
+              return;
+            }
+            if (session.code !== data.qrCode.trim()) {
+              socket.emit("route_error", {
+                code: "QR_MISMATCH",
+                message: "Invalid QR code.",
+              });
+              return;
+            }
+            if (
+              session.transporterId.toString() !== transporter._id.toString()
+            ) {
+              socket.emit("route_error", {
+                code: "WRONG_TRANSPORTER",
+                message: "QR belongs to a different transporter.",
+              });
+              return;
+            }
+            if (session.routeId.toString() !== data.routeId) {
+              socket.emit("route_error", {
+                code: "WRONG_ROUTE",
+                message: "QR belongs to a different route.",
+              });
+              return;
+            }
+            if (session.stopIndex !== -1) {
+              socket.emit("route_error", {
+                code: "NOT_A_START_ROUTE_QR",
+                message: "This QR is not a start-route QR.",
+              });
+              return;
+            }
+
             const route = await RouteModel.findOne({
               _id: data.routeId,
               assignedTransporterId: transporter._id,
+              status: { $in: ["planned", "assigned"] },
             });
             if (!route) {
               socket.emit("route_error", {
                 code: "ROUTE_NOT_FOUND",
-                message: "Route not found or not assigned to you.",
+                message: "Route not found, not assigned to you, or already started.",
               });
               return;
             }
+
+            // ── Proximity check (origin branch, 500m) ────────────────────
+            if (route.originBranchId) {
+              const originBranch = await BranchModel.findById(route.originBranchId)
+                .select("location")
+                .lean();
+              if (originBranch && (originBranch as any).location?.coordinates) {
+                const distanceMeters =
+                  this.calculateDistance(
+                    data.coordinates,
+                    (originBranch as any).location.coordinates,
+                  ) * 1000;
+                if (distanceMeters > 500) {
+                  socket.emit("route_error", {
+                    code: "TOO_FAR",
+                    message: `Must be within 500m of the origin branch to start the route. Current: ${Math.round(distanceMeters)}m.`,
+                    distanceMeters: Math.round(distanceMeters),
+                    requiredMeters: 500,
+                  });
+                  return;
+                }
+              }
+            }
+
+            session.verified = true;
+            session.verifiedAt = new Date();
+            await session.save();
 
             await route.startRoute();
             socket.join(this.getRouteRoom(data.routeId));
@@ -949,7 +1348,7 @@ export class SocketService {
             });
 
             console.log(
-              `[Socket] Transporter ${userId} started route ${data.routeId} (${route.type})`,
+              `[Socket] Transporter ${userId} started route ${data.routeId} (${route.type}) via supervisor QR ${session._id}`,
             );
           } catch (err: any) {
             socket.emit("route_error", {
@@ -958,6 +1357,7 @@ export class SocketService {
             });
           }
         });
+
 
         socket.on(
           "arrived_at_stop",
@@ -1236,36 +1636,27 @@ export class SocketService {
                 return;
               }
 
-              await StopQrSessionModel.updateMany(
-                {
-                  routeId: new mongoose.Types.ObjectId(data.routeId),
-                  stopIndex: data.stopIndex,
-                  verified: false,
-                  expiresAt: { $gt: new Date() },
-                },
-                { $set: { expiresAt: new Date() } },
-              );
-
-              const qrCode = crypto.randomBytes(32).toString("hex");
-              const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
               const isLastStop = data.stopIndex === route.stops.length - 1;
-
               const manifestCount = stop.manifestIds?.length ?? 0;
               const packageCount = stop.packageIds?.length ?? 0;
 
-              const session = await StopQrSessionModel.create({
-                routeId: new mongoose.Types.ObjectId(data.routeId),
-                stopIndex: data.stopIndex,
-                stopId: stop._id,
-                transporterId: transporter._id,
-                branchId: stop.branchId,
-                manifestCount,
-                packageCount,
-                isLastStop,
-                code: qrCode,
-                expiresAt,
-                verified: false,
-              });
+              const session = await this.generateAndSendStopVerificationQR(
+                route,
+                data.stopIndex,
+                data.routeId,
+                transporter._id,
+              );
+
+              if (!session) {
+                socket.emit("route_error", {
+                  code: "QR_GENERATION_FAILED",
+                  message: "Failed to generate stop verification QR.",
+                });
+                return;
+              }
+
+              const qrCode = session.code;
+              const expiresAt = session.expiresAt;
 
               const pendingPayload = {
                 completedManifestIds: data.completedManifestIds ?? [],
