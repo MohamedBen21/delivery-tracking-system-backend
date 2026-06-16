@@ -2,6 +2,7 @@ import { Router } from "express";
 import { isAuthenticated, authorizeRoles } from "../middleware/auth";
 import {
   generateStopQr,
+  getManifestsPaginated,
   getStopQrInfo,
   scanStopQr,
   toggleOnlineStatus,
@@ -39,6 +40,12 @@ transporterRouter.post(
 
 
 transporterRouter.get("/:code", getStopQrInfo);
+
+transporterRouter.get(
+  "/manifests",
+  authorizeRoles("transporter"),
+  getManifestsPaginated,
+);
 
 export default transporterRouter;
 

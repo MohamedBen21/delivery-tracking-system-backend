@@ -59,6 +59,8 @@ import {
   getOrCreateTodayTransportation,
   arriveAtStopByQrCode,
   startRouteByQrCode,
+  generateStopVerificationQR,
+  generateStartRouteQR,
 } from "../controllers/supervisor.controller";
 
 const supervisorRouter = Router();
@@ -293,6 +295,19 @@ supervisorRouter.post(
   isAuthenticated,
   authorizeRoles("transporter"),
   arriveAtStopByQrCode
+);
+
+
+supervisorRouter.post(
+  '/qr/generate-stop-verification',
+  isAuthenticated,
+  generateStopVerificationQR
+);
+
+supervisorRouter.post(
+  '/qr/generate-start-route',
+  isAuthenticated,
+  generateStartRouteQR
 );
 
 export default supervisorRouter;

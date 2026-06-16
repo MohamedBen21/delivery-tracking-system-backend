@@ -21,6 +21,7 @@ import PaymentModel from "../models/payment.model";
 import { notifyAdminsNewEntityPending, sendDelivererAccountCreatedNotification, sendDelivererBlockStatusNotification, sendDeliveryFailedNotification, sendFreelancerAccountCreatedNotification, sendFreelancerBlockStatusNotification, sendPackageCancelledNotification, sendPackageCreatedNotification, sendPackageIssueReportedNotification, sendPackageIssueResolvedNotification, sendPackageReturnedToBranchNotification, sendPackageStatusUpdatedNotification, sendTransporterAccountCreatedNotification, sendTransporterBlockStatusNotification } from "../services/notification.service";
 import ManifestModel, { ManifestPriority, ManifestStatus } from "../models/manifest.model";
 import crypto from "crypto";
+import QRCode from "qrcode";
 import { generateCashReturnQr, getCashReturnInfo, verifyAndProcessCashReturn } from "../services/cashReturn.service";
 import StopQrSessionModel from "../models/stopQrSession.model";
 import CashierModel, { ICashier } from "../models/cashier.model";
@@ -15368,7 +15369,7 @@ export const deleteLoader = catchAsyncError(
 
 
 
-
+//get the only route not completed or cancelled , fi had l7ala lekhra rje3 array fargha
 export const getPackagesPaginatedFromRoute = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -17188,7 +17189,7 @@ export const getOrCreateTodayTransportation = catchAsyncError(
 
 
 
-
+//get only status arrived and cancelled 
 export const getTransportationsHistory = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
 
@@ -17971,3 +17972,199 @@ export const getManifestsHistory = catchAsyncError(
 
 
 
+
+
+export const generateStopVerificationQR = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const {
+        routeId,
+        stopIndex=0,
+        branchId,
+        routeNumber = 1,
+        routeType = 'hub_to_hub',
+        manifestCount = 3,
+        packageCount = 5,
+        isLastStop = false,
+      } = req.body;
+
+      // Validate required fields
+      // if (!routeId || !mongoose.Types.ObjectId.isValid(routeId)) {
+      //   return next(new ErrorHandler('Valid routeId is required', 400));
+      // }
+
+      // if (stopIndex === undefined || stopIndex < 0) {
+      //   return next(new ErrorHandler('Valid stopIndex is required', 400));
+      // }
+
+      if (!branchId || !mongoose.Types.ObjectId.isValid(branchId)) {
+        return next(new ErrorHandler('Valid branchId is required', 400));
+      }
+
+      // Get socket service
+      const socketService = (global as any).socketService as SocketService | undefined;
+      if (!socketService) {
+        return next(new ErrorHandler('Socket service not available', 500));
+      }
+
+      // Generate QR data
+      const qrCode = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+      const sessionId = new mongoose.Types.ObjectId();
+      const dummyTransporterId = new mongoose.Types.ObjectId();
+      const dummyStopId = new mongoose.Types.ObjectId();
+
+      const qrPayload = {
+        sessionId: sessionId.toString(),
+        code: qrCode,
+        routeId,
+        stopIndex,
+        type: 'stop_verification',
+        timestamp: Date.now(),
+      };
+
+      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrPayload));
+
+      // Emit to branch room - this triggers the supervisor:show_stop_qr event
+      socketService.emitToBranch(branchId, 'supervisor:show_stop_qr', {
+        sessionId: sessionId,
+        qrCode: qrCode,
+        qrImage: qrDataUrl,
+        payload: qrPayload,
+        routeId,
+        routeNumber: routeNumber || `RT-${Date.now().toString().slice(-6)}`,
+        routeType,
+        stopIndex,
+        stopId: dummyStopId,
+        branchId,
+        transporterId: dummyTransporterId,
+        manifestCount,
+        packageCount,
+        isLastStop,
+        expiresAt,
+        message: isLastStop
+          ? 'Transporter has arrived with the final delivery. Please scan to confirm receipt.'
+          : `Transporter has arrived at stop ${stopIndex + 1}. Please scan to confirm receipt.`,
+        timestamp: new Date(),
+        // Dummy flag for testing
+        _dummy: true,
+        _note: 'This is a dummy QR for testing. No verification will occur.'
+      });
+
+      console.log(`[DUMMY] Stop QR emitted to branch ${branchId} for route ${routeId}, stop ${stopIndex}`);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Stop verification QR sent to supervisor successfully',
+        data: {
+          sessionId: sessionId,
+          qrCode: qrCode,
+          qrImage: qrDataUrl,
+          routeId,
+          stopIndex,
+          branchId,
+          expiresAt,
+          _dummy: true
+        }
+      });
+
+    } catch (error: any) {
+      console.error('[DUMMY] generateStopVerificationQR error:', error);
+      return next(new ErrorHandler(error.message || 'Failed to generate QR', 500));
+    }
+  }
+);
+
+/**
+ * DUMMY: Generate and send start route QR to supervisor
+ * Emits 'supervisor:show_start_route_qr' event to the branch room
+ */
+export const generateStartRouteQR = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const {
+        routeId,
+        originBranchId,
+        routeNumber,
+        routeType = 'hub_to_hub',
+        totalStops = 5,
+        manifestCount = 10,
+        packageCount = 15,
+      } = req.body;
+
+      // Validate required fields
+      if (!routeId || !mongoose.Types.ObjectId.isValid(routeId)) {
+        return next(new ErrorHandler('Valid routeId is required', 400));
+      }
+
+      if (!originBranchId || !mongoose.Types.ObjectId.isValid(originBranchId)) {
+        return next(new ErrorHandler('Valid originBranchId is required', 400));
+      }
+
+      // Get socket service
+      const socketService = (global as any).socketService as SocketService | undefined;
+      if (!socketService) {
+        return next(new ErrorHandler('Socket service not available', 500));
+      }
+
+      // Generate QR data
+      const qrCode = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+      const sessionId = new mongoose.Types.ObjectId();
+      const dummyTransporterId = new mongoose.Types.ObjectId();
+
+      const qrPayload = {
+        sessionId: sessionId.toString(),
+        code: qrCode,
+        routeId,
+        stopIndex: -1, // -1 indicates start route
+        type: 'start_route',
+        timestamp: Date.now(),
+      };
+
+      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrPayload));
+
+      // Emit to branch room - this triggers the supervisor:show_start_route_qr event
+      socketService.emitToBranch(originBranchId, 'supervisor:show_start_route_qr', {
+        sessionId: sessionId,
+        qrCode: qrCode,
+        qrImage: qrDataUrl,
+        payload: qrPayload,
+        routeId,
+        routeNumber: routeNumber || `RT-${Date.now().toString().slice(-6)}`,
+        routeType,
+        transporterId: dummyTransporterId,
+        originBranchId,
+        totalStops,
+        manifestCount,
+        packageCount,
+        expiresAt,
+        message: `Transporter is departing on route ${routeNumber || 'RT-' + Date.now().toString().slice(-6)}. Please scan to confirm departure.`,
+        timestamp: new Date(),
+        // Dummy flag for testing
+        _dummy: true,
+        _note: 'This is a dummy QR for testing. No verification will occur.'
+      });
+
+      console.log(`[DUMMY] Start route QR emitted to branch ${originBranchId} for route ${routeId}`);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Start route QR sent to supervisor successfully',
+        data: {
+          sessionId: sessionId,
+          qrCode: qrCode,
+          qrImage: qrDataUrl,
+          routeId,
+          originBranchId,
+          expiresAt,
+          _dummy: true
+        }
+      });
+
+    } catch (error: any) {
+      console.error('[DUMMY] generateStartRouteQR error:', error);
+      return next(new ErrorHandler(error.message || 'Failed to generate QR', 500));
+    }
+  }
+);

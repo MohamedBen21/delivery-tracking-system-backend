@@ -51,10 +51,6 @@ delivererRouter.get(
   getDeliveryHistory,
 );
 
-delivererRouter.get(
-  "/manifests",
-  ...chain,
-  getManifestsPaginated,
-);
+
 
 export default delivererRouter;
