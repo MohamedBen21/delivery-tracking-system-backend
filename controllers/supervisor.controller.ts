@@ -16308,6 +16308,241 @@ export const completeDeliveryByQrCode = catchAsyncError(
 
 
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  START ROUTE BY QR CODE (Transporter scans QR shown by Loader)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const startRouteByQrCode = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const transporterUserId = req.user?._id;
+
+      if (!transporterUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (req.user?.role !== "transporter") {
+        return next(new ErrorHandler("Only transporters can start routes via QR.", 403));
+      }
+
+      const { payload, coordinates } = req.body;
+
+      if (!payload || typeof payload !== "string") {
+        return next(new ErrorHandler("Valid payload is required.", 400));
+      }
+
+      if (!coordinates || coordinates.length !== 2) {
+        return next(new ErrorHandler("Valid coordinates [lng, lat] are required.", 400));
+      }
+
+      let qrPayload;
+      try {
+        const decodedString = Buffer.from(payload, 'base64').toString();
+        qrPayload = JSON.parse(decodedString);
+      } catch (error) {
+        return next(new ErrorHandler("Invalid payload format. Unable to decode QR data.", 400));
+      }
+
+      const { sessionId, code, routeId, stopIndex, type } = qrPayload;
+
+      if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
+        return next(new ErrorHandler("Valid sessionId is required in payload.", 400));
+      }
+
+      if (!code || typeof code !== "string") {
+        return next(new ErrorHandler("QR code is required in payload.", 400));
+      }
+
+      if (!routeId || !mongoose.Types.ObjectId.isValid(routeId)) {
+        return next(new ErrorHandler("Valid routeId is required in payload.", 400));
+      }
+
+      if (type !== "start_route") {
+        return next(new ErrorHandler("This QR is not a start route QR.", 400));
+      }
+
+      if (stopIndex !== -1) {
+        return next(new ErrorHandler("Invalid QR type. Expected start route QR.", 400));
+      }
+
+      const transporter = await TransporterModel.findOne({ userId: transporterUserId }).lean();
+      if (!transporter) {
+        return next(new ErrorHandler("Transporter profile not found.", 404));
+      }
+
+      const qrSession = await StopQrSessionModel.findById(sessionId);
+      if (!qrSession) {
+        return next(new ErrorHandler("QR session not found.", 404));
+      }
+
+      if (qrSession.routeId.toString() !== routeId) {
+        return next(new ErrorHandler("QR session does not match the route.", 400));
+      }
+
+      if (qrSession.stopIndex !== -1) {
+        return next(new ErrorHandler("This QR is not a start route QR.", 400));
+      }
+
+      const socketService = (global as any).socketService as SocketService | undefined;
+      if (!socketService) {
+        return next(new ErrorHandler("Socket service not available. Please try again later.", 500));
+      }
+
+      const transporterSocketId = socketService.getSocketId(transporterUserId.toString(), "transporter");
+      
+      if (!transporterSocketId) {
+        return next(new ErrorHandler("Transporter is not connected to socket. Please check your connection.", 400));
+      }
+
+      const io = (socketService as any).io;
+      if (!io) {
+        return next(new ErrorHandler("Socket IO not available.", 500));
+      }
+
+      io.to(transporterSocketId).emit("start_route", {
+        routeId,
+        sessionId,
+        qrCode: code,
+        coordinates,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "QR scan submitted. Route will start shortly.",
+        data: {
+          sessionId,
+          routeId,
+          status: "processing",
+        },
+      });
+    } catch (error: any) {
+      console.error("[HTTP Bridge] Error in startRouteByQrCode:", error);
+      return next(new ErrorHandler(error.message || "Failed to process QR scan.", 500));
+    }
+  }
+);
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ARRIVE AT STOP BY QR CODE (Transporter scans QR shown by Loader)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const arriveAtStopByQrCode = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const transporterUserId = req.user?._id;
+
+      if (!transporterUserId) {
+        return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+      }
+
+      if (req.user?.role !== "transporter") {
+        return next(new ErrorHandler("Only transporters can arrive at stops via QR.", 403));
+      }
+
+      const { payload, coordinates, completedManifestIds, discrepancyManifestIds, notes } = req.body;
+
+      if (!payload || typeof payload !== "string") {
+        return next(new ErrorHandler("Valid payload is required.", 400));
+      }
+
+      if (!coordinates || coordinates.length !== 2) {
+        return next(new ErrorHandler("Valid coordinates [lng, lat] are required.", 400));
+      }
+
+      let qrPayload;
+      try {
+        const decodedString = Buffer.from(payload, 'base64').toString();
+        qrPayload = JSON.parse(decodedString);
+      } catch (error) {
+        return next(new ErrorHandler("Invalid payload format. Unable to decode QR data.", 400));
+      }
+
+      const { sessionId, code, routeId, stopIndex, type } = qrPayload;
+
+      if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
+        return next(new ErrorHandler("Valid sessionId is required in payload.", 400));
+      }
+
+      if (!code || typeof code !== "string") {
+        return next(new ErrorHandler("QR code is required in payload.", 400));
+      }
+
+      if (!routeId || !mongoose.Types.ObjectId.isValid(routeId)) {
+        return next(new ErrorHandler("Valid routeId is required in payload.", 400));
+      }
+
+      if (stopIndex === undefined || stopIndex < 0) {
+        return next(new ErrorHandler("Valid stopIndex is required in payload.", 400));
+      }
+
+      if (type !== "stop_verification") {
+        return next(new ErrorHandler("This QR is not a stop verification QR.", 400));
+      }
+
+      const transporter = await TransporterModel.findOne({ userId: transporterUserId }).lean();
+      if (!transporter) {
+        return next(new ErrorHandler("Transporter profile not found.", 404));
+      }
+
+      const qrSession = await StopQrSessionModel.findById(sessionId);
+      if (!qrSession) {
+        return next(new ErrorHandler("QR session not found.", 404));
+      }
+
+      if (qrSession.routeId.toString() !== routeId) {
+        return next(new ErrorHandler("QR session does not match the route.", 400));
+      }
+
+      if (qrSession.stopIndex !== stopIndex) {
+        return next(new ErrorHandler("QR session stopIndex mismatch.", 400));
+      }
+
+      const socketService = (global as any).socketService as SocketService | undefined;
+      if (!socketService) {
+        return next(new ErrorHandler("Socket service not available. Please try again later.", 500));
+      }
+
+      const transporterSocketId = socketService.getSocketId(transporterUserId.toString(), "transporter");
+      
+      if (!transporterSocketId) {
+        return next(new ErrorHandler("Transporter is not connected to socket. Please check your connection.", 400));
+      }
+
+      const io = (socketService as any).io;
+      if (!io) {
+        return next(new ErrorHandler("Socket IO not available.", 500));
+      }
+
+      io.to(transporterSocketId).emit("scan_stop_qr", {
+        sessionId,
+        qrCode: code,
+        routeId,
+        stopIndex,
+        coordinates,
+        completedManifestIds,
+        discrepancyManifestIds,
+        notes,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "QR scan submitted. Stop verification processing.",
+        data: {
+          sessionId,
+          routeId,
+          stopIndex,
+          status: "processing",
+        },
+      });
+    } catch (error: any) {
+      console.error("[HTTP Bridge] Error in arriveAtStopByQrCode:", error);
+      return next(new ErrorHandler(error.message || "Failed to process QR scan.", 500));
+    }
+  }
+);
+
 
 export const searchDeliveries = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -17187,7 +17422,6 @@ export const getOrCreateTodayTransportation = catchAsyncError(
 
 
 
-//search manifest 
 
 /**
  * GET /transportation/history
@@ -17217,44 +17451,27 @@ export const getOrCreateTodayTransportation = catchAsyncError(
  *   - maxManifestCount (optional) - Maximum manifest count
  *   - sourceBranchId   (optional) - Filter by source branch
  *   - destinationBranchId (optional) - Filter by destination branch
- *
- * Response shape:
- *   {
- *     success: true,
- *     data: {
- *       transportations: ITransportation[],
- *       pagination: {
- *         page: number,
- *         limit: number,
- *         total: number,
- *         pages: number,
- *         hasNext: boolean,
- *         hasPrev: boolean
- *       },
- *       summary: {
- *         totalTransportations: number,
- *         completedCount: number,
- *         cancelledCount: number,
- *         totalWeightTransported: number,
- *         totalManifestsTransported: number,
- *         totalPackagesTransported: number,
- *         averageDeliveryTimeMinutes: number | null,
- *         totalDistance: number
- *       }
- *     }
- *   }
  */
-
 export const getTransportationsHistory = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     // ── Validation ────────────────────────────────────────────────────────────
     const isValidId = (val: string) => mongoose.Types.ObjectId.isValid(val);
     const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
 
-    if (!req.query.transporterId || !isValidId(req.query.transporterId as string)) {
+    let transporterId: mongoose.Types.ObjectId;
+
+    // Check if transporter is authenticated or provided in query
+    if (req.user?.role === 'transporter') {
+      const transporter = await TransporterModel.findOne({ userId: req.user._id });
+      if (!transporter) {
+        return next(new ErrorHandler("Transporter not found for this user.", 404));
+      }
+      transporterId = transporter._id;
+    } else if (req.query.transporterId && isValidId(req.query.transporterId as string)) {
+      transporterId = toObjectId(req.query.transporterId as string);
+    } else {
       return next(new ErrorHandler("Valid transporterId is required.", 400));
     }
-    const transporterId = toObjectId(req.query.transporterId as string);
 
     // Validate transporter exists
     const transporter = await TransporterModel.findById(transporterId).lean();
@@ -17350,7 +17567,7 @@ export const getTransportationsHistory = catchAsyncError(
       query.status = status;
     }
 
-    // Date range filter (using createdAt, but also consider actualDeliveryTime for completed trips)
+    // Date range filter
     if (dateFrom || dateTo) {
       query.$or = [
         { createdAt: {} as any },
@@ -17384,7 +17601,7 @@ export const getTransportationsHistory = catchAsyncError(
       query.manifestCount = { ...(query.manifestCount || {}), $lte: maxManifestCount };
     }
 
-    // Branch filters (need to populate sourceRouteId to filter)
+    // Branch filters
     let routeStatusFilter: string | null = null;
     if (req.query.routeStatus) {
       const rs = req.query.routeStatus as string;
@@ -17395,32 +17612,18 @@ export const getTransportationsHistory = catchAsyncError(
     }
 
     // ── Execute Queries ───────────────────────────────────────────────────────
-    
-    // First, get transportations with basic filters
-    let transportationsQuery = TransportationModel.find(query)
-      .sort(sort)
-      .skip(skip)
-      .limit(limit)
-      .lean();
-
-    // If we need to filter by route status, source branch, or destination branch,
-    // we need to populate and filter after (or use aggregation)
     const needsAdvancedFiltering = routeStatusFilter || sourceBranchId || destinationBranchId;
 
     let transportations: any[] = [];
     let total = 0;
 
     if (needsAdvancedFiltering) {
-      // Get all matching transportations first (without pagination) to filter by route data
       const allTransportations = await TransportationModel.find(query).lean();
-      
-      // Get all route IDs
       const routeIds = allTransportations.map(t => t.sourceRouteId).filter(id => id);
       
-      // Fetch routes with their stops data
       const routes = await RouteModel.find(
         { _id: { $in: routeIds } },
-        { status: 1, originBranchId: 1, destinationBranchId: 1, stops: 1 }
+        { status: 1, originBranchId: 1, destinationBranchId: 1, stops: 1, name: 1, code: 1 }
       ).lean();
       
       const routeMap = new Map();
@@ -17428,55 +17631,49 @@ export const getTransportationsHistory = catchAsyncError(
         routeMap.set(route._id.toString(), route);
       });
       
-      // Filter transportations based on route data
       const filtered = allTransportations.filter(t => {
         const route = routeMap.get(t.sourceRouteId?.toString());
         if (!route) return false;
         
         if (routeStatusFilter && route.status !== routeStatusFilter) return false;
-        
         if (sourceBranchId && route.originBranchId?.toString() !== sourceBranchId) return false;
-        
         if (destinationBranchId) {
           const destId = route.destinationBranchId?.toString() || route.stops[route.stops.length - 1]?.branchId?.toString();
           if (destId !== destinationBranchId) return false;
         }
-        
         return true;
       });
       
       total = filtered.length;
-      
-      // Apply pagination to filtered results
       transportations = filtered.slice(skip, skip + limit);
-      
-      // Enhance with route data
       transportations = transportations.map(t => ({
         ...t,
         _route: routeMap.get(t.sourceRouteId?.toString()),
       }));
     } else {
-      // Simple query - count and get paginated results
       const [countResult, transportationsResult] = await Promise.all([
         TransportationModel.countDocuments(query),
-        transportationsQuery,
+        TransportationModel.find(query)
+          .sort(sort)
+          .skip(skip)
+          .limit(limit)
+          .lean(),
       ]);
-      
       total = countResult;
       transportations = transportationsResult;
     }
 
     // ── Calculate Summary Statistics ──────────────────────────────────────────
-    
-    // Get all transportations for this transporter (for summary)
     const allTransporterTransportations = await TransportationModel.find({
       assignedTransporterId: transporterId,
     }).lean();
     
     const completedTransportations = allTransporterTransportations.filter(t => t.status === 'completed');
     const cancelledTransportations = allTransporterTransportations.filter(t => t.status === 'cancelled');
+    const inTransitTransportations = allTransporterTransportations.filter(t => t.status === 'in_transit');
+    const arrivedTransportations = allTransporterTransportations.filter(t => t.status === 'arrived');
+    const pendingTransportations = allTransporterTransportations.filter(t => t.status === 'pending');
     
-    // Calculate average delivery time (only for completed trips with both departedAt and actualDeliveryTime)
     const completedWithTimes = completedTransportations.filter(t => t.departedAt && t.actualDeliveryTime);
     const totalDeliveryMinutes = completedWithTimes.reduce((sum, t) => {
       const minutes = Math.round((t.actualDeliveryTime!.getTime() - t.departedAt!.getTime()) / 60000);
@@ -17486,29 +17683,71 @@ export const getTransportationsHistory = catchAsyncError(
       ? Math.round(totalDeliveryMinutes / completedWithTimes.length)
       : null;
     
-    const summary = {
-      totalTransportations: allTransporterTransportations.length,
-      completedCount: completedTransportations.length,
-      cancelledCount: cancelledTransportations.length,
-      totalWeightTransported: completedTransportations.reduce((sum, t) => sum + (t.totalWeight || 0), 0),
-      totalManifestsTransported: completedTransportations.reduce((sum, t) => sum + (t.manifestCount || 0), 0),
-      totalPackagesTransported: completedTransportations.reduce((sum, t) => sum + (t.packageCount || 0), 0),
-      averageDeliveryTimeMinutes,
-      totalDistance: allTransporterTransportations.reduce((sum, t) => sum + ((t as any).totalDistance || 0), 0),
+    const totalWeightTransported = completedTransportations.reduce((sum, t) => sum + (t.totalWeight || 0), 0);
+    const totalManifestsTransported = completedTransportations.reduce((sum, t) => sum + (t.manifestCount || 0), 0);
+    const totalPackagesTransported = completedTransportations.reduce((sum, t) => sum + (t.packageCount || 0), 0);
+    
+
+    const statusBreakdown: Record<TransportationStatus, number> = {
+      pending: pendingTransportations.length,
+      in_transit: inTransitTransportations.length,
+      arrived: arrivedTransportations.length,
+      completed: completedTransportations.length,
+      cancelled: cancelledTransportations.length,
     };
-    
-    // ── Response ──────────────────────────────────────────────────────────────
-    
+
+
+    const formattedTransportations = transportations.map((t: any) => ({
+      id: t._id,
+      transportationCode: t.transportationCode,
+      companyId: t.companyId,
+      sourceRouteId: t.sourceRouteId,
+      source: t.source ? {
+        branchId: t.source.branchId,
+        name: t.source.name,
+        location: t.source.location,
+      } : null,
+      destination: t.destination ? {
+        branchId: t.destination.branchId,
+        name: t.destination.name,
+        location: t.destination.location,
+      } : null,
+      manifestIds: t.manifestIds,
+      manifestCount: t.manifestCount,
+      packageCount: t.packageCount,
+      totalWeight: t.totalWeight,
+      totalVolume: t.totalVolume,
+      assignedTransporterId: t.assignedTransporterId,
+      assignedVehicleId: t.assignedVehicleId,
+      status: t.status,
+      estimatedDeliveryTime: t.estimatedDeliveryTime ?? null,
+      actualDeliveryTime: t.actualDeliveryTime ?? null,
+      departedAt: t.departedAt ?? null,
+      notes: t.notes ?? null,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+      // Virtuals
+      isInTransit: t.isInTransit,
+      isCompleted: t.isCompleted,
+      isOverdue: t.isOverdue,
+      durationMinutes: t.durationMinutes ?? null,
+      // Route info if available (from advanced filtering)
+      route: t._route ? {
+        id: t._route._id,
+        name: t._route.name,
+        code: t._route.code,
+        status: t._route.status,
+        originBranchId: t._route.originBranchId,
+        destinationBranchId: t._route.destinationBranchId,
+      } : null,
+    }));
+
     const totalPages = Math.ceil(total / limit);
-    
+
     res.status(200).json({
       success: true,
       data: {
-        transportations: transportations.map(t => {
-          const obj = { ...t };
-          delete obj._route;
-          return obj;
-        }),
+        transportations: formattedTransportations,
         pagination: {
           page,
           limit,
@@ -17517,7 +17756,39 @@ export const getTransportationsHistory = catchAsyncError(
           hasNext: page < totalPages,
           hasPrev: page > 1,
         },
-        summary,
+        summary: {
+          totalTransportations: allTransporterTransportations.length,
+          pendingCount: pendingTransportations.length,
+          inTransitCount: inTransitTransportations.length,
+          arrivedCount: arrivedTransportations.length,
+          completedCount: completedTransportations.length,
+          cancelledCount: cancelledTransportations.length,
+          totalWeightTransported,
+          totalManifestsTransported,
+          totalPackagesTransported,
+          averageDeliveryTimeMinutes,
+          totalDistance: allTransporterTransportations.reduce((sum, t) => sum + ((t as any).totalDistance || 0), 0),
+          statusBreakdown,
+        },
+        filters: {
+          transporterId,
+          status: req.query.status ?? null,
+          routeStatus: req.query.routeStatus ?? null,
+          dateFrom: dateFrom ?? null,
+          dateTo: dateTo ?? null,
+          minWeight: minWeight ?? null,
+          maxWeight: maxWeight ?? null,
+          minVolume: minVolume ?? null,
+          maxVolume: maxVolume ?? null,
+          minPackageCount: minPackageCount ?? null,
+          maxPackageCount: maxPackageCount ?? null,
+          minManifestCount: minManifestCount ?? null,
+          maxManifestCount: maxManifestCount ?? null,
+          sourceBranchId: sourceBranchId ?? null,
+          destinationBranchId: destinationBranchId ?? null,
+          sortBy,
+          sortOrder: req.query.sortOrder ?? "desc",
+        },
       },
     });
   },
