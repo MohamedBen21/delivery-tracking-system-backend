@@ -24,6 +24,7 @@ import { PresenceService } from "./presence.service";
 // You'll need to install: npm install qrcode
 // and: npm install --save-dev @types/qrcode
 import QRCode from "qrcode";
+import TransportationModel from "../models/transportation.model";
 
 export type DeliveryUserRole =
   | "deliverer"
@@ -5022,10 +5023,122 @@ export class SocketService {
     }).lean();
     if (!route) return;
 
+    // ── Find or create transportation for this route ──────────────────────────
+    let transportation: any = await TransportationModel.findOne({
+      sourceRouteId: route._id,
+    }).lean();
+
+    // If no transportation exists, create one (shouldn't happen if route is active)
+    if (!transportation) {
+      // Flatten manifestIds across all stops
+      const manifestIds = route.stops.reduce<mongoose.Types.ObjectId[]>(
+        (acc, stop) => acc.concat(stop.manifestIds || []),
+        [],
+      );
+
+      let totalWeight = 0;
+      let totalPackages = 0;
+      if (manifestIds.length > 0) {
+        const manifests = await ManifestModel.find({ _id: { $in: manifestIds } })
+          .select("totalDeclaredWeight packageCount")
+          .lean();
+        for (const m of manifests) {
+          totalWeight += m.totalDeclaredWeight || 0;
+          totalPackages += m.packageCount || 0;
+        }
+      }
+
+      const firstStop = route.stops[0];
+      const lastStop = route.stops[route.stops.length - 1];
+
+      const sourcePoint = {
+        branchId: route.originBranchId,
+        location: firstStop?.location,
+      };
+      const destinationPoint = {
+        branchId: route.destinationBranchId ?? lastStop?.branchId,
+        location: lastStop?.location,
+      };
+
+      const created = await TransportationModel.create({
+        companyId: route.companyId,
+        sourceRouteId: route._id,
+        source: sourcePoint,
+        destination: destinationPoint,
+        manifestIds,
+        manifestCount: manifestIds.length,
+        packageCount: totalPackages,
+        totalWeight,
+        totalVolume: 0,
+        assignedTransporterId: route.assignedTransporterId,
+        assignedVehicleId: route.assignedVehicleId,
+        status: route.status === 'active' ? 'in_transit' : 'pending',
+        estimatedDeliveryTime: route.scheduledEnd,
+        actualDeliveryTime: route.actualEnd,
+        departedAt: route.actualStart,
+      });
+      transportation = created.toObject();
+    } else {
+      // ── Sync transportation status with route status ────────────────────────
+      let shouldUpdate = false;
+      let newStatus = transportation.status;
+
+      // Map route status to transportation status
+      if (route.status === 'completed' && transportation.status !== 'completed') {
+        newStatus = 'completed';
+        shouldUpdate = true;
+      } else if (route.status === 'cancelled' && transportation.status !== 'cancelled') {
+        newStatus = 'cancelled';
+        shouldUpdate = true;
+      } else if (route.status === 'active' && transportation.status === 'pending') {
+        newStatus = 'in_transit';
+        shouldUpdate = true;
+      } else if (route.status === 'active' && transportation.status === 'in_transit') {
+        // Check if arrived at destination
+        const lastStop = route.stops[route.stops.length - 1];
+        if (lastStop?.status === 'arrived' || lastStop?.status === 'in_progress') {
+          newStatus = 'arrived';
+          shouldUpdate = true;
+        }
+      }
+
+      if (shouldUpdate) {
+        const updated = await TransportationModel.findByIdAndUpdate(
+          transportation._id,
+          {
+            $set: {
+              status: newStatus,
+              ...(newStatus === 'completed' && { actualDeliveryTime: new Date() }),
+            },
+          },
+          { new: true, lean: true }
+        );
+        if (updated) {
+          transportation = updated;
+        }
+      }
+    }
+
+    // ── Ensure transportation exists and is a plain object ────────────────────
+    const transportationData = transportation 
+      ? (typeof transportation.toObject === 'function' 
+          ? transportation.toObject() 
+          : transportation)
+      : null;
+
+    if (!transportationData) {
+      socket.emit("route_error", {
+        code: "TRANSPORTATION_NOT_FOUND",
+        message: "Could not find or create transportation for this route.",
+      });
+      return;
+    }
+
     const hubRoute = isHubRoute(route.type);
     const stop = route.stops[route.currentStopIndex];
     if (!stop) return;
 
+    // ── Build pending manifests/packages for current stop ──────────────────────
     let pendingManifests: any[] = [];
     if (hubRoute && (stop.manifestIds ?? []).length > 0) {
       pendingManifests = await ManifestModel.find({
@@ -5046,6 +5159,7 @@ export class SocketService {
         .lean();
     }
 
+    // ── Check for pending QR session ──────────────────────────────────────────
     let pendingQrSession: any = null;
     if (hubRoute) {
       const qr = await StopQrSessionModel.findOne({
@@ -5071,23 +5185,89 @@ export class SocketService {
     socket.join(this.getRouteRoom(route._id.toString()));
 
     const nextStop = route.stops[route.currentStopIndex + 1] ?? null;
+    const isLastStop = route.currentStopIndex === route.stops.length - 1;
 
+    // ── Build Transportation Summary Response ──────────────────────────────────
+    const transportationResponse = {
+      id: transportationData._id,
+      transportationCode: transportationData.transportationCode,
+      companyId: transportationData.companyId,
+      sourceRouteId: transportationData.sourceRouteId,
+      // stopIndex: route.currentStopIndex,
+      status: transportationData.status,
+      manifestCount: transportationData.manifestCount,
+      packageCount: transportationData.packageCount,
+      totalWeight: transportationData.totalWeight,
+      totalVolume: transportationData.totalVolume,
+      estimatedDeliveryTime: transportationData.estimatedDeliveryTime ?? null,
+      actualDeliveryTime: transportationData.actualDeliveryTime ?? null,
+      departedAt: transportationData.departedAt ?? null,
+      notes: transportationData.notes ?? null,
+      createdAt: transportationData.createdAt,
+      updatedAt: transportationData.updatedAt,
+      // Virtuals
+      isInTransit: transportationData.status === 'in_transit',
+      isCompleted: transportationData.status === 'completed',
+      isOverdue: transportationData.estimatedDeliveryTime 
+        ? new Date() > new Date(transportationData.estimatedDeliveryTime) 
+        : false,
+      durationMinutes: transportationData.departedAt && transportationData.actualDeliveryTime
+        ? Math.round(
+            (new Date(transportationData.actualDeliveryTime).getTime() - 
+            new Date(transportationData.departedAt).getTime()) / 60000
+          )
+        : null,
+      // Source
+      source: transportationData.source ? {
+        branchId: transportationData.source.branchId,
+        name: transportationData.source.name,
+        location: transportationData.source.location,
+      } : null,
+      // Destination
+      destination: transportationData.destination ? {
+        branchId: transportationData.destination.branchId,
+        name: transportationData.destination.name,
+        location: transportationData.destination.location,
+      } : null,
+      // Assigned
+      assignedTransporterId: transportationData.assignedTransporterId,
+      assignedVehicleId: transportationData.assignedVehicleId,
+    };
+
+    // ── Emit the full session resume with transportation summary ──────────────
     socket.emit("session_resumed", {
       role: "transporter",
+      
+      // ── Transportation Summary ──────────────────────────────────────────────
+      transportation: transportationResponse,
+
+      // ── Route Info ───────────────────────────────────────────────────────────
       routeId: route._id,
       routeNumber: route.routeNumber,
       routeType: route.type,
       routeStatus: route.status,
       isHubRoute: hubRoute,
+      
+      // ── Progress ─────────────────────────────────────────────────────────────
       currentStopIndex: route.currentStopIndex,
       totalStops: route.stops.length,
       completedStops: route.completedStops,
       remainingStops: route.stops.length - route.currentStopIndex,
-      scheduledEnd: route.scheduledEnd,
+      progressPercentage: route.stops.length > 0 
+        ? Math.round((route.currentStopIndex / route.stops.length) * 100) 
+        : 0,
+      
+      // ── Timing ──────────────────────────────────────────────────────────────
+      scheduledStart: route.scheduledStart,
       actualStart: route.actualStart,
+      scheduledEnd: route.scheduledEnd,
       isDelayed: route.scheduledEnd ? new Date() > route.scheduledEnd : false,
+      estimatedTimeRemaining: route.estimatedTime && route.actualStart
+        ? Math.max(0, route.estimatedTime - ((Date.now() - new Date(route.actualStart).getTime()) / 60000))
+        : null,
 
-      currentStop: {
+      // ── Current Stop ────────────────────────────────────────────────────────
+      currentStop: stop ? {
         stopId: stop._id,
         stopIndex: route.currentStopIndex,
         status: stop.status,
@@ -5095,11 +5275,13 @@ export class SocketService {
         location: stop.location.coordinates,
         branchId: stop.branchId,
         action: stop.action,
-        isLastStop: route.currentStopIndex === route.stops.length - 1,
-
+        isLastStop,
+        // Load info
+        loadCount: stopLoadCount(stop, route.type),
+        loadUnit: hubRoute ? "manifests" : "packages",
         pendingManifestCount: pendingManifests.length,
         totalManifestCount: stop.manifestIds?.length ?? 0,
-        pendingManifests: pendingManifests.map((m) => ({
+        pendingManifests: pendingManifests.map((m: any) => ({
           manifestId: m._id,
           manifestCode: m.manifestCode,
           status: m.status,
@@ -5108,10 +5290,9 @@ export class SocketService {
           originBranchId: m.originBranchId,
           destinationBranchId: m.destinationBranchId,
         })),
-
         pendingPackageCount: pendingPackages.length,
         totalPackageCount: stop.packageIds.length,
-        pendingPackages: pendingPackages.map((p) => ({
+        pendingPackages: pendingPackages.map((p: any) => ({
           packageId: p._id,
           trackingNumber: p.trackingNumber,
           status: p.status,
@@ -5119,36 +5300,43 @@ export class SocketService {
           city: p.destination?.city,
           currentBranchId: p.currentBranchId,
         })),
-      },
+      } : null,
 
+      // ── Pending QR Session ──────────────────────────────────────────────────
       pendingQrSession,
 
-      nextStop: nextStop
-        ? {
-            stopIndex: route.currentStopIndex + 1,
-            stopId: nextStop._id,
-            branchId: nextStop.branchId,
-            address: nextStop.address,
-            location: nextStop.location.coordinates,
-            loadCount: stopLoadCount(nextStop, route.type),
-            loadUnit: hubRoute ? "manifests" : "packages",
-          }
-        : null,
+      // ── Next Stop ───────────────────────────────────────────────────────────
+      nextStop: nextStop ? {
+        stopIndex: route.currentStopIndex + 1,
+        stopId: nextStop._id,
+        branchId: nextStop.branchId,
+        address: nextStop.address,
+        location: nextStop.location.coordinates,
+        loadCount: stopLoadCount(nextStop, route.type),
+        loadUnit: hubRoute ? "manifests" : "packages",
+      } : null,
 
-      message:
-        route.status === "paused"
-          ? "Your route was paused. Tap Resume to continue."
-          : pendingQrSession
-            ? "QR scan pending. Please scan the code at the branch to complete this stop."
-            : "You have an active route. Pick up where you left off.",
+      // ── Manifest IDs (for quick reference) ─────────────────────────────────
+      manifestIds: hubRoute ? stop?.manifestIds ?? [] : [],
+
+      // ── Status Message ──────────────────────────────────────────────────────
+      message: route.status === "paused"
+        ? "Your route was paused. Tap Resume to continue."
+        : pendingQrSession
+          ? "QR scan pending. Please scan the code at the branch to complete this stop."
+          : transportationData.status === "arrived"
+            ? "You have arrived at the destination. Please complete the unloading process."
+            : transportationData.status === "in_transit"
+              ? "You are currently in transit. Proceed to the next stop."
+              : "You have an active route. Pick up where you left off.",
+      
       timestamp: new Date(),
     });
 
     console.log(
       `[Socket] Transporter ${userId} resumed — route ${route.routeNumber} ` +
         `(${route.type}) stop ${route.currentStopIndex}/${route.stops.length - 1} ` +
-        `pending=${hubRoute ? pendingManifests.length + " manifests" : pendingPackages.length + " packages"} ` +
-        `pendingQr=${!!pendingQrSession}`,
+        `transportation ${transportationData.transportationCode} status=${transportationData.status}`,
     );
   }
 

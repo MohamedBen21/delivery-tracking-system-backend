@@ -50,10 +50,7 @@ return cashier;
 }
 
 
-//     GET /cashier/freelancer-lookup?q=<businessName|email|phone>
-//     The cashier types the merchant's business name, email, or phone in the
-//     search box. This returns their profile and pending packages so the cashier
-//     can choose which ones the merchant is handing over today.
+
 
 
 export const lookupFreelancer = catchAsyncError(
@@ -82,11 +79,9 @@ if (!q || q.trim().length < 2) {
         search = '+213' + search.substring(1);
     }
 
-// Search against the User collection (email, phone) and Freelancer (businessName)
-// We join them via a pipeline for a single atomic query.
+
 
 const results = await FreelancerModel.aggregate([
-    // Match freelancer by businessName (case-insensitive)
     {
     $match: {
         status: "active",
@@ -157,14 +152,14 @@ if (!results.length) {
     });
 }
 
-// For each result, attach their pending packages (status = 'pending')
+
 const enriched = await Promise.all(
     results.map(async (f: any) => {
     const pendingPackages = await PackageModel.find({
         senderId: f.userId,
         senderType: "freelancer",
         originBranchId: cashier.assignedBranchId,
-        status: "pending",            // only pre-registered, unclaimed packages
+        status: "pending",           
     })
         .select(
         "trackingNumber weight type isFragile totalPrice " +
@@ -197,16 +192,7 @@ return res.status(200).json({
 
 
 
-//     POST /cashier/claim-package
-//     The cashier scans the barcode on the bordereau. The system:
-//       a) Validates the package belongs to this branch and is still 'pending'
-//       b) Updates status → 'cashier_claimed'
-//       c) Stamps the package with claimedByCashierId + claimedAt
-//       d) Writes a PackageHistory record
-//       e) Logs the action on the cashier's shift stats
-//
-//     This is intentionally a single-package operation — each barcode scan
-//     is one atomic action.  The cashier scans all packages one by one.
+
 
 
 export const claimPackage = catchAsyncError(
@@ -246,7 +232,7 @@ try {
     );
     }
 
-    // ── Guard: must be at this cashier's branch
+
     if (
     packageDoc.originBranchId.toString() !==
     cashier.assignedBranchId.toString()
@@ -258,7 +244,7 @@ try {
     );
     }
 
-    // ── Guard: must be 'pending' (not already claimed or further)
+
     if (packageDoc.status !== "pending") {
 
     throw new ErrorHandler(
@@ -271,7 +257,7 @@ try {
     notes?.trim() ||
     `Package physically received at counter by cashier. Bordereau verified.`;
 
-    //  Update the package 
+
     await PackageModel.findByIdAndUpdate(
     packageDoc._id,
     {
@@ -293,7 +279,7 @@ try {
     { session },
     );
 
-    // PackageHistory record
+
     await PackageHistoryModel.create(
     [
         {
@@ -310,14 +296,14 @@ try {
     { session },
     );
 
-    // ── Increment branch currentLoad (package is now physically at branch) 
+
     await BranchModel.findByIdAndUpdate(
     cashier.assignedBranchId,
     { $inc: { currentLoad: 1 } },
     { session },
     );
 
-    // ── Update cashier shift counters + recentScans 
+
     await CashierModel.findByIdAndUpdate(
     cashier._id,
     {
@@ -341,7 +327,7 @@ try {
                 success: true,
             },
             ],
-            $slice: -200,   // keep last 200 scans (most recent at the end)
+            $slice: -200,  
             $position: 0,
         },
         },
@@ -406,7 +392,7 @@ try {
     }
     return next(error);
 } finally {
-  if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+  if (!transactionCommitted && session.inTransaction()) { 
     await session.abortTransaction().catch(() => {});
   }
   await session.endSession();
@@ -416,13 +402,7 @@ try {
 
 
 
-//     POST /cashier/accept-package
-//     After claiming, the cashier does a final check (weight verified, label
-//     confirmed) and accepts the package into the branch stock.
-//     Status → 'at_origin_branch'
-//
-//     This two-step claim → accept gives the cashier a chance to weigh/inspect
-//     before committing. They can also reject here (see rejectPackage below).
+
 
 
 export const acceptPackage = catchAsyncError(
@@ -468,7 +448,7 @@ export const acceptPackage = catchAsyncError(
         );
       }
 
-      // ── Same-branch detection ──────────────────────────────────────────
+
       const isSameBranch =
         packageDoc.destinationBranchId &&
         packageDoc.originBranchId.toString() === packageDoc.destinationBranchId.toString();
@@ -479,7 +459,7 @@ export const acceptPackage = catchAsyncError(
           verifiedWeight ? ` Verified weight: ${verifiedWeight}kg.` : ""
         }`;
 
-      // Determine final status
+
       let finalStatus: PackageStatus;
       let trackingNote: string;
 
@@ -601,7 +581,7 @@ export const acceptPackage = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -610,11 +590,7 @@ export const acceptPackage = catchAsyncError(
 );
 
 
-//     POST /cashier/reject-package
-//
-//     Called when the package fails physical inspection after being claimed.
-//     Status → 'cancelled'. BranchModel currentLoad is decremented because
-//     the package never made it into stock.
+
 
 
 type RejectionReason =
@@ -813,7 +789,7 @@ try {
     }
     return next(error);
 } finally {
-    if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+    if (!transactionCommitted && session.inTransaction()) { 
       await session.abortTransaction().catch(() => {});
     }
     await session.endSession();
@@ -824,8 +800,7 @@ try {
 
 
 
-//     POST /cashier/check-in
-//     POST /cashier/check-out
+
 
 export const checkIn = catchAsyncError(
 async (req: Request, res: Response, next: NextFunction) => {
@@ -908,9 +883,7 @@ return res.status(200).json({
 );
 
 
-//     GET /cashier/my-shift
-//     Returns the cashier's current shift stats and the last 20 scan actions,
-//     so the mobile app can show a live counter view.
+
 
 
 export const getMyShift = catchAsyncError(
@@ -963,9 +936,7 @@ return res.status(200).json({
 );
 
 
-//     GET /cashier/pending-packages
-//     All 'pending' packages registered for this branch but not yet claimed.
-//     Useful for the cashier to see what's expected today before merchants arrive.
+
 
 
 export const getPendingPackages = catchAsyncError(
@@ -1026,42 +997,22 @@ return res.status(200).json({
 
 
 
-// ─── Shared helper: build a single bordereau page into a PDFDocument ─────────
-//
-//  Layout (A6 thermal-friendly, 105 × 148 mm):
-//
-//  ┌─────────────────────────────────────────┐
-//  │  COMPANY LOGO / NAME          [BARCODE] │
-//  │─────────────────────────────────────────│
-//  │  SENDER                                 │
-//  │  Business name · phone                  │
-//  │─────────────────────────────────────────│
-//  │  RECIPIENT                              │
-//  │  Name · phone · address                 │
-//  │─────────────────────────────────────────│
-//  │  PACKAGE DETAILS                        │
-//  │  Type · Weight · Priority · Fragile     │
-//  │─────────────────────────────────────────│
-//  │  ORIGIN BRANCH → DESTINATION BRANCH    │
-//  │─────────────────────────────────────────│
-//  │  PRICE  [amount]   METHOD  [method]     │
-//  │  DELIVERY TYPE  [home / branch_pickup]  │
-//  └─────────────────────────────────────────┘
+
 
 const COLORS = {
-  primary: "#1a1a1a",        // almost black
-  accent: "#d4a017",         // golden/yellow-orange
-  light: "#fff3e0",          // very light orange-yellow
-  separator: "#e0a800",      // yellow-orange
-  text: "#1a1a1a",          // black
-  muted: "#666666",          // dark gray
+  primary: "#1a1a1a",        
+  accent: "#d4a017",         
+  light: "#fff3e0",          
+  separator: "#e0a800",      
+  text: "#1a1a1a",          
+  muted: "#666666",          
   white: "#ffffff",
-  danger: "#dc3545",         // keep red for danger
-  headerBg: "#1a1a1a",      // black
-  sectionBg: "#f5e6d3",     // light yellow-orange
+  danger: "#dc3545",         
+  headerBg: "#1a1a1a",     
+  sectionBg: "#f5e6d3",    
 };
 
-// A6 in points (105 × 148 mm)
+
 const A6_W = 297.6;
 const A6_H = 419.5;
 
@@ -1149,10 +1100,9 @@ async function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFi
   const W = A6_W - M * 2;
   let y = M;
 
-  // ── HEADER BAND (Black background) ─────────────────────────────────────────────
+
   doc.rect(0, 0, A6_W, 28).fill(COLORS.headerBg);
 
-  // Company label
   doc
     .font("Helvetica-Bold")
     .fontSize(10)
@@ -1165,7 +1115,7 @@ async function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFi
     .fillColor(COLORS.light)
     .text(`Généré le ${data.generatedAt.toLocaleDateString("fr-DZ")}`, M, 18, { width: W * 0.55 });
 
-  // QR code — top right of header, encodes the tracking number
+
   const QR_SIZE = 24;
   const qrX = A6_W - M - QR_SIZE;
   const qrY = 2;
@@ -1177,11 +1127,11 @@ async function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFi
       margin: 1,
       scale: 4,
     });
-    // White background so QR is readable on the black header
+
     doc.rect(qrX - 2, qrY, QR_SIZE + 4, QR_SIZE + 4).fill(COLORS.white);
     doc.image(qrBuffer, qrX, qrY + 2, { width: QR_SIZE, height: QR_SIZE });
   } catch {
-    // Fallback: plain text if QR generation fails
+
     doc
       .font("Helvetica-Bold")
       .fontSize(7.5)
@@ -1191,7 +1141,7 @@ async function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFi
 
   y = 34;
 
-  // ── FRAGILE BADGE ───────────────────────────────────────────────────────────
+
   if (data.pkg.isFragile) {
     doc
       .rect(M, y, W, 11)
@@ -1204,7 +1154,7 @@ async function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFi
     y += 14;
   }
 
-  // ── SENDER SECTION ──────────────────────────────────────────────────────────
+
   y = sectionHeader(doc, "Expéditeur (Sender)", M, W, y);
   y += 3;
   const senderName = data.sender.businessName
@@ -1216,7 +1166,7 @@ async function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFi
   line(doc, M, y, W);
   y += 4;
 
-  // ── RECIPIENT SECTION ───────────────────────────────────────────────────────
+
   y = sectionHeader(doc, "Destinataire (Recipient)", M, W, y);
   y += 3;
   y = row(doc, "Nom / Name", data.recipient.name, M, W, y);
@@ -1236,7 +1186,7 @@ async function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFi
   line(doc, M, y, W);
   y += 4;
 
-  // ── PACKAGE SECTION ─────────────────────────────────────────────────────────
+
   y = sectionHeader(doc, "Détails du Colis (Package)", M, W, y);
   y += 3;
   y = row(doc, "Type", data.pkg.type.charAt(0).toUpperCase() + data.pkg.type.slice(1), M, W, y);
@@ -1252,7 +1202,7 @@ async function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFi
   line(doc, M, y, W);
   y += 4;
 
-  // ── ROUTE SECTION ───────────────────────────────────────────────────────────
+
   y = sectionHeader(doc, "Itinéraire (Route)", M, W, y);
   y += 3;
   y = row(doc, "Origine", `[${data.originBranch.code}] ${data.originBranch.name}`, M, W, y);
@@ -1266,20 +1216,20 @@ async function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFi
   line(doc, M, y, W);
   y += 4;
 
-  // ── PAYMENT FOOTER BAND ─────────────────────────────────────────────────────
+
   const footerH = 22;
   const footerY = A6_H - footerH - 2;
 
   doc.rect(M, footerY, W, footerH).fill(COLORS.light);
 
-  // Price block
+
   doc
     .font("Helvetica-Bold")
     .fontSize(11)
     .fillColor(COLORS.accent)
     .text(`${data.totalPrice.toLocaleString("fr-DZ")} DA`, M + 4, footerY + 5, { width: W * 0.45 });
 
-  // Payment method block
+
   const methodLabel = data.paymentMethod.toUpperCase().replace("_", " ");
   doc
     .rect(M + W * 0.5, footerY + 3, W * 0.5, 16)
@@ -1290,7 +1240,7 @@ async function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFi
     .fillColor(COLORS.accent)
     .text(methodLabel, M + W * 0.5 + 4, footerY + 7.5, { width: W * 0.5 - 8, align: "center" });
 
-  // ── BARCODE TEXT ──────────────────────────────────────────────────────────
+
   doc
     .rect(M, footerY - 16, W, 14)
     .fill(COLORS.white)
@@ -1307,10 +1257,6 @@ async function drawBordereau(doc: PDFKit.PDFDocument, data: IBordereauData, isFi
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  FUNCTION 1 — Single bordereau
-//  GET /cashier/bordereau/:trackingNumber
-// ─────────────────────────────────────────────────────────────────────────────
 
 export const printSingleBordereau = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1410,12 +1356,7 @@ export const printSingleBordereau = catchAsyncError(
   },
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  FUNCTION 2 — Bulk bordereau (one PDF, one page per package)
-//  POST /cashier/bordereau/bulk
-//  Body: { trackingNumbers: string[] }   (max 100)
-//     OR: { freelancerUserId: string }
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const printBulkBordereau = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1512,7 +1453,7 @@ export const printBulkBordereau = catchAsyncError(
 
     doc.pipe(res);
 
-    // Use for...of loop instead of forEach to properly await async operations
+
     for (let index = 0; index < packages.length; index++) {
       const pkg = packages[index];
       const originBranch = branchMap.get(pkg.originBranchId?.toString()) ?? null;
@@ -1622,7 +1563,7 @@ export const getPackageByTrackingNumber = catchAsyncError(
       return next(new ErrorHandler("Not authorized to scan packages at this branch", 403));
     }
 
-    // Optional: Also check if cashier is checked in (if you want to enforce active shift)
+
     if (requestingUser.role === "cashier") {
       const cashier = await CashierModel.findOne({
         userId: requestingUserId,
@@ -1665,7 +1606,7 @@ export const getPackageByTrackingNumber = catchAsyncError(
       cannotClaimReason = `Package cannot be claimed in its current status: ${packageDoc.status}`;
     }
 
-    // Add helpful info for frontend actions
+
     const nextAction = isClaimable 
       ? "claim_package" 
       : packageDoc.status === "cashier_claimed" 
@@ -1678,7 +1619,7 @@ export const getPackageByTrackingNumber = catchAsyncError(
         package: packageDoc,
         isClaimable,
         cannotClaimReason,
-        nextAction, // Suggested next action for the cashier
+        nextAction, 
       },
     });
   }

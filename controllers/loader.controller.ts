@@ -56,11 +56,7 @@ function loaderName(req: Request): string {
   return u ? `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() : "Loader";
 }
 
-/**
- * Push a scan entry to the loader document using a $push with $slice
- * so we never exceed 200 entries without loading the full array.
- * We call this via findByIdAndUpdate to avoid a second full-document save.
- */
+
 async function pushLoaderScan(
   loaderId: mongoose.Types.ObjectId,
   entry: Record<string, unknown>,
@@ -99,8 +95,7 @@ export const checkIn = catchAsyncError(
       return next(new ErrorHandler("You already have an active shift.", 400));
     }
 
-    // Loaders can temporarily work at a different branch
-    // If branchId is supplied in the body, use it; otherwise default to home branch
+
     const { branchId } = req.body as { branchId?: string };
 
     let activeBranchId: mongoose.Types.ObjectId;
@@ -174,10 +169,6 @@ export const checkOut = catchAsyncError(
 
 
 
-//  POST /loader/manifests
-//  The loader opens a new manifest bag at the origin branch.
-//  Destination branch + priority are specified upfront so that
-//  the manifest label can be printed immediately.
 
 
 export const createManifest = catchAsyncError(
@@ -236,7 +227,7 @@ export const createManifest = catchAsyncError(
         throw new ErrorHandler("priority must be standard, express, or urgent.", 400);
       }
 
-      // Generate the manifest code using the static model method
+
       const manifestCode = await ManifestModel.generateManifestCode(
         originBranch.code,
         destinationBranch.code,
@@ -262,7 +253,6 @@ export const createManifest = catchAsyncError(
         { session },
       );
 
-      // ManifestEvent — audit trail
       await ManifestEventModel.create(
         [
           {
@@ -348,7 +338,7 @@ export const createManifest = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!committed && session.inTransaction()) { 
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -357,10 +347,6 @@ export const createManifest = catchAsyncError(
 );
 
 
-//  POST /loader/manifests/:manifestId/scan-in
-//  Loader scans each package barcode and places it inside the manifest bag.
-//  Package must be 'at_origin_branch' to be scanned in.
-//  Status → 'manifested'
 
 export const scanPackageIn = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -455,7 +441,7 @@ export const scanPackageIn = catchAsyncError(
         );
       }
 
-      // ── Update manifest (uses model method for weight/count sync) ─────────
+
       await manifest.addPackage(
         packageDoc._id as mongoose.Types.ObjectId,
         packageDoc.trackingNumber,
@@ -583,7 +569,7 @@ export const scanPackageIn = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!committed && session.inTransaction()) { 
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -593,13 +579,7 @@ export const scanPackageIn = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 5.  REMOVE PACKAGE FROM MANIFEST (before sealing)
-//     DELETE /loader/manifests/:manifestId/packages/:packageId
-//
-//  Only allowed while the manifest is still 'open'.
-//  Package returns to 'at_origin_branch'.
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const removePackageFromManifest = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -735,7 +715,7 @@ export const removePackageFromManifest = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!committed && session.inTransaction()) { 
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -744,10 +724,7 @@ export const removePackageFromManifest = catchAsyncError(
 );
 
 
-//  POST /loader/manifests/:manifestId/seal
-//  Physically closes and labels the bag.
-//  After this no packages can be added or removed.
-//  Status: open → sealed
+
 
 
 export const sealManifest = catchAsyncError(
@@ -908,10 +885,7 @@ export const sealManifest = catchAsyncError(
 
 
 
-//  POST /loader/manifests/:manifestId/load-on-truck
-//  Loader scans the sealed manifest bag barcode and loads it onto the vehicle.
-//  A transporter (driver) and vehicle must be specified.
-//  Status: sealed → loaded
+
 
 
 export const loadManifestOnTruck = catchAsyncError(
@@ -1130,7 +1104,7 @@ export const loadManifestOnTruck = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
-      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!committed && session.inTransaction()) {
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -1140,10 +1114,7 @@ export const loadManifestOnTruck = catchAsyncError(
 
 
 
-//   POST /loader/manifests/:manifestId/depart
-//  Called by the loader when the truck physically leaves the origin branch.
-//  Status: loaded → in_transit
-//  All packages inside the manifest move to 'in_transit_to_branch'.
+
 
 
 export const markManifestDeparted = catchAsyncError(
@@ -1287,7 +1258,7 @@ export const markManifestDeparted = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!committed && session.inTransaction()) { 
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -1296,10 +1267,6 @@ export const markManifestDeparted = catchAsyncError(
 );
 
 
-//   POST /loader/manifests/:manifestId/arrive
-//  Called by the loader at the DESTINATION branch when the truck pulls in.
-//  Status: in_transit → arrived
-//  All packages move to 'at_destination_branch'.
 
 export const markManifestArrived = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1455,7 +1422,7 @@ export const markManifestArrived = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
-      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!committed && session.inTransaction()) { 
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -1465,10 +1432,6 @@ export const markManifestArrived = catchAsyncError(
 
 
 
-//  POST /loader/manifests/:manifestId/scan-out
-//  Loader at destination branch scans each package out of the manifest bag.
-//  Status: at_destination_branch — package is now loose at this branch and can
-//  be dispatched for home delivery or picked up by the client.
 
 
 export const scanPackageOut = catchAsyncError(
@@ -1709,7 +1672,7 @@ export const scanPackageOut = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
-      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!committed && session.inTransaction()) { 
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -1719,10 +1682,6 @@ export const scanPackageOut = catchAsyncError(
 
 
 
-//  POST /loader/manifests/:manifestId/re-manifest
-//  A package that arrived at a hub but needs to go to yet another branch
-//  is scanned out of the current manifest and into a new outbound manifest.
-//  This covers the hub-relay scenario.
 
 
 export const remanifestPackage = catchAsyncError(
@@ -1933,7 +1892,7 @@ export const remanifestPackage = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!committed && session.inTransaction()) { 
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -1942,10 +1901,7 @@ export const remanifestPackage = catchAsyncError(
 );
 
 
-//  POST /loader/manifests/:manifestId/close
-//  If not all packages have been scanned out (some missing/damaged),
-//  the supervisor/loader can force-close the manifest.
-//  Remaining 'in_manifest' entries are marked 'missing' by the model method.
+
 
 
 export const closeManifest = catchAsyncError(
@@ -2106,7 +2062,7 @@ export const closeManifest = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!committed && session.inTransaction()) { 
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -2115,9 +2071,7 @@ export const closeManifest = catchAsyncError(
 );
 
 
-//  POST /loader/manifests/:manifestId/discrepancy
-//  Called when the loader finds a count mismatch on arrival that requires
-//  supervisor investigation before the manifest can be closed.
+
 
 
 export const flagDiscrepancy = catchAsyncError(
@@ -2276,7 +2230,7 @@ export const flagDiscrepancy = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!committed && session.inTransaction()) { 
         await session.abortTransaction().catch(() => {});
       }
       await session.endSession();
@@ -2307,7 +2261,7 @@ export const getMyShift = catchAsyncError(
       ? Math.round((Date.now() - new Date(shift.startedAt).getTime()) / 60000)
       : null;
 
-    // Fetch active manifests at this loader's branch
+
     const activeBranchId = (loader as any).temporaryBranchId?._id ?? (loader as any).assignedBranchId._id;
 
     const activeManifests = await ManifestModel.find({
@@ -2438,7 +2392,7 @@ export const getPackagesToManifest = catchAsyncError(
       sortOrder = "desc",
     } = req.query;
     
-    // Build the query for packages that need to be manifested
+
     const query: any = {
       currentBranchId: activeBranchId,
       status: { $in: ["at_origin_branch", "accepted"] },
@@ -2448,11 +2402,10 @@ export const getPackagesToManifest = catchAsyncError(
       ],
     };
     
-    // Ensure package is not destined for the same branch
-    // (packages that need to be shipped elsewhere)
+
     query.destinationBranchId = { $ne: activeBranchId };
     
-    // Optional filters
+
     if (search) {
       query.$or = [
         { trackingNumber: { $regex: search, $options: "i" } },
@@ -2486,7 +2439,7 @@ export const getPackagesToManifest = catchAsyncError(
     const sortField = sortFields[sortBy as string] || "createdAt";
     sortConfig[sortField] = sortOrder === "asc" ? 1 : -1;
     
-    // Execute queries in parallel
+
     const [packages, totalCount] = await Promise.all([
       PackageModel.find(query)
         .select(
@@ -2503,7 +2456,7 @@ export const getPackagesToManifest = catchAsyncError(
       PackageModel.countDocuments(query),
     ]);
     
-    // Calculate package statistics
+
     const stats = {
       total: totalCount,
       totalWeight: packages.reduce((sum, pkg) => sum + (pkg.weight || 0), 0),
@@ -2557,7 +2510,7 @@ export const getPackagesToManifestGroupedByDestination = catchAsyncError(
 
     const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
     
-    // Get all packages that need to be manifested
+
     const packages = await PackageModel.find({
       currentBranchId: activeBranchId,
       status: { $in: ["at_origin_branch", "accepted"] },
@@ -2570,7 +2523,7 @@ export const getPackagesToManifestGroupedByDestination = catchAsyncError(
       .populate("destinationBranchId", "name code address")
       .lean();
     
-    // Group packages by destination branch
+
     const groupedByDestination: Record<string, {
       branchId: string;
       branchName: string;
@@ -2623,7 +2576,7 @@ export const getPackagesToManifestGroupedByDestination = catchAsyncError(
       }
     }
     
-    // Convert to array and sort by package count (most packages first)
+
     const destinations = Object.values(groupedByDestination)
       .sort((a, b) => b.packageCount - a.packageCount);
     

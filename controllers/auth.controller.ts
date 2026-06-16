@@ -43,7 +43,7 @@ import LoaderModel from "../models/loader.model";
 import CashierModel from "../models/cashier.model";
 import { v2 } from 'cloudinary';
 
-// Configure Cloudinary
+
 v2.config({
   cloud_name: process.env.CLOUD_NAME,
   api_key: process.env.CLOUD_API_KEY,
@@ -112,8 +112,8 @@ export const register = catchAsyncError(
       res.status(200).json({
         success: true,
         message: "Please check your DM to activate your account",
-        activation_token, // Only for development, remove in production
-        activation_number, // Only for development, remove in production
+        activation_token, 
+        activation_number,
       });
     } catch (error: any) {
       return next(
@@ -218,14 +218,14 @@ export const resendActivation = catchAsyncError(
         httpOnly: true,
         sameSite: "none",
         secure: true,
-        maxAge: 30 * 60 * 1000, // 30 minutes
+        maxAge: 30 * 60 * 1000, 
       });
 
       res.status(200).json({
         success: true,
         message:
           "A new activation email has been sent. Please check your inbox.",
-        // Only for development — remove in production:
+        
         activation_token,
         activation_number,
       });
@@ -328,10 +328,10 @@ export const login = catchAsyncError(
       const isMatch = await user?.comparePassword(password);
 
       if (!user || !isMatch) {
-        // Track the failure — this increments the Redis counter
+        
         await trackFailedLogin(email, ip);
 
-        // req.remainingLoginAttempts was attached by checkFailedLogins middleware
+
         const remaining = Math.max(0, (req.remainingLoginAttempts ?? 5) - 1);
 
         return next(
@@ -346,7 +346,7 @@ export const login = catchAsyncError(
         return next(new ErrorHandler(`Account is ${user.status}.`, 403));
       }
 
-      // On success, clear failed attempt counter so the user isn't penalised
+
       await resetFailedLogins(email, ip);
 
       await sendToken(user, 200, res);
@@ -481,7 +481,7 @@ export const updateUser = catchAsyncError(
       if (firstName) user.firstName = firstName;
       if (lastName) user.lastName = lastName;
 
-      // ── Handle email change ──────────────────────────────────────────
+
       if (email && email !== user.email) {
         const { email_token, activation_number } =
           generateChangeEmailToken(user.email, email);
@@ -518,7 +518,7 @@ export const updateUser = catchAsyncError(
           maxAge: 30 * 60 * 1000,
         });
 
-        // Don't save the email yet — wait for verification
+
         res.status(200).json({
           success: true,
           message: "Verification email sent. Please check your new email to confirm the change.",
@@ -527,7 +527,7 @@ export const updateUser = catchAsyncError(
         });
       }
 
-      // ── No email change — save normally ──────────────────────────────
+
       await user.save();
 
       res.status(200).json({
@@ -695,7 +695,7 @@ export const resetPassword = catchAsyncError(
 
 
 const UPLOAD_FOLDER = "profile_pictures";
-const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
+const MAX_FILE_BYTES = 5 * 1024 * 1024; 
 const ALLOWED_FORMATS = ["jpg", "jpeg", "png", "webp"];
 
 
@@ -774,7 +774,7 @@ export const updateProfilePicture = catchAsyncError(
       return next(new ErrorHandler("User not found.", 404));
     }
 
-    // Check if there's an existing image (public_id exists and is not null)
+
     const hasOldImage = user.imageUrl && user.imageUrl.public_id !== null;
 
     if (hasOldImage) {
@@ -787,7 +787,7 @@ export const updateProfilePicture = catchAsyncError(
 
     const { public_id, url } = await uploadToCloudinary(uploadSource);
 
-    // Update the entire imageUrl object
+
     const updatedUser = await userModel.findByIdAndUpdate(
       userId,
       {
@@ -840,7 +840,7 @@ export const deleteProfilePicture = catchAsyncError(
       return next(new ErrorHandler("User not found.", 404));
     }
 
-    // Check if there's an existing image (public_id exists and is not null)
+
     const hasOldImage = user.imageUrl && user.imageUrl.public_id !== null;
 
     if (!hasOldImage) {
@@ -853,7 +853,7 @@ export const deleteProfilePicture = catchAsyncError(
       console.warn(`[deleteProfilePicture] Failed to delete image ${user.imageUrl!.public_id}:`, err);
     }
 
-    // Reset to null (not empty strings)
+
     await userModel.findByIdAndUpdate(userId, {
       $set: { imageUrl: { public_id: null, url: null } }
     });
@@ -1294,13 +1294,7 @@ export const meUser = catchAsyncError(
   });
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ENDPOINT 1 — Autocomplete while typing
-// GET /api/auth/geocode/search?q=con&limit=10
-//
-// Instant — reads from the JSON file in memory, zero network calls.
-// Call this on every keystroke (debounce 150–200ms on the frontend).
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const searchAddress = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1325,7 +1319,7 @@ export const searchAddress = catchAsyncError(
       success: true,
       count: places.length,
       data: places,
-      // Each item in data has:
+
       // { id, communeNameAscii, communeName, dairaNameAscii, dairaName,
       //   wilayaCode, wilayaNameAscii, wilayaName, label }
     });
@@ -1333,15 +1327,7 @@ export const searchAddress = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ENDPOINT 2 — Resolve coordinates for a confirmed selection
-// POST /api/auth/geocode/resolve
-// Body: { communeNameAscii: "El Khroub", wilayaNameAscii: "Constantine" }
-//
-// Called ONCE when the user taps a suggestion in the dropdown.
-// Hits Nominatim with the full canonical name → returns lat/lon.
-// Frontend stores the result and sends it with the createPackage request.
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const resolvePlace = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1372,7 +1358,7 @@ export const resolvePlace = catchAsyncError(
       return res.status(200).json({
         success: true,
         data: result,
-        // result shape:
+
         // { communeNameAscii, communeName, wilayaNameAscii, wilayaName,
         //   wilayaCode, displayName, lat, lon }
       });
@@ -1383,10 +1369,7 @@ export const resolvePlace = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ENDPOINT 3 — Reverse geocode (for deliverer GPS confirmation)
-// GET /api/auth/geocode/reverse?lat=36.26&lon=6.69
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const reverseGeocodeAddress = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1424,75 +1407,10 @@ export const reverseGeocodeAddress = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ROUTES — add to your router file (auth.routes.ts or freelancer.routes.ts)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// import { searchAddress, resolvePlace, reverseGeocodeAddress } from "../controllers/freelancer.controller";
-//
-// authRouter.get("/geocode/search",   searchAddress);
-// authRouter.post("/geocode/resolve", resolvePlace);
-// authRouter.get("/geocode/reverse",  reverseGeocodeAddress);
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// createPackage — destination block update
-// Replace the destination object in your existing createPackage function.
-//
-// Add these fields to ICreatePackageBody:
-//   deliveryLat?: number;
-//   deliveryLon?: number;
-//   deliveryDisplayName?: string;
-//   deliveryCommuneAscii?: string;
-//   deliveryWilayaAscii?: string;
-// ─────────────────────────────────────────────────────────────────────────────
-
-/*
-  const {
-    // ... your existing fields ...
-    deliveryLat,
-    deliveryLon,
-    deliveryDisplayName,
-    deliveryCommuneAscii,
-    deliveryWilayaAscii,
-  } = req.body as ICreatePackageBody;
- 
-  // For home delivery, coordinates are required
-  if (deliveryType === "home") {
-    if (
-      deliveryLat === undefined || deliveryLon === undefined ||
-      typeof deliveryLat !== "number" || typeof deliveryLon !== "number"
-    ) {
-      throw new ErrorHandler(
-        "deliveryLat and deliveryLon are required for home delivery. " +
-        "Use /geocode/search then /geocode/resolve to obtain them.",
-        400,
-      );
-    }
-  }
- 
-  const destination = {
-    recipientName:    recipientName.trim(),
-    recipientPhone:   normalizedRecipientPhone,
-    alternativePhone: normalizedAlternativePhone,
-    address:          recipientAddress.trim(),
-    city:             deliveryCommuneAscii?.trim() ?? recipientCity.trim(),
-    state:            deliveryWilayaAscii?.trim()  ?? recipientState.trim(),
-    postalCode:       recipientPostalCode?.trim(),
-    notes:            deliveryNotes?.trim(),
-    coordinates: (deliveryLat !== undefined && deliveryLon !== undefined)
-      ? { lat: deliveryLat, lon: deliveryLon }
-      : undefined,
-    resolvedAddress: deliveryDisplayName?.trim(),
-  };
-*/
 
 
 
 
-
-// POST /api/eta/calculate
-//
 // Accessible by: deliverers and transporters only (enforced via isDelivererOrTransporter middleware).
 //
 // Body:
@@ -1517,7 +1435,7 @@ export const reverseGeocodeAddress = catchAsyncError(
 //     weather          : { factor, severity, label },
 //   }
 // }
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const calculateETA = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1527,7 +1445,6 @@ export const calculateETA = catchAsyncError(
       return next(new ErrorHandler("Authentication required.", 401));
     }
 
-    // ── 1. Validate body ─────────────────────────────────────────────
     const { currentLat, currentLon, destinationLat, destinationLon } =
       req.body as Record<string, unknown>;
 
@@ -1561,7 +1478,7 @@ export const calculateETA = catchAsyncError(
       );
     }
 
-    // ── 2. Role check ────────────────────────────────────────────────
+
     const [deliverer, transporter] = await Promise.all([
       delivererModel.findOne({ userId, isActive: true, isSuspended: false }),
       transporterModel.findOne({ userId, isActive: true, isSuspended: false }),
@@ -1576,7 +1493,7 @@ export const calculateETA = catchAsyncError(
       );
     }
 
-    // ── 3. Coordinates ───────────────────────────────────────────────
+
     const origin: Coordinates = { lat: cLat, lon: cLon };
     const destination: Coordinates = { lat: dLat, lon: dLon };
 
@@ -1585,7 +1502,7 @@ export const calculateETA = catchAsyncError(
       lon: (cLon + dLon) / 2,
     };
 
-    // ── 4. OSRM + environment factors ────────────────────────────────
+
     let osrmResult;
 
     try {
@@ -1606,20 +1523,16 @@ export const calculateETA = catchAsyncError(
       fetchWeatherFactor(midpoint),
     ]);
 
-    // ── 5. SPEED-AWARE TRAFFIC MODEL ──────────────────────────────────
-    // Prevent division issues
+
     const avgSpeed = osrmResult.avgSpeedKmh || 1;
 
-    // Adaptive reference speed:
-    // - Urban (<15km): 35 km/h (OSRM over-optimistic in cities)
-    // - Mixed/long routes: 55 km/h
     const isUrban = osrmResult.distance < 15_000;
 
     const REFERENCE_SPEED = isUrban ? 35 : 55;
 
     const speedRatio = avgSpeed / REFERENCE_SPEED;
 
-    // Stronger correction for urban routes (cap higher)
+
     const speedCorrection = isUrban
       ? Math.min(1.50, Math.max(0.75, 1 / speedRatio))
       : Math.min(1.40, Math.max(0.75, 1 / speedRatio));
@@ -1627,7 +1540,6 @@ export const calculateETA = catchAsyncError(
     const adjustedTrafficFactor =
       trafficResult.factor * speedCorrection;
 
-    // ── 6. COMBINED EFFECT ───────────────────────────────────────────
     const rawSum = adjustedTrafficFactor + weatherResult.factor;
 
     const MAX_ADJUSTMENT = 0.60;
@@ -1648,13 +1560,11 @@ export const calculateETA = catchAsyncError(
 
     const estimatedArrival = new Date(now.getTime() + finalSec * 1000);
 
-    // ── 7. CONFIDENCE SCORE ──────────────────────────────────────────
     const confidence: "high" | "medium" | "low" =
       rawSum < 0.10 ? "high" :
         rawSum < 0.30 ? "medium" :
           "low";
 
-    // ── 8. RESPONSE ──────────────────────────────────────────────────
     return res.status(200).json({
       success: true,
       data: {
@@ -1826,7 +1736,7 @@ export const requestContactChange = catchAsyncError(
             changeType: newPhone ? "email and phone" : "email",
           });
         } else {
-          // Fallback inline template
+
           html = `
             <p>Hi ${user.firstName},</p>
             <p>Your verification code for the contact update is: <strong>${otp}</strong></p>
@@ -1853,7 +1763,6 @@ export const requestContactChange = catchAsyncError(
         return;
       }
 
-      // Phone-only path
       const smsSent = await sendSMS({
         to: newPhone!.trim(),
         message: `Your contact change OTP is: ${otp}. Valid for ${expireMinutes} minutes.`,

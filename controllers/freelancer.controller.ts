@@ -15,15 +15,14 @@ import { findBranchByCommune, findNearestHub, loadCommunes, lookupCommune } from
 import { v2 as cloudinary } from 'cloudinary';
 
 
-// Freelancer may only cancel before the package leaves their origin branch.
-// Once it is in_transit or beyond,the package must be returned the old same way.
+
 const FREELANCER_CANCELLABLE_STATUSES: PackageStatus[] = [
   "pending",
   "accepted",
   "at_origin_branch",
 ];
 
-// Statuses that count as active (package is moving / in the system)
+
 const ACTIVE_STATUSES: PackageStatus[] = [
   "pending",
   "accepted",
@@ -36,8 +35,7 @@ const ACTIVE_STATUSES: PackageStatus[] = [
   "on_hold",
 ];
 
-// Shared lookup stages  added to packages with branch names.
-// trackingHistory is excluded from list views (returned only in trackPackage).
+
 const LIST_LOOKUP_STAGES: mongoose.PipelineStage[] = [
   {
     $lookup: {
@@ -117,9 +115,6 @@ async function resolveFreelancer(
 
 
 
-//  GET MY PACKAGES
-//  Returns ALL packages sent by this freelancer, grouped by status in the
-//  summary and paginated in the data array.
 export const getMyPackages = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const freelancerUserId = req.user?._id;
@@ -269,11 +264,7 @@ export const getMyPackages = catchAsyncError(
 
 
 
-//  GET MY ACTIVE PACKAGES
-//
-//  Active = package is still moving through the system (not terminal).
-//  Returns the same structure as getMyPackages but pre-filtered + sorted by
-//  most recently updated so the freelancer always sees urgent packages first.
+
 
 export const getMyActivePackages = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -362,8 +353,7 @@ export const getMyActivePackages = catchAsyncError(
 
 
 
-//  GET MY DELIVERED PACKAGES
-//  Terminal successful deliveries only (status = delivered).
+
 export const getMyDeliveredPackages = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const freelancerUserId = req.user?._id;
@@ -500,10 +490,7 @@ export const getMyDeliveredPackages = catchAsyncError(
 
 
 
-//  CANCEL PACKAGE
-//  Freelancer may only cancel while the package is still at the origin branch
-//  or hasn't been accepted yet. Once it's in transit the shipment is already
-//  moving and must be returned the same old way.
+
 export const cancelPackage = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -533,7 +520,7 @@ export const cancelPackage = catchAsyncError(
         return next(new ErrorHandler("reason must be a string", 400));
       }
 
-      // ── Auth + package (parallel) ────────────────────────────────────────
+
       const [freelancer, packageDoc] = await Promise.all([
         FreelancerModel.findOne({ userId: freelancerUserId }).session(session),
         PackageModel.findOne({
@@ -614,14 +601,14 @@ export const cancelPackage = catchAsyncError(
           { session },
         ),
 
-        // Decrement branch currentLoad
+
         BranchModel.findByIdAndUpdate(
           packageDoc.currentBranchId,
           { $inc: { currentLoad: -1 } },
           { session },
         ),
 
-        // Update freelancer statistics
+
         FreelancerModel.findByIdAndUpdate(
           freelancer._id,
           {
@@ -663,7 +650,7 @@ export const cancelPackage = catchAsyncError(
     }
     finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -675,8 +662,7 @@ export const cancelPackage = catchAsyncError(
 
 
 
-//  TRACK PACKAGE
-//  Returns the full tracking timeline from the embedded trackingHistory array
+
 const READABLE_STATUS: Record<PackageStatus, string> = {
   pending: "Created",
   accepted: "Accepted",
@@ -918,14 +904,7 @@ export const getMeFreelancer = catchAsyncError(
 
 
 
-//  UPDATE ME — FREELANCER
-//  PATCH /freelancer/me
 
-//  Updatable on User:             firstName, lastName, imageUrl
-//  Updatable on FreelancerModel:  businessName, businessType, preferredDeliveryType
-
-//  Blocked: status, statistics, companyId, defaultOriginBranchId, lastActiveAt
-//  — all system or supervisor managed.
 
 
 export const updateMeFreelancer = catchAsyncError(
@@ -1049,7 +1028,7 @@ export const updateMeFreelancer = catchAsyncError(
 
 
 interface ICreatePackageBody {
-  freelancerId?: string; // cashier selects freelancer
+  freelancerId?: string; 
 
   recipientName: string;
   recipientPhone: string;
@@ -1249,7 +1228,7 @@ export const createPackage = catchAsyncError(
       } = req.body as ICreatePackageBody;
 
 
-      // ── Required fields validation ──────────────────────────────────────────
+
       if (
         !recipientName || !recipientPhone || !recipientAddress ||
         !recipientCity || !recipientState || !weight || !type ||
@@ -1286,7 +1265,6 @@ export const createPackage = catchAsyncError(
       }
 
 
-      // ── Phone number normalization ──────────────────────────────────────────
       let normalizedRecipientPhone: string;
       let normalizedAlternativePhone: string | undefined;
 
@@ -1300,7 +1278,7 @@ export const createPackage = catchAsyncError(
       }
 
 
-      // ── Origin branch validation ────────────────────────────────────────────
+
       const originBranchId = freelancer.defaultOriginBranchId;
 
       if (!originBranchId) {
@@ -1311,12 +1289,12 @@ export const createPackage = catchAsyncError(
       }
 
 
-      // ── Determine destinationBranchId ───────────────────────────────────────
+
       let finalDestinationBranchId: mongoose.Types.ObjectId | undefined;
       let destinationBranchDoc: any = null;
 
       if (deliveryType === "branch_pickup") {
-        // branch_pickup: must be provided by the freelancer
+
         if (!providedDestinationBranchId) {
           throw new ErrorHandler("destinationBranchId is required for branch_pickup deliveries.", 400);
         }
@@ -1325,15 +1303,14 @@ export const createPackage = catchAsyncError(
         }
         finalDestinationBranchId = new mongoose.Types.ObjectId(providedDestinationBranchId);
 
-        // Fetch destination branch for response
+
         destinationBranchDoc = await BranchModel.findById(finalDestinationBranchId).session(session).lean();
         if (!destinationBranchDoc || destinationBranchDoc.status !== "active") {
           throw new ErrorHandler("Destination branch not found or not active.", 404);
         }
 
       } else if (deliveryType === "home") {
-        // home delivery: route to the nearest REGIONAL MAIN HUB
-        // (not the nearest any-branch — only hubs run the CVRP deliverer pass)
+
         if (deliveryLat === undefined || deliveryLon === undefined) {
           throw new ErrorHandler(
             "GPS coordinates (deliveryLat, deliveryLon) are required for home delivery. " +
@@ -1342,7 +1319,7 @@ export const createPackage = catchAsyncError(
           );
         }
 
-        // Validate coordinates are within range
+
         if (deliveryLat < -90 || deliveryLat > 90 || deliveryLon < -180 || deliveryLon > 180) {
           throw new ErrorHandler(
             "Invalid GPS coordinates. Latitude must be between -90 and 90, longitude between -180 and 180.",
@@ -1350,9 +1327,7 @@ export const createPackage = catchAsyncError(
           );
         }
 
-        // ── Find the nearest HUB (regional_main_hub) to the customer ─────────────
-        // This is the critical fix: home-delivery packages must be routed to a hub,
-        // not to any branch. Deliverers operate out of hubs.
+
         const nearestHubId = await findNearestHub(
           [deliveryLon, deliveryLat],
           freelancer.companyId
@@ -1368,7 +1343,7 @@ export const createPackage = catchAsyncError(
 
         finalDestinationBranchId = nearestHubId;
 
-        // Fetch hub doc for response (name, code, address used in bordereau)
+
         destinationBranchDoc = await BranchModel
           .findById(finalDestinationBranchId)
           .session(session)
@@ -1376,7 +1351,7 @@ export const createPackage = catchAsyncError(
       }
 
 
-      // ── Validate origin branch ──────────────────────────────────────────────
+
       const originBranch = await BranchModel.findById(originBranchId).session(session).lean();
 
       if (!originBranch) {
@@ -1388,19 +1363,11 @@ export const createPackage = catchAsyncError(
       }
 
 
-      // ── REMOVED: same-branch home delivery guard ──────────────────────────────
-      // The old guard that blocked packages when origin branch was the same as
-      // destination branch is removed. If the origin branch IS the nearest hub
-      // (e.g., a freelancer working out of the Algiers hub submitting a package
-      // for Algiers delivery), this is a completely valid scenario. The package
-      // stays at the hub and a local deliverer picks it up — no inter-hub transport
-      // needed. The CVRP deliverer pass handles this correctly.
 
-      // Always start as pending — cashier claim/accept handles the rest
       const initialStatus: PackageStatus = "pending";
 
 
-      // ── Build destination object ────────────────────────────────────────────
+
       const destination = {
         recipientName: recipientName.trim(),
         recipientPhone: normalizedRecipientPhone,
@@ -1433,7 +1400,7 @@ export const createPackage = catchAsyncError(
       );
 
 
-      // ── Create package document ─────────────────────────────────────────────
+
       const [packageDoc] = await PackageModel.create(
         [
           {
@@ -1523,7 +1490,7 @@ export const createPackage = catchAsyncError(
       );
 
 
-      // ── Create payment record ───────────────────────────────────────────────
+
       await PaymentModel.create(
         [
           {
@@ -1543,7 +1510,7 @@ export const createPackage = catchAsyncError(
       );
 
 
-      // ── Update freelancer stats ─────────────────────────────────────────────
+
       await FreelancerModel.findByIdAndUpdate(
         freelancer._id,
         {
@@ -1567,7 +1534,7 @@ export const createPackage = catchAsyncError(
       });
 
 
-      // ── Build response message ──────────────────────────────────────────────
+
       let responseMessage: string;
       if (deliveryType === "branch_pickup") {
         responseMessage = "Package registered successfully. Please print the bordereau and bring the package to your branch counter.";
@@ -1658,7 +1625,7 @@ export const createPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -1666,10 +1633,7 @@ export const createPackage = catchAsyncError(
   },
 );
 
-// if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-//   await session.abortTransaction().catch(() => {});
-// }
-// await session.endSession();
+
 
 
 
@@ -2499,13 +2463,13 @@ cloudinary.config({
   api_secret: process.env.CLOUD_SECRET_KEY
 });
 
-// Constants for package images
+
 const PACKAGE_UPLOAD_FOLDER = "packages";
-const MAX_PACKAGE_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB per image
+const MAX_PACKAGE_IMAGE_BYTES = 10 * 1024 * 1024; 
 const MAX_PACKAGE_IMAGES = 10;
 const ALLOWED_IMAGE_FORMATS = ["jpg", "jpeg", "png", "webp"];
 
-// Helper function to upload a single package image
+
 async function uploadPackageImageToCloudinary(
   source: string,
   order: number
@@ -2524,7 +2488,7 @@ async function uploadPackageImageToCloudinary(
   };
 }
 
-// Helper function to delete package images (if needed for rollback)
+
 async function deletePackageImagesFromCloudinary(publicIds: string[]): Promise<void> {
   for (const publicId of publicIds) {
     try {
@@ -2535,7 +2499,7 @@ async function deletePackageImagesFromCloudinary(publicIds: string[]): Promise<v
   }
 }
 
-// Update ICreatePackageBody interface to include images
+
 interface ICreatePackageBodyWithImages {
   recipientName: string;
   recipientPhone: string;
@@ -3040,13 +3004,7 @@ interface ISearchBranchesByCityQuery {
   limit?: number;
 }
 
-/**
- * GET /api/freelancer/branches/search?city=Algiers&limit=10
- * 
- * Search for branches that can be used as destination branches for branch_pickup.
- * Returns branches matching the city name (case-insensitive partial match)
- * with their details including ID, name, address, and distance from city center.
- */
+
 export const searchBranchesForPickup = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const freelancerUserId = req.user?._id;
@@ -3068,24 +3026,24 @@ export const searchBranchesForPickup = catchAsyncError(
       });
     }
 
-    const limitNum = Math.min(parseInt(limit.toString(), 10) || 20, 50); // Max 50 results
+    const limitNum = Math.min(parseInt(limit.toString(), 10) || 20, 50);
     const searchCity = city.trim().toLowerCase();
 
-    // Build the query - include BOTH local_branch and regional_main_hub
+
     const query: any = {
       companyId: freelancer.companyId,
       status: 'active',
-      branchType: { $in: ['local_branch', 'regional_main_hub'] }, // Changed: include both types
+      branchType: { $in: ['local_branch', 'regional_main_hub'] }, 
     };
 
-    // Search by city name (case-insensitive, partial match)
+
     query.$or = [
       { 'address.city': { $regex: searchCity, $options: 'i' } },
       { name: { $regex: searchCity, $options: 'i' } },
       { code: { $regex: searchCity, $options: 'i' } },
     ];
 
-    // Find branches
+
     let branches = await BranchModel.find(query)
       .select('_id name code address phone email location status branchType parentHubId')
       .limit(limitNum)
@@ -3093,12 +3051,12 @@ export const searchBranchesForPickup = catchAsyncError(
 
     console.log(`Found ${branches.length} branches for city "${searchCity}"`);
 
-    // Try to get commune coordinates for distance calculation
+
     let communeCoords: [number, number] | null = null;
     let communeName: string = searchCity;
 
     try {
-      // Try to find the commune in the database or JSON
+
       const commune = lookupCommune(searchCity);
       if (commune && commune.longitude && commune.latitude) {
         communeCoords = [parseFloat(commune.longitude), parseFloat(commune.latitude)];
@@ -3109,13 +3067,13 @@ export const searchBranchesForPickup = catchAsyncError(
       console.log("Commune lookup failed:", err);
     }
 
-    // If no coordinates from commune, try to use a branch's location as reference
+
     if (!communeCoords && branches.length > 0 && branches[0].location?.coordinates) {
       communeCoords = branches[0].location.coordinates;
       console.log("Using first branch coordinates as reference:", communeCoords);
     }
 
-    // Format response with distance if coordinates available
+
     const formattedBranches = branches.map(branch => {
       let distance: number | null = null;
       if (communeCoords && branch.location?.coordinates) {
@@ -3136,7 +3094,7 @@ export const searchBranchesForPickup = catchAsyncError(
       };
     });
 
-    // Sort by distance (closest first) if coordinates available
+
     if (communeCoords) {
       formattedBranches.sort((a, b) => {
         const aDist = a.distance ? parseFloat(a.distance) : Infinity;
@@ -3144,7 +3102,7 @@ export const searchBranchesForPickup = catchAsyncError(
         return aDist - bDist;
       });
     } else {
-      // If no coordinates, sort by name
+
       formattedBranches.sort((a, b) => a.name.localeCompare(b.name));
     }
 
@@ -3160,12 +3118,12 @@ export const searchBranchesForPickup = catchAsyncError(
   }
 );
 
-// Helper function for haversine distance calculation
+
 function haversineDistance(
   coord1: [number, number],
   coord2: [number, number]
 ): number {
-  const R = 6371; // Earth's radius in km
+  const R = 6371;
   const dLat = toRadians(coord2[1] - coord1[1]);
   const dLon = toRadians(coord2[0] - coord1[0]);
   const lat1 = toRadians(coord1[1]);
