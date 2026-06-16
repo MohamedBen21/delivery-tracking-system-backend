@@ -1408,7 +1408,7 @@ export const getMyTransporters = catchAsyncError(
       transporterQuery.currentBranchId = supervisor.branchId;
     }
 
-    const { verificationStatus, availabilityStatus, isActive, currentBranchId, search } = req.query;
+    const { pageNumber = 1, pageSize = 10, verificationStatus, availabilityStatus, isActive, currentBranchId, search } = req.query;
 
     if (verificationStatus && typeof verificationStatus === "string") {
       transporterQuery.verificationStatus = verificationStatus;
@@ -1456,12 +1456,21 @@ export const getMyTransporters = catchAsyncError(
       .populate("currentBranchId", "name code address status")
       .populate("currentVehicleId", "type brand model registrationNumber")
       .sort({ createdAt: -1 })
+      .skip((Number(pageNumber) - 1) * Number(pageSize))
+      .limit(Number(pageSize))
       .lean();
+
+    const count = await TransporterModel.countDocuments(transporterQuery);
 
     return res.status(200).json({
       success: true,
-      count: transporters.length,
+      count,
       data: transporters,
+      pagination: {
+        pageSize: Number(pageSize),
+        pageNumber: Number(pageNumber),
+        totalPages: Math.ceil(count / Number(pageSize)),
+      }
     });
   }
 );
@@ -2657,8 +2666,8 @@ export const getMyBranchPackages = catchAsyncError(
       fromDate,
       toDate,
       search,
-      page = "1",
-      limit = "20",
+      pageSize = 10,
+      pageNumber = 1,
     } = req.query;
 
     if (status && typeof status === "string") {
@@ -2704,11 +2713,9 @@ export const getMyBranchPackages = catchAsyncError(
       );
     }
 
-    const pageNum = parseInt(page as string, 10);
-    const limitNum = parseInt(limit as string, 10);
-    const skip = (pageNum - 1) * limitNum;
 
-    const [packages, totalCount] = await Promise.all([
+
+    const [packages, count] = await Promise.all([
       PackageModel.find(packageQuery)
         .populate("clientId", "firstName lastName email phone")
         .populate("originBranchId", "name code")
@@ -2722,18 +2729,20 @@ export const getMyBranchPackages = catchAsyncError(
           },
         })
         .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
+        .skip((Number(pageNumber) - 1) * (Number(pageSize) || 10))
+        .limit(Number(pageSize))
         .lean(),
       PackageModel.countDocuments(packageQuery),
     ]);
 
     return res.status(200).json({
       success: true,
-      count: packages.length,
-      totalCount,
-      currentPage: pageNum,
-      totalPages: Math.ceil(totalCount / limitNum),
+      count,
+      pagination: {
+        pageSize: Number(pageSize),
+        pageNumber: Number(pageNumber),
+        totalPages: Math.ceil(count / (Number(pageSize) || 10)),
+      },
       data: packages,
     });
   }
@@ -14552,6 +14561,8 @@ export const getMyCashiers = catchAsyncError(
     const requestingUserId = req.user?._id;
     const { branchId } = req.params;
 
+    const { pageNumber = 1, pageSize = 10 } = req.query;
+
     if (!requestingUserId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
@@ -14646,7 +14657,11 @@ export const getMyCashiers = catchAsyncError(
       }
     }
 
+    const count = await CashierModel.countDocuments(cashierQuery);
+
     const cashiers = await CashierModel.find(cashierQuery)
+      .skip((Number(pageNumber) - 1) * Number(pageSize))
+      .limit(Number(pageSize))
       .populate("userId", "firstName lastName email phone imageUrl role status")
       .populate("assignedBranchId", "name code address status")
       .sort({ createdAt: -1 })
@@ -14654,8 +14669,13 @@ export const getMyCashiers = catchAsyncError(
 
     return res.status(200).json({
       success: true,
-      count: cashiers.length,
+      count,
       data: cashiers,
+      pagination: {
+        pageNumber: Number(pageNumber),
+        pageSize: Number(pageSize),
+        totalPages: Math.ceil(count / Number(pageSize)),
+      },
     });
   }
 );
@@ -15163,6 +15183,8 @@ export const getMyLoaders = catchAsyncError(
     const requestingUserId = req.user?._id;
     const { branchId } = req.params;
 
+    const { pageNumber = 1, pageSize = 10 } = req.query;
+
     if (!requestingUserId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
@@ -15268,7 +15290,11 @@ export const getMyLoaders = catchAsyncError(
       }
     }
 
+    const count = await LoaderModel.countDocuments(loaderQuery);
+
     const loaders = await LoaderModel.find(loaderQuery)
+      .skip((Number(pageNumber) - 1) * Number(pageSize))
+      .limit(Number(pageSize))
       .populate("userId", "firstName lastName email phone imageUrl role status")
       .populate("assignedBranchId", "name code address status")
       .populate("temporaryBranchId", "name code address status")
@@ -15277,8 +15303,13 @@ export const getMyLoaders = catchAsyncError(
 
     return res.status(200).json({
       success: true,
-      count: loaders.length,
+      count,
       data: loaders,
+      pagination: {
+        pageNumber: Number(pageNumber),
+        pageSize: Number(pageSize),
+        totalPages: Math.ceil(count / Number(pageSize)),
+      },
     });
   }
 );
