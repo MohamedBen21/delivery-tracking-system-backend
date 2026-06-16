@@ -1,4 +1,4 @@
-import mongoose, { Document, Model, Schema } from "mongoose";
+import mongoose, { Document, Model, Schema, Types } from "mongoose";
 import { WILAYA_CODES, isValidWilayaCode, wilayaName } from "./wilayas.constant";
 
 
@@ -28,6 +28,26 @@ export interface ITariffModel extends Model<ITariff> {
 
   findByCompany(companyId: string): Promise<ITariff | null>;
 
+  getCompanyTariffs(
+    companyId: string,
+    page: number,
+    limit: number
+  ): Promise<{
+    entries: ITariffEntry[];
+    total: number;
+  }>;
+
+  /**
+   * Look up the price for a specific wilaya pair.
+   * Codes can be passed in either order — normalised automatically.
+   *
+   * Returns the matching entry or null if no tariff is configured for that pair.
+   *
+   * @example
+   *   const entry = await TariffModel.findPrice(companyId, 31, 16);
+   *   entry?.stopdesk  // 500
+   *   entry?.domicile  // 700
+   */
   findPrice(
     companyId: string,
     wilayaFrom: number,
@@ -88,7 +108,7 @@ const tariffEntrySchema = new Schema<ITariffEntry>(
       },
     },
   },
-  { _id: false } 
+  { _id: false }
 );
 
 
@@ -99,7 +119,7 @@ const tariffSchema = new Schema<ITariff, ITariffModel>(
       type: Schema.Types.ObjectId,
       ref: "Company",
       required: [true, "Company reference is required"],
-      unique: true, 
+      unique: true,
     },
     entries: {
       type: [tariffEntrySchema],
@@ -144,6 +164,50 @@ tariffSchema.statics.findByCompany = function (
   return this.findOne({ companyId });
 };
 
+tariffSchema.statics.getCompanyTariffs = async function (
+  companyId: string,
+  page: number,
+  limit: number
+) {
+  const skip = (page - 1) * limit;
+
+  const result = await this.aggregate([
+    {
+      $match: {
+        companyId: new Types.ObjectId(companyId),
+      },
+    },
+    {
+      $facet: {
+        entries: [
+          { $unwind: "$entries" },
+          { $skip: skip },
+          { $limit: limit },
+          {
+            $replaceRoot: {
+              newRoot: "$entries",
+            },
+          },
+        ],
+        total: [
+          {
+            $project: {
+              count: {
+                $size: "$entries",
+              },
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  return {
+    entries: result[0]?.entries ?? [],
+    total: result[0]?.total?.[0]?.count ?? 0,
+  };
+};
+
 tariffSchema.statics.findPrice = async function (
   companyId: string,
   wilayaFrom: number,
@@ -154,7 +218,7 @@ tariffSchema.statics.findPrice = async function (
 
   const doc = await this.findOne(
     { companyId, "entries.wilayaA": a, "entries.wilayaB": b },
-    { "entries.$": 1 } 
+    { "entries.$": 1 }
   );
 
   return doc?.entries?.[0] ?? null;
@@ -188,7 +252,7 @@ tariffSchema.statics.setPrice = async function (
 
   if (updated) return updated;
 
-  
+
   return this.findOneAndUpdate(
     { companyId },
     {

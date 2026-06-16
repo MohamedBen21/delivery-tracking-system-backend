@@ -14,10 +14,14 @@ import {
   trackPackage,
   updateMeFreelancer,
 } from "../controllers/freelancer.controller";
+import { getAllFreelancersAdmin } from "../controllers/supervisor.controller";
 
 const freelancerRouter = Router();
 
 const isFreelancer = [isAuthenticated, authorizeRoles("freelancer")];
+
+
+freelancerRouter.get("/", isAuthenticated, authorizeRoles("admin", "manager"), getAllFreelancersAdmin)
 
 
 freelancerRouter.get("/me", isFreelancer, getMeFreelancer);

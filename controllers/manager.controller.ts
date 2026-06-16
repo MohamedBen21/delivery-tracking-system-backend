@@ -22,6 +22,7 @@ import TransporterModel from "../models/transporter.model";
 import { sendToken } from "../utils/Token.util";
 import RouteModel from "../models/route.model";
 import { hanxin } from "bwip-js/node";
+import { totalmem } from "node:os";
 
 type DashboardRange = "7d" | "30d" | "12m";
 
@@ -462,7 +463,7 @@ export const createCompany = catchAsyncError(
       return next(error);
 
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -669,7 +670,7 @@ export const updateCompany = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -768,7 +769,7 @@ export const toggleBlockCompany = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -897,7 +898,7 @@ export const getMyCompany = catchAsyncError(
       data: {
         company: {
           ...company,
-          branches, 
+          branches,
           branchCount: branches.length,
         },
 
@@ -928,15 +929,34 @@ export const getMyCompany = catchAsyncError(
 
 export const getAllCompanies = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+    const { pageSize = 10, pageNumber = 1, search } = req.query;
     try {
-      const companies = await CompanyModel.find()
+      const count = await CompanyModel.countDocuments({
+        $or: [
+          { name: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } }
+        ]
+      });
+      const companies = await CompanyModel.find({
+        $or: [
+          { name: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } }
+        ]
+      })
         .populate("userId", "firstName lastName email phone")
         .sort({ createdAt: -1 })
+        .limit(Number(pageSize))
+        .skip((Number(pageNumber) - 1) * Number(pageSize))
         .lean();
 
       return res.status(200).json({
         success: true,
         data: companies,
+        pagination: {
+          pageSize: Number(pageSize),
+          pageNumber: Number(pageNumber),
+          totalPages: Math.ceil(count / Number(pageSize)),
+        },
       });
     } catch (error: any) {
       return next(
@@ -1329,7 +1349,7 @@ export const createBranch = catchAsyncError(
         try {
           await session.abortTransaction();
         } catch (abortErr: any) {
-          
+
           if (!abortErr.message?.includes('no transaction')) {
             console.error('Failed to abort transaction:', abortErr);
           }
@@ -1533,7 +1553,7 @@ export const updateBranch = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();;
@@ -1651,7 +1671,7 @@ export const toggleBlockBranch = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -1832,7 +1852,7 @@ export const switchBranchHub = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -1895,6 +1915,8 @@ export const getMyBranches = catchAsyncError(
     const userId = req.user?._id;
     const { companyId } = req.params;
 
+    const { pageNumber, pageSize } = req.query
+
     if (!userId) {
       return next(
         new ErrorHandler("Unauthorized, you are not authenticated.", 401),
@@ -1943,14 +1965,23 @@ export const getMyBranches = catchAsyncError(
       ];
     }
 
+    const count = await BranchModel.countDocuments(branchQuery);
+
     const branches = await BranchModel.find(branchQuery)
       .sort({ createdAt: -1 })
+      .skip((Number(pageNumber) - 1) * Number(pageSize))
+      .limit(Number(pageSize))
       .lean();
 
     return res.status(200).json({
       success: true,
       count: branches.length,
       data: branches,
+      pagination: {
+        pageSize: Number(pageSize),
+        pageNumber: Number(pageNumber),
+        totalPages: Math.ceil(count / Number(pageSize)),
+      },
     });
   },
 );
@@ -2148,7 +2179,7 @@ export const createSupervisor = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2310,7 +2341,7 @@ export const updateSupervisor = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2431,7 +2462,7 @@ export const toggleBlockSupervisor = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2500,6 +2531,7 @@ export const getMySupervisors = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const managerId = req.user?._id;
     const { companyId } = req.params;
+    const { pageNumber, pageSize } = req.query
 
     if (!managerId) {
       return next(
@@ -2537,7 +2569,11 @@ export const getMySupervisors = catchAsyncError(
 
     const { search } = req.query;
 
+    const count = await SupervisorModel.countDocuments(supervisorQuery);
+
     const supervisors = await SupervisorModel.find(supervisorQuery)
+      .skip((Number(pageNumber) - 1) * Number(pageSize))
+      .limit(Number(pageSize))
       .populate({
         path: "userId",
         select: "firstName lastName email phone imageUrl",
@@ -2557,14 +2593,17 @@ export const getMySupervisors = catchAsyncError(
       .sort({ createdAt: -1 })
       .lean();
 
-    const filtered = search
-      ? supervisors.filter((s) => s.userId !== null)
-      : supervisors;
 
     return res.status(200).json({
       success: true,
-      count: filtered.length,
-      data: filtered,
+      count: supervisors.length,
+      data: supervisors,
+      pagination: {
+        pageSize: Number(pageSize),
+        pageNumber: Number(pageNumber),
+        totalPages: Math.ceil(count / Number(pageSize)),
+      },
+
     });
   },
 );
@@ -2741,63 +2780,63 @@ export const getMyTariffs = catchAsyncError(
       }).lean();
 
       if (!manager?.companyId) {
-        return next(new ErrorHandler("Manager profile not found or has no company.", 404));
-      }
-
-      const tariff = await TariffModel.findByCompany(manager.companyId.toString());
-
-      if (!tariff) {
-        return res.status(200).json({
-          success: true,
-          companyId: manager.companyId,
-          lastUpdated: null,
-          total: 0,
-          tariffs: [],
-        });
-      }
-
-      let tariffs = (tariff.entries ?? []).map(e => ({
-        from: { id: e.wilayaA, name: wilayaName(e.wilayaA) },
-        to: { id: e.wilayaB, name: wilayaName(e.wilayaB) },
-        domicile: e.domicile,   
-        stopdesk: e.stopdesk,   
-      }));
-
-
-      if (req.query.search) {
-        const search = (req.query.search as string).toLowerCase();
-        tariffs = tariffs.filter(
-          t =>
-            t.from.name.toLowerCase().includes(search) ||
-            t.to.name.toLowerCase().includes(search),
+        return next(
+          new ErrorHandler(
+            "Manager profile not found or has no company.",
+            404
+          )
         );
       }
 
+      const page = Math.max(
+        1,
+        parseInt(req.query.pageNumber as string) || 1
+      );
 
-      tariffs.sort((a, b) => a.from.id - b.from.id || a.to.id - b.to.id);
+      const limit = Math.min(
+        200,
+        Math.max(1, parseInt(req.query.pageSize as string) || 50)
+      );
 
+      const { entries, total } = await TariffModel.getCompanyTariffs(
+        manager.companyId.toString(),
+        page,
+        limit
+      );
 
-      const page = Math.max(1, parseInt(req.query.page as string) || 1);
-      const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string) || 100));
-      const total = tariffs.length;
-      const paginated = tariffs.slice((page - 1) * limit, page * limit);
+      const tariffs = entries.map((e) => ({
+        from: {
+          id: e.wilayaA,
+          name: wilayaName(e.wilayaA),
+        },
+        to: {
+          id: e.wilayaB,
+          name: wilayaName(e.wilayaB),
+        },
+        domicile: e.domicile,
+        stopdesk: e.stopdesk,
+      }));
 
       return res.status(200).json({
         success: true,
-        companyId: tariff.companyId,
-        tariffs: paginated,
+        companyId: manager.companyId,
+        tariffs,
         pagination: {
           total,
-          page,
-          pages: Math.ceil(total / limit),
-          hasMore: page * limit < total,
+          pageNumber: page,
+          pageSize: limit,
+          totalPages: Math.ceil(total / limit),
         },
       });
-
     } catch (error: any) {
-      return next(new ErrorHandler(error.message || "Error fetching tariffs.", 500));
+      return next(
+        new ErrorHandler(
+          error.message || "Error fetching tariffs.",
+          500
+        )
+      );
     }
-  },
+  }
 );
 
 
@@ -4107,14 +4146,14 @@ export const getManagerAnalytics = catchAsyncError(
         PackageModel.countDocuments({ companyId: companyObjectId, createdAt: { $gte: timeline.previousStart, $lt: timeline.previousEnd } }),
 
         PackageModel.countDocuments({ companyId: companyObjectId, deliveredAt: { $gte: timeline.currentStart, $lt: timeline.currentEnd } }),
-  
+
         PackageModel.countDocuments({ companyId: companyObjectId, deliveredAt: { $gte: timeline.previousStart, $lt: timeline.previousEnd } }),
 
         PaymentModel.aggregate([
           { $match: { companyId: companyObjectId, collectedAt: { $gte: timeline.currentStart, $lt: timeline.currentEnd }, status: { $in: ["collected", "settled"] } } },
           { $group: { _id: { $dateToString: { format: timeline.bucketFormat, date: "$collectedAt" } }, revenue: { $sum: "$amount" } } },
         ]),
-   
+
         PaymentModel.aggregate([
           { $match: { companyId: companyObjectId, collectedAt: { $gte: timeline.previousStart, $lt: timeline.previousEnd }, status: { $in: ["collected", "settled"] } } },
           { $group: { _id: { $dateToString: { format: timeline.bucketFormat, date: "$collectedAt" } }, revenue: { $sum: "$amount" } } },
@@ -4244,25 +4283,25 @@ export const getManagerAnalytics = catchAsyncError(
       }
 
       const [
-        currentRevenueTotalRows,    
-        previousRevenueTotalRows,   
-        currentPackageTotal,        
-        previousPackageTotal,       
-        currentDeliveredTotal,      
-        previousDeliveredTotal,     
-        currentRevenueSeriesRows,   
-        previousRevenueSeriesRows,  
-        currentPackageSeriesRows,  
-        previousPackageSeriesRows,  
-        currentOperationalRows,     
-        currentLifecycleSummaryRows, 
-        currentFinancialRows,       
-        currentWeekdayRows,         
-        currentHourRows,            
-        currentDeliveredTimingRows, 
-        dailyRevenueRows,           
-        weeklyRevenueRows,          
-        monthlyRevenueRows,         
+        currentRevenueTotalRows,
+        previousRevenueTotalRows,
+        currentPackageTotal,
+        previousPackageTotal,
+        currentDeliveredTotal,
+        previousDeliveredTotal,
+        currentRevenueSeriesRows,
+        previousRevenueSeriesRows,
+        currentPackageSeriesRows,
+        previousPackageSeriesRows,
+        currentOperationalRows,
+        currentLifecycleSummaryRows,
+        currentFinancialRows,
+        currentWeekdayRows,
+        currentHourRows,
+        currentDeliveredTimingRows,
+        dailyRevenueRows,
+        weeklyRevenueRows,
+        monthlyRevenueRows,
       ] = results as any;
 
       const revenueMap = new Map<string, number>(
@@ -4679,7 +4718,7 @@ export const upsertTariff = catchAsyncError(
       return next(error);
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -4794,7 +4833,7 @@ export const bulkUpsertTariffs = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -4875,7 +4914,7 @@ export const deleteTariff = catchAsyncError(
     } catch (error: any) {
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
