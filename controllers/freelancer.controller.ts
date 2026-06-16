@@ -1364,9 +1364,7 @@ export const createPackage = catchAsyncError(
 
 
 
-      const initialStatus: PackageStatus = "pending";
-
-
+      const initialStatus: PackageStatus = createdByRole === "freelancer" ? "pending" : 'at_origin_branch';
 
       const destination = {
         recipientName: recipientName.trim(),

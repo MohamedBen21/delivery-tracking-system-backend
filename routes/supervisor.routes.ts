@@ -104,7 +104,7 @@ supervisorRouter.get("/branches/:branchId/packages/by-status", ...supOrAdmin, ge
 supervisorRouter.get("/branches/:branchId/packages/by-branch-role", ...supOrAdmin, getPackagesByBranch);
 supervisorRouter.get("/branches/:branchId/packages/by-sender", ...supOrAdmin, getPackagesBySender);
 supervisorRouter.get("/branches/:branchId/packages/by-receiver", ...supOrAdmin, getPackagesByReceiver);
-supervisorRouter.get("/branches/:branchId/packages/:packageId", authorizeRoles("supervisor","freelancer"), getPackage);
+supervisorRouter.get("/branches/:branchId/packages/:packageId", authorizeRoles("supervisor", "freelancer"), getPackage);
 supervisorRouter.patch("/branches/:branchId/packages/:packageId", ...supOrAdmin, updatePackage);
 supervisorRouter.patch(
   "/branches/:branchId/packages/:packageId/toggle-cancel",
@@ -142,7 +142,7 @@ supervisorRouter.patch(
 
 supervisorRouter.get("/packages/search", isAuthenticated, searchPackages);
 // supervisorRouter.get("/packages", isAuthenticated, authorizeRoles("deliverer", "transporter", "cashier"), getPackagesPaginated);
-supervisorRouter.get("/packages", isAuthenticated, authorizeRoles("deliverer", "transporter", "cashier"), getPackagesPaginatedFromRoute);
+supervisorRouter.get("/packages", isAuthenticated, authorizeRoles("deliverer", "transporter", "cashier", 'supervisor'), getPackagesPaginatedFromRoute);
 
 
 // Role-based middleware for supervisor, manager, or admin
@@ -303,7 +303,7 @@ supervisorRouter.post(
   completeDeliveryByQrCode
 );
 
-supervisorRouter.get("/deliveries/search", isAuthenticated,authorizeRoles("deliverer"), searchDeliveries);
+supervisorRouter.get("/deliveries/search", isAuthenticated, authorizeRoles("deliverer"), searchDeliveries);
 
 supervisorRouter.get(
   "/transportation/today",
