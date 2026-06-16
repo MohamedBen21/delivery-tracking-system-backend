@@ -57,6 +57,8 @@ import {
   getManifestsHistory,
   getTransportationsHistory,
   getOrCreateTodayTransportation,
+  arriveAtStopByQrCode,
+  startRouteByQrCode,
 } from "../controllers/supervisor.controller";
 
 const supervisorRouter = Router();
@@ -324,6 +326,21 @@ supervisorRouter.get(
   isAuthenticated,
   authorizeRoles( "transporter"),
   getManifestsHistory
+);
+
+
+supervisorRouter.post(
+  "/transporter/start-route-qr",
+  isAuthenticated,
+  authorizeRoles("transporter"),
+  startRouteByQrCode
+);
+
+supervisorRouter.post(
+  "/transporter/arrive-at-stop-qr",
+  isAuthenticated,
+  authorizeRoles("transporter"),
+  arriveAtStopByQrCode
 );
 
 export default supervisorRouter;
