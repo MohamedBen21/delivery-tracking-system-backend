@@ -467,7 +467,7 @@ export const updateDeliverer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -588,7 +588,7 @@ export const toggleBlockDeliverer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -653,6 +653,8 @@ export const getMyDeliverers = catchAsyncError(
     const supervisorUserId = req.user?._id;
     const { branchId } = req.params;
 
+    const { pageSize = 10, pageNumber = 1 } = req.query
+
     if (!supervisorUserId) {
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
@@ -715,15 +717,25 @@ export const getMyDeliverers = catchAsyncError(
     }
 
     const deliverers = await DelivererModel.find(delivererQuery)
+      .skip((Number(pageNumber) - 1) * Number(pageSize))
+      .limit(Number(pageSize))
       .populate("userId", "firstName lastName email phone imageUrl role status")
       .populate("branchId", "name code address status")
       .sort({ createdAt: -1 })
       .lean();
 
+    const count = await DelivererModel.countDocuments(delivererQuery);
+
+
     return res.status(200).json({
       success: true,
-      count: deliverers.length,
+      count,
       data: deliverers,
+      pagination: {
+        pageSize: Number(pageSize),
+        pageNumber: Number(pageNumber),
+        totalPages: Math.ceil(count / Number(pageSize)),
+      }
     });
   }
 );
@@ -956,7 +968,7 @@ export const createTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -1140,7 +1152,7 @@ export const updateTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -1276,7 +1288,7 @@ export const toggleBlockTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2120,7 +2132,7 @@ export const createPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2373,7 +2385,7 @@ export const updatePackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2534,7 +2546,7 @@ export const toggleCancelPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2862,7 +2874,7 @@ export const addPackageIssue = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -3015,7 +3027,7 @@ export const resolvePackageIssue = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -3244,7 +3256,7 @@ export const createFreelancer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -3400,7 +3412,7 @@ export const updateFreelancer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -3519,7 +3531,7 @@ export const toggleBlockFreelancer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -3579,11 +3591,9 @@ export const getFreelancer = catchAsyncError(
 
 export const getMyFreelancers = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-    console.log("GET MY FREELANCERS CALLED");
+    const { pageNumber = "1", pageSize = "10" } = req.query;
     const userId = req.user?._id;
     const { branchId } = req.params;
-    console.log("User ID:", userId);
-    console.log("Branch ID:", branchId);
 
     if (!userId) {
       return next(
@@ -3624,8 +3634,6 @@ export const getMyFreelancers = catchAsyncError(
       return next(new ErrorHandler("Branch not found", 404));
     }
 
-    console.log("Cashier found:", cashier);
-
     const hasAccess =
       !!manager ||
       (!!supervisor && supervisor.isActive) ||
@@ -3650,13 +3658,19 @@ export const getMyFreelancers = catchAsyncError(
       freelancerQuery.status = status;
     }
 
+    console.log("Status filter:", freelancerQuery.status);
+
     if (businessType && typeof businessType === "string") {
       freelancerQuery.businessType = businessType;
     }
 
+    const count = await FreelancerModel.countDocuments(freelancerQuery);
+
     const freelancers = await FreelancerModel.find(
       freelancerQuery
     )
+      .skip((Number(pageNumber) - 1) * Number(pageSize))
+      .limit(Number(pageSize))
       .populate({
         path: "userId",
         select:
@@ -3711,10 +3725,107 @@ export const getMyFreelancers = catchAsyncError(
       success: true,
       count: filtered.length,
       data: filtered,
+      pagination: {
+        pageSize: Number(pageSize),
+        pageNumber: Number(pageNumber),
+        totalPages: Math.ceil(count / Number(pageSize))
+      }
     });
   }
 );
 
+
+
+export const getAllFreelancersAdmin = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const {
+      pageNumber = "1",
+      pageSize = "10",
+      companyId,
+      status,
+      businessType,
+      search,
+    } = req.query;
+
+    const skip = (Number(pageNumber) - 1) * Number(pageSize);
+
+    // -------------------------
+    // BASE QUERY
+    // -------------------------
+    const freelancerQuery: mongoose.FilterQuery<any> = {};
+
+    // 🔥 MAIN FILTER: companyId
+    if (companyId && mongoose.Types.ObjectId.isValid(companyId as string)) {
+      freelancerQuery.companyId = companyId;
+    }
+
+    if (status && typeof status === "string") {
+      freelancerQuery.status = status;
+    }
+    console.log("Status filter:", freelancerQuery.status);
+
+    if (businessType && typeof businessType === "string") {
+      freelancerQuery.businessType = businessType;
+    }
+
+    // -------------------------
+    // USER SEARCH FILTER
+    // -------------------------
+    const userMatch =
+      search && typeof search === "string"
+        ? {
+          $or: [
+            { firstName: { $regex: search, $options: "i" } },
+            { lastName: { $regex: search, $options: "i" } },
+            { email: { $regex: search, $options: "i" } },
+            { phone: { $regex: search, $options: "i" } },
+          ],
+        }
+        : undefined;
+
+    // -------------------------
+    // QUERY
+    // -------------------------
+    const [freelancers, total] = await Promise.all([
+      FreelancerModel.find(freelancerQuery)
+        .populate({
+          path: "userId",
+          select:
+            "firstName lastName email phone imageUrl role status",
+          ...(userMatch ? { match: userMatch } : {}),
+        })
+        .populate({
+          path: "companyId",
+          select: "name email phone status businessType logoUrl",
+        })
+        .populate({
+          path: "defaultOriginBranchId",
+          select: "name code address status",
+        })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(pageSize))
+        .lean(),
+
+      FreelancerModel.countDocuments(freelancerQuery),
+    ]);
+
+    // remove null users when search is used
+    const filtered = search
+      ? freelancers.filter((f) => f.userId !== null)
+      : freelancers;
+
+    return res.status(200).json({
+      success: true,
+      data: filtered,
+      pagination: {
+        pageSize: Number(pageSize),
+        pageNumber: Number(pageNumber),
+        totalPages: Math.ceil(total / Number(pageSize)),
+      },
+    });
+  }
+);
 
 
 
@@ -3879,7 +3990,7 @@ export const assignDeliverer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -4025,7 +4136,7 @@ export const assignTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -4159,7 +4270,7 @@ export const assignFreelancer = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -5717,7 +5828,7 @@ export const cancelPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -6409,14 +6520,14 @@ export const getPackageHistory = catchAsyncError(
       .populate({
         path: "handledBy",
         select: "firstName lastName role",
-        options: { lean: true } 
+        options: { lean: true }
       })
       .populate({
         path: "branchId",
         select: "name code",
         options: { lean: true }
       })
-      .lean(); 
+      .lean();
 
     const total = await PackageHistoryModel.countDocuments(historyMatch);
 
@@ -7188,7 +7299,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -7339,7 +7450,7 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -7591,7 +7702,7 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -7793,7 +7904,7 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -8005,7 +8116,7 @@ export const deliverPackageFail = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -8198,7 +8309,7 @@ export const deliveryReturnPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -8446,7 +8557,7 @@ export const updateRoute = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -9064,7 +9175,7 @@ export const toggleCancelRoute = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -10719,7 +10830,7 @@ export const toggleOnlineStatus = catchAsyncError(
       return res.status(200).json({
         success: true,
         message: `Transporter is now ${transporter.isOnline ? "online" : "offline"}`,
-        isOnline: transporter.isOnline ,
+        isOnline: transporter.isOnline,
       });
     }
 
@@ -11528,7 +11639,7 @@ export const getManifestsPaginated = catchAsyncError(
 
 
             rating: transporter.rating,
-            completionRate: transporter.completionRate, 
+            completionRate: transporter.completionRate,
             todayCompletionRate: transporter.todayCompletionRate,
             efficiencyScore: transporter.efficiencyScore,
 
@@ -12039,33 +12150,35 @@ export const getDeliveryHistory = catchAsyncError(
       if (!delivererUserId) {
         return next(new ErrorHandler("Unauthorized — user not found.", 401));
       }
- 
+
       const deliverer = await DelivererModel.findOne({ userId: delivererUserId }).lean();
       if (!deliverer) {
         return next(new ErrorHandler("Deliverer profile not found.", 404));
       }
- 
+
       const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
       const skip = (page - 1) * limit;
- 
+
       const filter: Record<string, any> = {
         assignedDelivererId: deliverer._id,
       };
- 
-      type PeriodFilter = "today" | "yesterday" | "last7days" | "last30days" | "last6months" | "custom";
- 
-      const period = req.query.period ? (req.query.period as PeriodFilter) : "all";
- 
 
+      type PeriodFilter = "today" | "yesterday" | "last7days" | "last30days" | "last6months" | "custom";
+
+      const period = req.query.period ? (req.query.period as PeriodFilter) : "all";
+
+      // ── Resolve "delivered" date window via PackageHistoryModel ────────────
+      // Maps packageId -> most recent 'delivered' timestamp within the window
+      // (or overall, if period === "all" but we still need it for sorting).
       let deliveredAtByPackageId: Map<string, Date> | null = null;
       let deliveredDateRange: { $gte?: Date; $lte?: Date } | null = null;
- 
+
       if (period !== "all") {
         const now = new Date();
         let startDate: Date;
         let endDate: Date;
- 
+
         switch (period) {
           case "today":
             startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -12073,32 +12186,32 @@ export const getDeliveryHistory = catchAsyncError(
             endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000 - 1);
             deliveredDateRange = { $gte: startDate, $lte: endDate };
             break;
- 
+
           case "yesterday":
             startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
             startDate.setHours(0, 0, 0, 0);
             endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000 - 1);
             deliveredDateRange = { $gte: startDate, $lte: endDate };
             break;
- 
+
           case "last7days":
             startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
             startDate.setHours(0, 0, 0, 0);
             deliveredDateRange = { $gte: startDate };
             break;
- 
+
           case "last30days":
             startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
             startDate.setHours(0, 0, 0, 0);
             deliveredDateRange = { $gte: startDate };
             break;
- 
+
           case "last6months":
             startDate = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
             startDate.setHours(0, 0, 0, 0);
             deliveredDateRange = { $gte: startDate };
             break;
- 
+
           case "custom":
             if (req.query.startDate && req.query.endDate) {
               const customStart = new Date(req.query.startDate as string);
@@ -12108,20 +12221,20 @@ export const getDeliveryHistory = catchAsyncError(
             }
             break;
         }
- 
+
         if (deliveredDateRange) {
           const historyMatch: Record<string, any> = {
             status: "delivered",
             timestamp: deliveredDateRange,
           };
- 
+
           const deliveredEntries = await PackageHistoryModel.find(historyMatch)
             .select("packageId timestamp")
             .lean();
- 
+
           deliveredAtByPackageId = new Map();
           const deliveredPackageIds: mongoose.Types.ObjectId[] = [];
- 
+
           for (const entry of deliveredEntries) {
             const key = entry.packageId.toString();
 
@@ -12131,64 +12244,72 @@ export const getDeliveryHistory = catchAsyncError(
             }
             deliveredPackageIds.push(entry.packageId);
           }
- 
 
+          // Restrict the package query to only packages delivered in this
+          // window. If nothing was delivered in the window, force an
+          // empty result set rather than falling through to "all packages".
           filter._id = { $in: deliveredPackageIds.length > 0 ? deliveredPackageIds : [new mongoose.Types.ObjectId()] };
         }
       }
 
+      // Additional filters - these work independently
       if (req.query.status) {
         filter.status = req.query.status as string;
       }
- 
+
       if (req.query.statuses) {
         filter.status = { $in: (req.query.statuses as string).split(",").map(s => s.trim()) };
       }
- 
+
       if (req.query.deliveryType) {
         filter.deliveryType = req.query.deliveryType as string;
       }
- 
+
       if (req.query.deliveryPriority) {
         filter.deliveryPriority = req.query.deliveryPriority as string;
       }
- 
+
       if (req.query.city) {
         filter["destination.city"] = new RegExp(req.query.city as string, "i");
       }
- 
+
       if (req.query.search) {
         filter.trackingNumber = new RegExp(req.query.search as string, "i");
       }
- 
+
       const minWeight = req.query.minWeight ? parseFloat(req.query.minWeight as string) : undefined;
       const maxWeight = req.query.maxWeight ? parseFloat(req.query.maxWeight as string) : undefined;
- 
+
       if (minWeight !== undefined && !isNaN(minWeight)) {
         filter.weight = { ...filter.weight, $gte: minWeight };
       }
- 
+
       if (maxWeight !== undefined && !isNaN(maxWeight)) {
         filter.weight = { ...filter.weight, $lte: maxWeight };
       }
- 
 
+      // ── Sorting ──────────────────────────────────────────────────────────
+      // "deliveredAt" is not a real field on IPackage, so it can't be passed
+      // to Mongo's .sort(). If requested (or as the default), we fetch
+      // unsorted/paginated by another stable field, then re-sort the page
+      // in-memory using deliveredAtByPackageId (loaded above if period !==
+      // "all"; loaded on-demand below otherwise).
       const sortBy = (req.query.sortBy as string) || "deliveredAt";
       const order = req.query.order === "desc" ? -1 : 1;
- 
+
       const dbSortMap: Record<string, any> = {
         createdAt: { createdAt: order },
         weight: { weight: order },
         totalPrice: { totalPrice: order },
         attemptCount: { attemptCount: order },
       };
- 
+
       const sortingByDeliveredAt = sortBy === "deliveredAt";
 
       const sort = sortingByDeliveredAt
         ? { createdAt: -1 }
         : (dbSortMap[sortBy] || { createdAt: -1 });
- 
+
       const [total, packagesRaw] = await Promise.all([
         PackageModel.countDocuments(filter),
         PackageModel.find(filter)
@@ -12199,10 +12320,12 @@ export const getDeliveryHistory = catchAsyncError(
           .limit(limit)
           .lean({ virtuals: true }),
       ]);
- 
-      let packages = packagesRaw;
- 
 
+      let packages = packagesRaw;
+
+      // If sorting by deliveredAt and we don't already have the map (i.e.
+      // period === "all"), fetch delivered timestamps just for this page's
+      // packageIds.
       if (sortingByDeliveredAt) {
         if (!deliveredAtByPackageId) {
           deliveredAtByPackageId = new Map();
@@ -12214,7 +12337,7 @@ export const getDeliveryHistory = catchAsyncError(
             })
               .select("packageId timestamp")
               .lean();
- 
+
             for (const entry of entries) {
               const key = entry.packageId.toString();
               const existing = deliveredAtByPackageId.get(key);
@@ -12224,51 +12347,51 @@ export const getDeliveryHistory = catchAsyncError(
             }
           }
         }
- 
+
         packages = [...packages].sort((a: any, b: any) => {
           const aTime = deliveredAtByPackageId!.get(a._id.toString())?.getTime() ?? 0;
           const bTime = deliveredAtByPackageId!.get(b._id.toString())?.getTime() ?? 0;
           return order === -1 ? bTime - aTime : aTime - bTime;
         });
       }
- 
 
+      // ── Stats - Apply the SAME filters as the main query ─────────────────────
       let statsFilter: Record<string, any> = {
         assignedDelivererId: deliverer._id,
       };
- 
 
+      // Apply the same delivered-date-window filter to stats for consistency
       if (period !== "all" && filter._id) {
         statsFilter._id = filter._id;
       }
- 
 
+      // ✅ CRITICAL FIX: Copy all relevant filters from main filter to stats
       if (filter.status) {
         statsFilter.status = filter.status;
       }
- 
+
       if (filter.deliveryType) {
         statsFilter.deliveryType = filter.deliveryType;
       }
- 
+
       if (filter.deliveryPriority) {
         statsFilter.deliveryPriority = filter.deliveryPriority;
       }
- 
+
       if (filter["destination.city"]) {
         statsFilter["destination.city"] = filter["destination.city"];
       }
- 
+
       if (filter.weight) {
         statsFilter.weight = filter.weight;
       }
- 
+
       if (filter.trackingNumber) {
         statsFilter.trackingNumber = filter.trackingNumber;
       }
- 
+
       const allPackagesForStats = await PackageModel.find(statsFilter).lean();
- 
+
       const stats = {
         totalLifetime: allPackagesForStats.length,
         totalDelivered: allPackagesForStats.filter(p => p.status === "delivered").length,
@@ -12287,7 +12410,7 @@ export const getDeliveryHistory = catchAsyncError(
           .filter(p => p.status === "delivered")
           .reduce((sum, p) => sum + (p.totalPrice || 0), 0),
       };
- 
+
       const formattedPackages = packages.map((pkg: any) => ({
         id: pkg._id,
         trackingNumber: pkg.trackingNumber,
@@ -12296,7 +12419,7 @@ export const getDeliveryHistory = catchAsyncError(
         isFragile: pkg.isFragile,
         deliveryType: pkg.deliveryType,
         deliveryPriority: pkg.deliveryPriority,
- 
+
         destination: {
           recipientName: pkg.destination?.recipientName,
           recipientPhone: pkg.destination?.recipientPhone,
@@ -12305,44 +12428,44 @@ export const getDeliveryHistory = catchAsyncError(
           state: pkg.destination?.state,
           coordinates: pkg.deliveryType === "home" && pkg.destination.location?.coordinates
             ? {
-                type: pkg.destination.location.type || "Point",
-                coordinates: pkg.destination.location.coordinates,
-              }
+              type: pkg.destination.location.type || "Point",
+              coordinates: pkg.destination.location.coordinates,
+            }
             : null,
         },
- 
+
         description: pkg.description ?? null,
         weight: pkg.weight,
         totalPrice: pkg.totalPrice,
         paymentStatus: pkg.paymentStatus,
         paymentMethod: pkg.paymentMethod ?? null,
- 
+
         estimatedDeliveryTime: pkg.estimatedDeliveryTime ?? null,
         deliveredAt: deliveredAtByPackageId?.get(pkg._id.toString()) ?? null,
         isOverdue: (pkg as any).isOverdue ?? false,
- 
+
         attemptCount: pkg.attemptCount,
         maxAttempts: pkg.maxAttempts,
         nextAttemptDate: pkg.nextAttemptDate ?? null,
- 
+
         currentRoute: pkg.currentRouteId
           ? { id: pkg.currentRouteId._id, routeNumber: pkg.currentRouteId.routeNumber, status: pkg.currentRouteId.status }
           : null,
         currentBranch: pkg.currentBranchId
           ? { id: pkg.currentBranchId._id, name: pkg.currentBranchId.name, code: pkg.currentBranchId.code }
           : null,
- 
+
         returnInfo: pkg.returnInfo?.isReturn
           ? { reason: pkg.returnInfo.reason, returnDate: pkg.returnInfo.returnDate }
           : null,
- 
+
         deliveryProgress: (pkg as any).deliveryProgress,
         needsAttention: (pkg as any).needsAttention,
- 
+
         createdAt: pkg.createdAt,
         updatedAt: pkg.updatedAt,
       }));
- 
+
       res.status(200).json({
         success: true,
         data: {
@@ -13003,7 +13126,7 @@ export const viewCashReturnQrPage = catchAsyncError(
         todayEarnings: session.todayEarnings,
         todayCollected: session.todayCollected,
         expiresAt: session.expiresAt,
-        code, 
+        code,
       },
     });
   });
@@ -13254,7 +13377,7 @@ export const generateStopQr = catchAsyncError(
     } catch (error: any) {
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -13484,7 +13607,7 @@ export const scanStopQr = catchAsyncError(
     } catch (error: any) {
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -13898,7 +14021,7 @@ async function assertSupervisorOrAdmin(
     SupervisorModel.findOne({ userId: requestingUserId, branchId }).session(session),
   ]);
 
-  if (role === "admin") return; 
+  if (role === "admin") return;
 
   if (!supervisor || !supervisor.isActive) {
     throw new ErrorHandler("You are not an active supervisor of this branch", 403);
@@ -13909,8 +14032,12 @@ async function assertSupervisorOrAdmin(
   }
 }
 
-
-async function generateEmployeeCode(
+/**
+ * Generates an auto-incrementing-style employee code that is unique in the DB.
+ * Format: PREFIX-BRANCHCODE-NNNNNN (e.g. CSH-ALG-000042)
+ * Falls back to a random suffix after 20 collision attempts.
+ */
+export async function generateEmployeeCode(
   prefix: "CSH" | "LDR",
   branchCode: string,
   Model: typeof CashierModel | typeof LoaderModel
@@ -13919,7 +14046,7 @@ async function generateEmployeeCode(
 
 
   for (let attempt = 0; attempt < 20; attempt++) {
-    const random = Math.floor(100000 + Math.random() * 900000); 
+    const random = Math.floor(100000 + Math.random() * 900000);
     const code = `${prefix}-${tag}-${random}`;
 
     const existing = await (Model as any).findOne({ employeeCode: code }).lean();
@@ -14103,7 +14230,7 @@ export const createCashier = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -14241,7 +14368,7 @@ export const updateCashier = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -14353,7 +14480,7 @@ export const toggleBlockCashier = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -14691,7 +14818,7 @@ export const createLoader = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -14850,7 +14977,7 @@ export const updateLoader = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -14962,7 +15089,7 @@ export const toggleBlockLoader = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -16060,7 +16187,7 @@ export const completeDeliveryByQrCode = catchAsyncError(
       }
 
       const delivererSocketId = socketService.getSocketId(delivererUserId.toString(), "deliverer");
-      
+
       if (!delivererSocketId) {
         return next(new ErrorHandler("Deliverer is not connected to socket. Please check your connection.", 400));
       }
@@ -16076,7 +16203,7 @@ export const completeDeliveryByQrCode = catchAsyncError(
         qrCode: code,
         routeId: route._id.toString(),
         stopIndex,
-        coordinates, 
+        coordinates,
         notes: notes || "",
       });
 
@@ -16094,7 +16221,7 @@ export const completeDeliveryByQrCode = catchAsyncError(
       });
     } catch (error: any) {
       console.error("[HTTP Bridge] Error:", error);
-      
+
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -16105,7 +16232,7 @@ export const completeDeliveryByQrCode = catchAsyncError(
           ),
         );
       }
-      
+
       return next(new ErrorHandler(error.message || "Failed to process QR scan.", 500));
     }
   }
@@ -16193,7 +16320,7 @@ export const startRouteByQrCode = catchAsyncError(
       }
 
       const transporterSocketId = socketService.getSocketId(transporterUserId.toString(), "transporter");
-      
+
       if (!transporterSocketId) {
         return next(new ErrorHandler("Transporter is not connected to socket. Please check your connection.", 400));
       }
@@ -16307,7 +16434,7 @@ export const arriveAtStopByQrCode = catchAsyncError(
       }
 
       const transporterSocketId = socketService.getSocketId(transporterUserId.toString(), "transporter");
-      
+
       if (!transporterSocketId) {
         return next(new ErrorHandler("Transporter is not connected to socket. Please check your connection.", 400));
       }
@@ -16572,7 +16699,7 @@ export const searchDeliveries = catchAsyncError(
         }
       }
 
- 
+
       const VALID_TYPES: PackageType[] = [
         "document", "parcel", "fragile", "heavy",
         "perishable", "electronic", "clothing",
@@ -16677,7 +16804,7 @@ export const searchDeliveries = catchAsyncError(
         };
       }
 
- 
+
       if (req.query.minWeight || req.query.maxWeight) {
         matchStage.weight = {
           ...(req.query.minWeight && { $gte: parseFloat(req.query.minWeight as string) }),
@@ -16782,28 +16909,28 @@ export const searchDeliveries = catchAsyncError(
 
         ...(rawSearch
           ? [
-              {
-                $match: {
-                  $or: [
-                    { trackingNumber: { $regex: rawSearch, $options: "i" } },
-                    { "destination.recipientName": { $regex: rawSearch, $options: "i" } },
-                    { "destination.recipientPhone": { $regex: rawSearch, $options: "i" } },
-                    { "destination.alternativePhone": { $regex: rawSearch, $options: "i" } },
+            {
+              $match: {
+                $or: [
+                  { trackingNumber: { $regex: rawSearch, $options: "i" } },
+                  { "destination.recipientName": { $regex: rawSearch, $options: "i" } },
+                  { "destination.recipientPhone": { $regex: rawSearch, $options: "i" } },
+                  { "destination.alternativePhone": { $regex: rawSearch, $options: "i" } },
+                ],
+              },
+            },
+            {
+              $addFields: {
+                _searchScore: {
+                  $add: [
+                    { $cond: [{ $regexMatch: { input: "$trackingNumber", regex: `^${rawSearch}$`, options: "i" } }, 10, 0] },
+                    { $cond: [{ $regexMatch: { input: "$trackingNumber", regex: `^${rawSearch}`, options: "i" } }, 5, 0] },
+                    { $cond: [{ $regexMatch: { input: { $toLower: "$destination.recipientName" }, regex: `^${rawSearch.toLowerCase()}` } }, 3, 0] },
                   ],
                 },
               },
-              {
-                $addFields: {
-                  _searchScore: {
-                    $add: [
-                      { $cond: [{ $regexMatch: { input: "$trackingNumber", regex: `^${rawSearch}$`, options: "i" } }, 10, 0] },
-                      { $cond: [{ $regexMatch: { input: "$trackingNumber", regex: `^${rawSearch}`, options: "i" } }, 5, 0] },
-                      { $cond: [{ $regexMatch: { input: { $toLower: "$destination.recipientName" }, regex: `^${rawSearch.toLowerCase()}` } }, 3, 0] },
-                    ],
-                  },
-                },
-              },
-            ]
+            },
+          ]
           : [{ $addFields: { _searchScore: 0 } }]),
 
 
@@ -16866,9 +16993,9 @@ export const searchDeliveries = catchAsyncError(
           notes: pkg.destination.notes ?? null,
           coordinates: pkg.deliveryType === "home" && pkg.destination.location?.coordinates
             ? {
-                type: pkg.destination.location.type || "Point",
-                coordinates: pkg.destination.location.coordinates,
-              }
+              type: pkg.destination.location.type || "Point",
+              coordinates: pkg.destination.location.coordinates,
+            }
             : null,
         },
 
@@ -17077,7 +17204,7 @@ export const getOrCreateTodayTransportation = catchAsyncError(
               manifestCount: manifestIds.length,
               packageCount: totalPackages,
               totalWeight,
-              totalVolume: 0, 
+              totalVolume: 0,
               assignedTransporterId: todaysRoute.assignedTransporterId,
               assignedVehicleId: todaysRoute.assignedVehicleId,
               status: "pending",
@@ -17357,21 +17484,21 @@ export const getTransportationsHistory = catchAsyncError(
     if (needsAdvancedFiltering) {
       const allTransportations = await TransportationModel.find(query).lean();
       const routeIds = allTransportations.map(t => t.sourceRouteId).filter(id => id);
-      
+
       const routes = await RouteModel.find(
         { _id: { $in: routeIds } },
         { status: 1, originBranchId: 1, destinationBranchId: 1, stops: 1, name: 1, code: 1 }
       ).lean();
-      
+
       const routeMap = new Map();
       routes.forEach(route => {
         routeMap.set(route._id.toString(), route);
       });
-      
+
       const filtered = allTransportations.filter(t => {
         const route = routeMap.get(t.sourceRouteId?.toString());
         if (!route) return false;
-        
+
         if (routeStatusFilter && route.status !== routeStatusFilter) return false;
         if (sourceBranchId && route.originBranchId?.toString() !== sourceBranchId) return false;
         if (destinationBranchId) {
@@ -17380,7 +17507,7 @@ export const getTransportationsHistory = catchAsyncError(
         }
         return true;
       });
-      
+
       total = filtered.length;
       transportations = filtered.slice(skip, skip + limit);
       transportations = transportations.map(t => ({
@@ -17404,13 +17531,13 @@ export const getTransportationsHistory = catchAsyncError(
     const allTransporterTransportations = await TransportationModel.find({
       assignedTransporterId: transporterId,
     }).lean();
-    
+
     const completedTransportations = allTransporterTransportations.filter(t => t.status === 'completed');
     const cancelledTransportations = allTransporterTransportations.filter(t => t.status === 'cancelled');
     const inTransitTransportations = allTransporterTransportations.filter(t => t.status === 'in_transit');
     const arrivedTransportations = allTransporterTransportations.filter(t => t.status === 'arrived');
     const pendingTransportations = allTransporterTransportations.filter(t => t.status === 'pending');
-    
+
     const completedWithTimes = completedTransportations.filter(t => t.departedAt && t.actualDeliveryTime);
     const totalDeliveryMinutes = completedWithTimes.reduce((sum, t) => {
       const minutes = Math.round((t.actualDeliveryTime!.getTime() - t.departedAt!.getTime()) / 60000);
@@ -17419,11 +17546,11 @@ export const getTransportationsHistory = catchAsyncError(
     const averageDeliveryTimeMinutes = completedWithTimes.length > 0
       ? Math.round(totalDeliveryMinutes / completedWithTimes.length)
       : null;
-    
+
     const totalWeightTransported = completedTransportations.reduce((sum, t) => sum + (t.totalWeight || 0), 0);
     const totalManifestsTransported = completedTransportations.reduce((sum, t) => sum + (t.manifestCount || 0), 0);
     const totalPackagesTransported = completedTransportations.reduce((sum, t) => sum + (t.packageCount || 0), 0);
-    
+
 
     const statusBreakdown: Record<TransportationStatus, number> = {
       pending: pendingTransportations.length,
@@ -17653,7 +17780,7 @@ export const getManifestsHistory = catchAsyncError(
         }
       }
 
- 
+
       if (req.query.minWeight || req.query.maxWeight) {
         const min = req.query.minWeight ? parseFloat(req.query.minWeight as string) : null;
         const max = req.query.maxWeight ? parseFloat(req.query.maxWeight as string) : null;
@@ -17700,7 +17827,7 @@ export const getManifestsHistory = catchAsyncError(
         };
       }
 
- 
+
       if (req.query.originBranchId) {
         if (!isValidId(req.query.originBranchId as string)) {
           return next(new ErrorHandler("Invalid originBranchId.", 400));
@@ -17778,7 +17905,7 @@ export const getManifestsHistory = catchAsyncError(
         statusBreakdown[m.status]++;
       });
 
-      
+
       const priorityBreakdown: Record<ManifestPriority, number> = {
         standard: 0,
         express: 0,
@@ -17813,20 +17940,20 @@ export const getManifestsHistory = catchAsyncError(
         companyId: m.companyId,
         originBranch: m.originBranchId
           ? {
-              id: m.originBranchId._id,
-              name: m.originBranchId.name,
-              code: m.originBranchId.code,
-              city: m.originBranchId.address?.city,
-            }
+            id: m.originBranchId._id,
+            name: m.originBranchId.name,
+            code: m.originBranchId.code,
+            city: m.originBranchId.address?.city,
+          }
           : null,
         destinationBranch: m.destinationBranchId
           ? {
-              id: m.destinationBranchId._id,
-              name: m.destinationBranchId.name,
-              code: m.destinationBranchId.code,
-              city: m.destinationBranchId.address?.city,
-              coordinates: m.destinationBranchId.location?.coordinates,
-            }
+            id: m.destinationBranchId._id,
+            name: m.destinationBranchId.name,
+            code: m.destinationBranchId.code,
+            city: m.destinationBranchId.address?.city,
+            coordinates: m.destinationBranchId.location?.coordinates,
+          }
           : null,
         status: m.status,
         priority: m.priority,
@@ -17835,36 +17962,36 @@ export const getManifestsHistory = catchAsyncError(
           : null,
         sealInfo: m.sealInfo
           ? {
-              sealedBy: m.sealInfo.sealedBy,
-              sealedAt: m.sealInfo.sealedAt,
-              sealNumber: m.sealInfo.sealNumber,
-              totalWeight: m.sealInfo.totalWeight,
-              packageCount: m.sealInfo.packageCount,
-              notes: m.sealInfo.notes ?? null,
-            }
+            sealedBy: m.sealInfo.sealedBy,
+            sealedAt: m.sealInfo.sealedAt,
+            sealNumber: m.sealInfo.sealNumber,
+            totalWeight: m.sealInfo.totalWeight,
+            packageCount: m.sealInfo.packageCount,
+            notes: m.sealInfo.notes ?? null,
+          }
           : null,
         transportLeg: m.transportLeg
           ? {
-              vehicle: m.transportLeg.vehicleId
-                ? {
-                    id: m.transportLeg.vehicleId._id,
-                    registrationNumber: m.transportLeg.vehicleId.registrationNumber,
-                    type: m.transportLeg.vehicleId.type,
-                  }
-                : null,
-              transporter: m.transportLeg.transporterId
-                ? {
-                    id: m.transportLeg.transporterId._id,
-                    name: m.transportLeg.transporterId.name,
-                    email: m.transportLeg.transporterId.email,
-                    phone: m.transportLeg.transporterId.phone,
-                  }
-                : null,
-              assignedAt: m.transportLeg.assignedAt,
-              departedAt: m.transportLeg.departedAt ?? null,
-              arrivedAt: m.transportLeg.arrivedAt ?? null,
-              estimatedArrival: m.transportLeg.estimatedArrival ?? null,
-            }
+            vehicle: m.transportLeg.vehicleId
+              ? {
+                id: m.transportLeg.vehicleId._id,
+                registrationNumber: m.transportLeg.vehicleId.registrationNumber,
+                type: m.transportLeg.vehicleId.type,
+              }
+              : null,
+            transporter: m.transportLeg.transporterId
+              ? {
+                id: m.transportLeg.transporterId._id,
+                name: m.transportLeg.transporterId.name,
+                email: m.transportLeg.transporterId.email,
+                phone: m.transportLeg.transporterId.phone,
+              }
+              : null,
+            assignedAt: m.transportLeg.assignedAt,
+            departedAt: m.transportLeg.departedAt ?? null,
+            arrivedAt: m.transportLeg.arrivedAt ?? null,
+            estimatedArrival: m.transportLeg.estimatedArrival ?? null,
+          }
           : null,
         totalDeclaredWeight: m.totalDeclaredWeight,
         packageCount: m.packageCount,
@@ -17882,17 +18009,17 @@ export const getManifestsHistory = catchAsyncError(
         hasDiscrepancy: m.hasDiscrepancy,
         discrepancy: m.discrepancy
           ? {
-              reportedBy: m.discrepancy.reportedBy,
-              reportedAt: m.discrepancy.reportedAt,
-              expectedCount: m.discrepancy.expectedCount,
-              actualCount: m.discrepancy.actualCount,
-              missingPackageIds: m.discrepancy.missingPackageIds,
-              extraPackageIds: m.discrepancy.extraPackageIds,
-              notes: m.discrepancy.notes,
-              resolvedBy: m.discrepancy.resolvedBy ?? null,
-              resolvedAt: m.discrepancy.resolvedAt ?? null,
-              resolution: m.discrepancy.resolution ?? null,
-            }
+            reportedBy: m.discrepancy.reportedBy,
+            reportedAt: m.discrepancy.reportedAt,
+            expectedCount: m.discrepancy.expectedCount,
+            actualCount: m.discrepancy.actualCount,
+            missingPackageIds: m.discrepancy.missingPackageIds,
+            extraPackageIds: m.discrepancy.extraPackageIds,
+            notes: m.discrepancy.notes,
+            resolvedBy: m.discrepancy.resolvedBy ?? null,
+            resolvedAt: m.discrepancy.resolvedAt ?? null,
+            resolution: m.discrepancy.resolution ?? null,
+          }
           : null,
         isSealed: m.isSealed,
         isInTransit: m.isInTransit,
@@ -17979,7 +18106,7 @@ export const generateStopVerificationQR = catchAsyncError(
     try {
       const {
         routeId,
-        stopIndex=0,
+        stopIndex = 0,
         branchId,
         routeNumber = 1,
         routeType = 'hub_to_hub',

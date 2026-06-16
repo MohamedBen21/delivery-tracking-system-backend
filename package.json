@@ -4,12 +4,14 @@
   "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "ts-node-dev --respawn --transpile-only server.ts"
+    "dev": "ts-node-dev --respawn --transpile-only server.ts",
+    "seed": "tsx seed/seed.ts"
   },
   "author": "Benatallah Mohamed Seif El Islem",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@faker-js/faker": "^10.4.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/bwip-js": "^3.2.3",
     "@types/cookie-parser": "^1.4.10",
@@ -49,6 +51,7 @@
   },
   "devDependencies": {
     "@types/ejs": "^3.1.5",
-    "@types/nodemailer": "^7.0.9"
+    "@types/nodemailer": "^7.0.9",
+    "tsx": "^4.22.4"
   }
 }

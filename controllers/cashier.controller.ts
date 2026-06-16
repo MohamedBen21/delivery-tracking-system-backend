@@ -15,38 +15,38 @@ import QRCode from "qrcode";
 import SupervisorModel from "../models/supervisor.model";
 
 async function resolveCashier(
-userId: any,
-next: NextFunction,
-session?: mongoose.ClientSession,
+  userId: any,
+  next: NextFunction,
+  session?: mongoose.ClientSession,
 ) {
-if (!userId) {
-next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
-return null;
-}
+  if (!userId) {
+    next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
+    return null;
+  }
 
-const query = CashierModel.findOne({ userId, status: "active" });
-if (session) query.session(session);
-const cashier = await query.lean();
+  const query = CashierModel.findOne({ userId, status: "active" });
+  if (session) query.session(session);
+  const cashier = await query.lean();
 
-if (!cashier) {
-throw new ErrorHandler("Active cashier profile not found.", 404);
-return null;
-}
+  if (!cashier) {
+    throw new ErrorHandler("Active cashier profile not found.", 404);
+    return null;
+  }
 
 
-if (
-!cashier.currentShift ||
-(cashier.currentShift as any).status !== "active"
-) {
+  if (
+    !cashier.currentShift ||
+    (cashier.currentShift as any).status !== "active"
+  ) {
 
-throw  new ErrorHandler(
-    "You must be checked in to an active shift before performing operations.",
-    403,
-);
-return null;
-}
+    throw new ErrorHandler(
+      "You must be checked in to an active shift before performing operations.",
+      403,
+    );
+    return null;
+  }
 
-return cashier;
+  return cashier;
 }
 
 
@@ -54,140 +54,142 @@ return cashier;
 
 
 export const lookupFreelancer = catchAsyncError(
-async (req: Request, res: Response, next: NextFunction) => {
-const cashierUserId = req.user?._id;
+  async (req: Request, res: Response, next: NextFunction) => {
+    const cashierUserId = req.user?._id;
 
-const cashier = await resolveCashier(cashierUserId, next);
-if (!cashier) return;
+    const cashier = await resolveCashier(cashierUserId, next);
+    if (!cashier) return;
 
-const { q } = req.query as { q?: string };
+    const { q } = req.query as { q?: string };
 
-if (!q || q.trim().length < 2) {
-    return next(
-    new ErrorHandler(
-        "Query parameter 'q' is required and must be at least 2 characters.",
-        400,
-    ),
-    );
-}
+    if (!q || q.trim().length < 2) {
+      return next(
+        new ErrorHandler(
+          "Query parameter 'q' is required and must be at least 2 characters.",
+          400,
+        ),
+      );
+    }
 
     let search = q.trim();
 
 
     const phoneRegex = /^0(5|6|7)[0-9]{8}$/;
     if (phoneRegex.test(search)) {
-        search = '+213' + search.substring(1);
+      search = '+213' + search.substring(1);
     }
 
+    // Search against the User collection (email, phone) and Freelancer (businessName)
+    // We join them via a pipeline for a single atomic query.
 
-
-const results = await FreelancerModel.aggregate([
-    {
-    $match: {
-        status: "active",
-        $or: [
-        { businessName: { $regex: search, $options: "i" } },
-        ],
-    },
-    },
-
-
-    {
-    $lookup: {
-        from: "users",
-        localField: "userId",
-        foreignField: "_id",
-        as: "user",
-        pipeline: [
-        {
-            $project: {
-            firstName: 1, lastName: 1, email: 1, phone: 1, status: 1,
-            },
+    const results = await FreelancerModel.aggregate([
+      // Match freelancer by businessName (case-insensitive)
+      {
+        $match: {
+          status: "active",
+          $or: [
+            { businessName: { $regex: search, $options: "i" } },
+          ],
         },
-        ],
-    },
-    },
-    { $unwind: "$user" },
+      },
 
 
-    {
-    $match: {
-        $or: [
-        { businessName: { $regex: search, $options: "i" } },
-        { "user.email": { $regex: search, $options: "i" } },
-        { "user.phone": { $regex: search, $options: "i" } },
-        ],
-    },
-    },
+      {
+        $lookup: {
+          from: "users",
+          localField: "userId",
+          foreignField: "_id",
+          as: "user",
+          pipeline: [
+            {
+              $project: {
+                firstName: 1, lastName: 1, email: 1, phone: 1, status: 1,
+              },
+            },
+          ],
+        },
+      },
+      { $unwind: "$user" },
 
 
-    {
-    $match: {
-        defaultOriginBranchId: cashier.assignedBranchId,
-    },
-    },
+      {
+        $match: {
+          $or: [
+            { businessName: { $regex: search, $options: "i" } },
+            { "user.email": { $regex: search, $options: "i" } },
+            { "user.phone": { $regex: search, $options: "i" } },
+          ],
+        },
+      },
 
-    {
-    $project: {
-        _id: 1,
-        businessName: 1,
-        businessType: 1,
-        status: 1,
-        userId: 1,
-        "user.firstName": 1,
-        "user.lastName": 1,
-        "user.email": 1,
-        "user.phone": 1,
-    },
-    },
 
-    { $limit: 10 },
-]);
+      {
+        $match: {
+          defaultOriginBranchId: cashier.assignedBranchId,
+        },
+      },
 
-if (!results.length) {
+      {
+        $project: {
+          _id: 1,
+          businessName: 1,
+          businessType: 1,
+          status: 1,
+          userId: 1,
+          "user.firstName": 1,
+          "user.lastName": 1,
+          "user.email": 1,
+          "user.phone": 1,
+        },
+      },
+
+      { $limit: 10 },
+    ]);
+
+    if (!results.length) {
+      return res.status(200).json({
+        success: true,
+        message: "No active freelancers found matching your search.",
+        data: [],
+      });
+    }
+
+    // For each result, attach their pending packages (status = 'pending')
+    const enriched = await Promise.all(
+      results.map(async (f: any) => {
+        const pendingPackages = await PackageModel.find({
+          senderId: f.userId,
+          senderType: "freelancer",
+          originBranchId: cashier.assignedBranchId,
+          status: "pending",            // only pre-registered, unclaimed packages
+        })
+          .select(
+            "trackingNumber weight type isFragile totalPrice " +
+            "deliveryType destination createdAt",
+          )
+          .sort({ createdAt: -1 })
+          .lean();
+
+        return {
+          freelancerId: f._id,
+          userId: f.userId,
+          businessName: f.businessName ?? null,
+          businessType: f.businessType ?? null,
+          firstName: f.user.firstName,
+          lastName: f.user.lastName,
+          email: f.user.email,
+          phone: f.user.phone,
+          pendingPackages,
+          pendingCount: pendingPackages.length,
+        };
+      }),
+    );
+
     return res.status(200).json({
-    success: true,
-    message: "No active freelancers found matching your search.",
-    data: [],
+      success: true,
+      data: enriched,
     });
-}
-
-
-const enriched = await Promise.all(
-    results.map(async (f: any) => {
-    const pendingPackages = await PackageModel.find({
-        senderId: f.userId,
-        senderType: "freelancer",
-        originBranchId: cashier.assignedBranchId,
-        status: "pending",           
-    })
-        .select(
-        "trackingNumber weight type isFragile totalPrice " +
-        "deliveryType destination createdAt",
-        )
-        .sort({ createdAt: -1 })
-        .lean();
-
-    return {
-        freelancerId: f._id,
-        userId: f.userId,
-        businessName: f.businessName ?? null,
-        businessType: f.businessType ?? null,
-        firstName: f.user.firstName,
-        lastName: f.user.lastName,
-        email: f.user.email,
-        phone: f.user.phone,
-        pendingPackages,
-        pendingCount: pendingPackages.length,
-    };
-    }),
-);
-
-return res.status(200).json({
-    success: true,
-    data: enriched,
-});
-},
+  },
 );
 
 
@@ -196,208 +198,208 @@ return res.status(200).json({
 
 
 export const claimPackage = catchAsyncError(
-async (req: Request, res: Response, next: NextFunction) => {
+  async (req: Request, res: Response, next: NextFunction) => {
 
-const session = await mongoose.startSession();
-session.startTransaction();
-let transactionCommitted = false;
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
 
-try {
-    const cashierUserId = req.user?._id;
-    const cashier = await resolveCashier(cashierUserId, next, session);
-    if (!cashier) return;
+    try {
+      const cashierUserId = req.user?._id;
+      const cashier = await resolveCashier(cashierUserId, next, session);
+      if (!cashier) return;
 
-    const { trackingNumber, notes } = req.body as {
-    trackingNumber: string;
-    notes?: string;
-    };
+      const { trackingNumber, notes } = req.body as {
+        trackingNumber: string;
+        notes?: string;
+      };
 
-    if (!trackingNumber?.trim()) {
+      if (!trackingNumber?.trim()) {
 
-    throw new ErrorHandler("trackingNumber is required.", 400);
-    }
+        throw new ErrorHandler("trackingNumber is required.", 400);
+      }
 
-    const now = new Date();
-
-
-    const packageDoc = await PackageModel.findOne({
-    trackingNumber: trackingNumber.trim().toUpperCase(),
-    }).session(session);
-
-    if (!packageDoc) {
-
-    throw new ErrorHandler(
-        `No package found with tracking number ${trackingNumber}.`,
-        404,
-    );
-    }
+      const now = new Date();
 
 
-    if (
-    packageDoc.originBranchId.toString() !==
-    cashier.assignedBranchId.toString()
-    ) {
+      const packageDoc = await PackageModel.findOne({
+        trackingNumber: trackingNumber.trim().toUpperCase(),
+      }).session(session);
 
-    throw new ErrorHandler(
-        "This package belongs to a different branch and cannot be claimed here.",
-        403,
-    );
-    }
+      if (!packageDoc) {
 
+        throw new ErrorHandler(
+          `No package found with tracking number ${trackingNumber}.`,
+          404,
+        );
+      }
 
-    if (packageDoc.status !== "pending") {
+      // ── Guard: must be at this cashier's branch
+      if (
+        packageDoc.originBranchId.toString() !==
+        cashier.assignedBranchId.toString()
+      ) {
 
-    throw new ErrorHandler(
-        `Package is already in status '${packageDoc.status}' and cannot be claimed again.`,
-        400,
-    );
-    }
+        throw new ErrorHandler(
+          "This package belongs to a different branch and cannot be claimed here.",
+          403,
+        );
+      }
 
-    const noteText =
-    notes?.trim() ||
-    `Package physically received at counter by cashier. Bordereau verified.`;
+      // ── Guard: must be 'pending' (not already claimed or further)
+      if (packageDoc.status !== "pending") {
 
+        throw new ErrorHandler(
+          `Package is already in status '${packageDoc.status}' and cannot be claimed again.`,
+          400,
+        );
+      }
 
-    await PackageModel.findByIdAndUpdate(
-    packageDoc._id,
-    {
-        $set: {
-        status: "cashier_claimed" as PackageStatus,
-        claimedByCashierId: cashier._id,
-        claimedAt: now,
+      const noteText =
+        notes?.trim() ||
+        `Package physically received at counter by cashier. Bordereau verified.`;
+
+      //  Update the package 
+      await PackageModel.findByIdAndUpdate(
+        packageDoc._id,
+        {
+          $set: {
+            status: "cashier_claimed" as PackageStatus,
+            claimedByCashierId: cashier._id,
+            claimedAt: now,
+          },
+          $push: {
+            trackingHistory: {
+              status: "cashier_claimed",
+              branchId: cashier.assignedBranchId,
+              userId: cashierUserId,
+              notes: noteText,
+              timestamp: now,
+            },
+          },
         },
-        $push: {
-        trackingHistory: {
-            status: "cashier_claimed",
+        { session },
+      );
+
+      // PackageHistory record
+      await PackageHistoryModel.create(
+        [
+          {
+            packageId: packageDoc._id,
+            status: "cashier_claimed" as PackageStatus,
             branchId: cashier.assignedBranchId,
-            userId: cashierUserId,
+            handledBy: cashierUserId,
+            handlerName: `${(req.user as any)?.firstName} ${(req.user as any)?.lastName}`,
+            handlerRole: "cashier",
             notes: noteText,
             timestamp: now,
-        },
-        },
-    },
-    { session },
-    );
+          },
+        ],
+        { session },
+      );
 
+      // ── Increment branch currentLoad (package is now physically at branch) 
+      await BranchModel.findByIdAndUpdate(
+        cashier.assignedBranchId,
+        { $inc: { currentLoad: 1 } },
+        { session },
+      );
 
-    await PackageHistoryModel.create(
-    [
+      // ── Update cashier shift counters + recentScans 
+      await CashierModel.findByIdAndUpdate(
+        cashier._id,
         {
-        packageId: packageDoc._id,
-        status: "cashier_claimed" as PackageStatus,
-        branchId: cashier.assignedBranchId,
-        handledBy: cashierUserId,
-        handlerName: `${(req.user as any)?.firstName} ${(req.user as any)?.lastName}`,
-        handlerRole: "cashier",
-        notes: noteText,
-        timestamp: now,
-        },
-    ],
-    { session },
-    );
-
-
-    await BranchModel.findByIdAndUpdate(
-    cashier.assignedBranchId,
-    { $inc: { currentLoad: 1 } },
-    { session },
-    );
-
-
-    await CashierModel.findByIdAndUpdate(
-    cashier._id,
-    {
-        $inc: {
-        "currentShift.packagesClaimedCount": 1,
-        "stats.totalPackagesClaimed": 1,
-        },
-        $set: {
-        "stats.lastActiveAt": now,
-        },
-        $push: {
-        recentScans: {
-            $each: [
-            {
-                action: "claim_package",
-                packageId: packageDoc._id,
-                trackingNumber: packageDoc.trackingNumber,
-                branchId: cashier.assignedBranchId,
-                timestamp: now,
-                notes: noteText,
-                success: true,
+          $inc: {
+            "currentShift.packagesClaimedCount": 1,
+            "stats.totalPackagesClaimed": 1,
+          },
+          $set: {
+            "stats.lastActiveAt": now,
+          },
+          $push: {
+            recentScans: {
+              $each: [
+                {
+                  action: "claim_package",
+                  packageId: packageDoc._id,
+                  trackingNumber: packageDoc.trackingNumber,
+                  branchId: cashier.assignedBranchId,
+                  timestamp: now,
+                  notes: noteText,
+                  success: true,
+                },
+              ],
+              $slice: -200,   // keep last 200 scans (most recent at the end)
+              $position: 0,
             },
-            ],
-            $slice: -200,  
-            $position: 0,
+          },
         },
+        { session },
+      );
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+
+
+      sendPackageClaimedByCashierNotification(
+
+        packageDoc.senderId.toString(),
+        packageDoc.senderType,
+        packageDoc._id.toString(),
+        packageDoc.trackingNumber,
+        (cashier as any).branchName || "Branch"
+
+      ).catch(error => {
+        console.error('Package claimed notification sending failed:', error);
+
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Package claimed successfully.",
+        data: {
+          packageId: packageDoc._id,
+          trackingNumber: packageDoc.trackingNumber,
+          previousStatus: "pending",
+          currentStatus: "cashier_claimed",
+          claimedAt: now,
+          package: {
+            type: packageDoc.type,
+            weight: packageDoc.weight,
+            isFragile: packageDoc.isFragile,
+            declaredValue: (packageDoc as any).declaredValue ?? null,
+            deliveryType: packageDoc.deliveryType,
+            totalPrice: (packageDoc as any).totalPrice,
+            recipient: {
+              name: packageDoc.destination.recipientName,
+              phone: packageDoc.destination.recipientPhone,
+              city: packageDoc.destination.city,
+              state: packageDoc.destination.state,
+            },
+          },
         },
-    },
-    { session },
-    );
+      });
 
-    await session.commitTransaction();
-    transactionCommitted = true;
-
-
-
-    sendPackageClaimedByCashierNotification(
-
-    packageDoc.senderId.toString(),
-    packageDoc.senderType,
-    packageDoc._id.toString(),
-    packageDoc.trackingNumber,
-    (cashier as any).branchName || "Branch"  
-
-    ).catch(error => {
-    console.error('Package claimed notification sending failed:', error);
-
-    });
-
-    return res.status(200).json({
-    success: true,
-    message: "Package claimed successfully.",
-    data: {
-        packageId: packageDoc._id,
-        trackingNumber: packageDoc.trackingNumber,
-        previousStatus: "pending",
-        currentStatus: "cashier_claimed",
-        claimedAt: now,
-        package: {
-        type: packageDoc.type,
-        weight: packageDoc.weight,
-        isFragile: packageDoc.isFragile,
-        declaredValue: (packageDoc as any).declaredValue ?? null,
-        deliveryType: packageDoc.deliveryType,
-        totalPrice: (packageDoc as any).totalPrice,
-        recipient: {
-            name: packageDoc.destination.recipientName,
-            phone: packageDoc.destination.recipientPhone,
-            city: packageDoc.destination.city,
-            state: packageDoc.destination.state,
-        },
-        },
-    },
-    });
-
-} catch (error: any) {
-    if (error.name === "ValidationError") {
-    return next(
-        new ErrorHandler(
-        Object.values(error.errors)
-            .map((e: any) => e.message)
-            .join(", "),
-        400,
-        ),
-    );
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
-    return next(error);
-} finally {
-  if (!transactionCommitted && session.inTransaction()) { 
-    await session.abortTransaction().catch(() => {});
-  }
-  await session.endSession();
-}
-},
+  },
 );
 
 
@@ -419,7 +421,7 @@ export const acceptPackage = catchAsyncError(
 
       const { trackingNumber, verifiedWeight, notes } = req.body as {
         trackingNumber: string;
-        verifiedWeight?: number;  
+        verifiedWeight?: number;
         notes?: string;
       };
 
@@ -455,8 +457,7 @@ export const acceptPackage = catchAsyncError(
 
       const noteText =
         notes?.trim() ||
-        `Package inspected and accepted into branch stock.${
-          verifiedWeight ? ` Verified weight: ${verifiedWeight}kg.` : ""
+        `Package inspected and accepted into branch stock.${verifiedWeight ? ` Verified weight: ${verifiedWeight}kg.` : ""
         }`;
 
 
@@ -581,8 +582,8 @@ export const acceptPackage = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
-        await session.abortTransaction().catch(() => {});
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -594,207 +595,206 @@ export const acceptPackage = catchAsyncError(
 
 
 type RejectionReason =
-| "damaged_on_arrival"
-| "prohibited_item"
-| "wrong_dimensions"
-| "overweight"
-| "missing_documentation"
-| "payment_declined"
-| "address_unserviceable"
-| "duplicate_package"
-| "other";
+  | "damaged_on_arrival"
+  | "prohibited_item"
+  | "wrong_dimensions"
+  | "overweight"
+  | "missing_documentation"
+  | "payment_declined"
+  | "address_unserviceable"
+  | "duplicate_package"
+  | "other";
 
 const VALID_REJECTION_REASONS: RejectionReason[] = [
-"damaged_on_arrival", "prohibited_item", "wrong_dimensions",
-"overweight", "missing_documentation", "payment_declined",
-"address_unserviceable", "duplicate_package", "other",
+  "damaged_on_arrival", "prohibited_item", "wrong_dimensions",
+  "overweight", "missing_documentation", "payment_declined",
+  "address_unserviceable", "duplicate_package", "other",
 ];
 
 
 export const rejectPackage = catchAsyncError(
-async (req: Request, res: Response, next: NextFunction) => {
+  async (req: Request, res: Response, next: NextFunction) => {
 
-const session = await mongoose.startSession();
-session.startTransaction();
-let transactionCommitted = false;
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let transactionCommitted = false;
 
-try {
-    const cashierUserId = req.user?._id;
-    const cashier = await resolveCashier(cashierUserId, next, session);
-    if (!cashier) return;
+    try {
+      const cashierUserId = req.user?._id;
+      const cashier = await resolveCashier(cashierUserId, next, session);
+      if (!cashier) return;
 
-    const { trackingNumber, rejectionReason, notes } = req.body as {
-    trackingNumber: string;
-    rejectionReason: RejectionReason;
-    notes?: string;
-    };
+      const { trackingNumber, rejectionReason, notes } = req.body as {
+        trackingNumber: string;
+        rejectionReason: RejectionReason;
+        notes?: string;
+      };
 
-    if (!trackingNumber?.trim()) {
+      if (!trackingNumber?.trim()) {
 
-    throw new ErrorHandler("trackingNumber is required.", 400);
-    }
+        throw new ErrorHandler("trackingNumber is required.", 400);
+      }
 
-    if (!rejectionReason || !VALID_REJECTION_REASONS.includes(rejectionReason)) {
+      if (!rejectionReason || !VALID_REJECTION_REASONS.includes(rejectionReason)) {
 
-    throw new ErrorHandler(
-        `rejectionReason must be one of: ${VALID_REJECTION_REASONS.join(", ")}`,
-        400,
-    );
-    }
+        throw new ErrorHandler(
+          `rejectionReason must be one of: ${VALID_REJECTION_REASONS.join(", ")}`,
+          400,
+        );
+      }
 
-    const now = new Date();
+      const now = new Date();
 
-    const packageDoc = await PackageModel.findOne({
-    trackingNumber: trackingNumber.trim().toUpperCase(),
-    originBranchId: cashier.assignedBranchId,
-    }).session(session);
+      const packageDoc = await PackageModel.findOne({
+        trackingNumber: trackingNumber.trim().toUpperCase(),
+        originBranchId: cashier.assignedBranchId,
+      }).session(session);
 
-    if (!packageDoc) {
+      if (!packageDoc) {
 
-    throw new ErrorHandler(`Package ${trackingNumber} not found at your branch.`, 404);
-    }
-
-
-    if (packageDoc.status !== "cashier_claimed") {
-        
-    throw new ErrorHandler(
-        `Only packages in 'cashier_claimed' status can be rejected. Current status: '${packageDoc.status}'.`,
-        400,
-    );
-    }
-
-    const noteText = `Rejected at counter. Reason: ${rejectionReason}.${
-    notes?.trim() ? ` Notes: ${notes.trim()}` : ""
-    }`;
-
-    await Promise.all([
-
-    PackageModel.findByIdAndUpdate(
-        packageDoc._id,
-        {
-        $set: { status: "cancelled" as PackageStatus },
-        $push: {
-            trackingHistory: {
-            status: "cancelled",
-            branchId: cashier.assignedBranchId,
-            userId: cashierUserId,
-            notes: noteText,
-            timestamp: now,
-            },
-        },
-        },
-        { session },
-    ),
-
-    PackageHistoryModel.create(
-        [
-        {
-            packageId: packageDoc._id,
-            status: "cancelled" as PackageStatus,
-            branchId: cashier.assignedBranchId,
-            handledBy: cashierUserId,
-            handlerName: `${(req.user as any)?.firstName} ${(req.user as any)?.lastName}`,
-            handlerRole: "cashier",
-            notes: noteText,
-            timestamp: now,
-        },
-        ],
-        { session },
-    ),
+        throw new ErrorHandler(`Package ${trackingNumber} not found at your branch.`, 404);
+      }
 
 
-    BranchModel.findByIdAndUpdate(
-        cashier.assignedBranchId,
-        { $inc: { currentLoad: -1 } },
-        { session },
-    ),
+      if (packageDoc.status !== "cashier_claimed") {
 
-    PaymentModel.findOneAndUpdate(
-        { packageId: packageDoc._id },
-        { $set: { status: "cancelled" } },
-        { session },
-    ),
+        throw new ErrorHandler(
+          `Only packages in 'cashier_claimed' status can be rejected. Current status: '${packageDoc.status}'.`,
+          400,
+        );
+      }
 
-    CashierModel.findByIdAndUpdate(
-        cashier._id,
-        {
-        $inc: {
-            "currentShift.packagesRejectedCount": 1,
-            "stats.totalPackagesRejected": 1,
-        },
-        $set: { "stats.lastActiveAt": now },
-        $push: {
-            recentScans: {
-            $each: [
-                {
-                action: "reject_package",
-                packageId: packageDoc._id,
-                trackingNumber: packageDoc.trackingNumber,
+      const noteText = `Rejected at counter. Reason: ${rejectionReason}.${notes?.trim() ? ` Notes: ${notes.trim()}` : ""
+        }`;
+
+      await Promise.all([
+
+        PackageModel.findByIdAndUpdate(
+          packageDoc._id,
+          {
+            $set: { status: "cancelled" as PackageStatus },
+            $push: {
+              trackingHistory: {
+                status: "cancelled",
                 branchId: cashier.assignedBranchId,
-                timestamp: now,
+                userId: cashierUserId,
                 notes: noteText,
-                rejectionReason,
-                success: true,
-                },
-            ],
-            $slice: -200,
-            $position: 0,
+                timestamp: now,
+              },
             },
-        },
-        },
-        { session },
-    ),
-    ]);
-
-    await session.commitTransaction();
-    transactionCommitted = true;
-
-
-    sendPackageRejectedByCashierNotification(
-
-    packageDoc.senderId.toString(),
-    packageDoc.senderType,
-    packageDoc._id.toString(),
-    packageDoc.trackingNumber,
-    rejectionReason
-
-    ).catch(error => {
-
-    console.error('Package rejected notification sending failed:', error);
-
-    });
-
-
-    return res.status(200).json({
-    success: true,
-    message: "Package rejected and cancelled.",
-    data: {
-        packageId: packageDoc._id,
-        trackingNumber: packageDoc.trackingNumber,
-        previousStatus: "cashier_claimed",
-        currentStatus: "cancelled",
-        rejectionReason,
-        rejectedAt: now,
-    },
-    });
-
-} catch (error: any) {
-    if (error.name === "ValidationError") {
-    return next(
-        new ErrorHandler(
-        Object.values(error.errors).map((e: any) => e.message).join(", "),
-        400,
+          },
+          { session },
         ),
-    );
+
+        PackageHistoryModel.create(
+          [
+            {
+              packageId: packageDoc._id,
+              status: "cancelled" as PackageStatus,
+              branchId: cashier.assignedBranchId,
+              handledBy: cashierUserId,
+              handlerName: `${(req.user as any)?.firstName} ${(req.user as any)?.lastName}`,
+              handlerRole: "cashier",
+              notes: noteText,
+              timestamp: now,
+            },
+          ],
+          { session },
+        ),
+
+
+        BranchModel.findByIdAndUpdate(
+          cashier.assignedBranchId,
+          { $inc: { currentLoad: -1 } },
+          { session },
+        ),
+
+        PaymentModel.findOneAndUpdate(
+          { packageId: packageDoc._id },
+          { $set: { status: "cancelled" } },
+          { session },
+        ),
+
+        CashierModel.findByIdAndUpdate(
+          cashier._id,
+          {
+            $inc: {
+              "currentShift.packagesRejectedCount": 1,
+              "stats.totalPackagesRejected": 1,
+            },
+            $set: { "stats.lastActiveAt": now },
+            $push: {
+              recentScans: {
+                $each: [
+                  {
+                    action: "reject_package",
+                    packageId: packageDoc._id,
+                    trackingNumber: packageDoc.trackingNumber,
+                    branchId: cashier.assignedBranchId,
+                    timestamp: now,
+                    notes: noteText,
+                    rejectionReason,
+                    success: true,
+                  },
+                ],
+                $slice: -200,
+                $position: 0,
+              },
+            },
+          },
+          { session },
+        ),
+      ]);
+
+      await session.commitTransaction();
+      transactionCommitted = true;
+
+
+      sendPackageRejectedByCashierNotification(
+
+        packageDoc.senderId.toString(),
+        packageDoc.senderType,
+        packageDoc._id.toString(),
+        packageDoc.trackingNumber,
+        rejectionReason
+
+      ).catch(error => {
+
+        console.error('Package rejected notification sending failed:', error);
+
+      });
+
+
+      return res.status(200).json({
+        success: true,
+        message: "Package rejected and cancelled.",
+        data: {
+          packageId: packageDoc._id,
+          trackingNumber: packageDoc.trackingNumber,
+          previousStatus: "cashier_claimed",
+          currentStatus: "cancelled",
+          rejectionReason,
+          rejectedAt: now,
+        },
+      });
+
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors).map((e: any) => e.message).join(", "),
+            400,
+          ),
+        );
+      }
+      return next(error);
+    } finally {
+      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+        await session.abortTransaction().catch(() => { });
+      }
+      await session.endSession();
     }
-    return next(error);
-} finally {
-    if (!transactionCommitted && session.inTransaction()) { 
-      await session.abortTransaction().catch(() => {});
-    }
-    await session.endSession();
-}
-},
+  },
 );
 
 
@@ -803,83 +803,83 @@ try {
 
 
 export const checkIn = catchAsyncError(
-async (req: Request, res: Response, next: NextFunction) => {
-const cashierUserId = req.user?._id;
+  async (req: Request, res: Response, next: NextFunction) => {
+    const cashierUserId = req.user?._id;
 
-if (!cashierUserId) {
-    return next(new ErrorHandler("Unauthorized.", 401));
-}
+    if (!cashierUserId) {
+      return next(new ErrorHandler("Unauthorized.", 401));
+    }
 
-const cashier = await CashierModel.findOne({
-    userId: cashierUserId,
-    status: "active",
-});
+    const cashier = await CashierModel.findOne({
+      userId: cashierUserId,
+      status: "active",
+    });
 
-if (!cashier) {
-    return next(new ErrorHandler("Active cashier profile not found.", 404));
-}
+    if (!cashier) {
+      return next(new ErrorHandler("Active cashier profile not found.", 404));
+    }
 
-if (cashier.currentShift && (cashier.currentShift as any).status === "active") {
-    return next(new ErrorHandler("You already have an active shift.", 400));
-}
+    if (cashier.currentShift && (cashier.currentShift as any).status === "active") {
+      return next(new ErrorHandler("You already have an active shift.", 400));
+    }
 
-await cashier.checkIn(cashier.assignedBranchId);
+    await cashier.checkIn(cashier.assignedBranchId);
 
-return res.status(200).json({
-    success: true,
-    message: "Shift started. You are now checked in.",
-    data: {
-    branchId: cashier.assignedBranchId,
-    shiftStartedAt: (cashier.currentShift as any)?.startedAt ?? new Date(),
-    },
-});
-},
+    return res.status(200).json({
+      success: true,
+      message: "Shift started. You are now checked in.",
+      data: {
+        branchId: cashier.assignedBranchId,
+        shiftStartedAt: (cashier.currentShift as any)?.startedAt ?? new Date(),
+      },
+    });
+  },
 );
 
 
 export const checkOut = catchAsyncError(
-async (req: Request, res: Response, next: NextFunction) => {
-const cashierUserId = req.user?._id;
+  async (req: Request, res: Response, next: NextFunction) => {
+    const cashierUserId = req.user?._id;
 
-if (!cashierUserId) {
-    return next(new ErrorHandler("Unauthorized.", 401));
-}
+    if (!cashierUserId) {
+      return next(new ErrorHandler("Unauthorized.", 401));
+    }
 
-const { notes } = req.body as { notes?: string };
+    const { notes } = req.body as { notes?: string };
 
-const cashier = await CashierModel.findOne({
-    userId: cashierUserId,
-    status: "active",
-});
+    const cashier = await CashierModel.findOne({
+      userId: cashierUserId,
+      status: "active",
+    });
 
-if (!cashier) {
-    return next(new ErrorHandler("Active cashier profile not found.", 404));
-}
+    if (!cashier) {
+      return next(new ErrorHandler("Active cashier profile not found.", 404));
+    }
 
-if (!cashier.currentShift || (cashier.currentShift as any).status !== "active") {
-    return next(new ErrorHandler("No active shift to end.", 400));
-}
+    if (!cashier.currentShift || (cashier.currentShift as any).status !== "active") {
+      return next(new ErrorHandler("No active shift to end.", 400));
+    }
 
-const shiftSnapshot = { ...cashier.currentShift } as any;
+    const shiftSnapshot = { ...cashier.currentShift } as any;
 
-await cashier.checkOut(notes);
+    await cashier.checkOut(notes);
 
-return res.status(200).json({
-    success: true,
-    message: "Shift ended. You are now checked out.",
-    data: {
-    shiftSummary: {
-        startedAt: shiftSnapshot.startedAt,
-        endedAt: new Date(),
-        packagesClaimedCount: shiftSnapshot.packagesClaimedCount,
-        packagesRejectedCount: shiftSnapshot.packagesRejectedCount,
-        labelsIssuedCount: shiftSnapshot.labelsIssuedCount,
-        paymentsCollectedCount: shiftSnapshot.paymentsCollectedCount,
-        totalAmountCollected: shiftSnapshot.totalAmountCollected,
-    },
-    },
-});
-},
+    return res.status(200).json({
+      success: true,
+      message: "Shift ended. You are now checked out.",
+      data: {
+        shiftSummary: {
+          startedAt: shiftSnapshot.startedAt,
+          endedAt: new Date(),
+          packagesClaimedCount: shiftSnapshot.packagesClaimedCount,
+          packagesRejectedCount: shiftSnapshot.packagesRejectedCount,
+          labelsIssuedCount: shiftSnapshot.labelsIssuedCount,
+          paymentsCollectedCount: shiftSnapshot.paymentsCollectedCount,
+          totalAmountCollected: shiftSnapshot.totalAmountCollected,
+        },
+      },
+    });
+  },
 );
 
 
@@ -887,52 +887,52 @@ return res.status(200).json({
 
 
 export const getMyShift = catchAsyncError(
-async (req: Request, res: Response, next: NextFunction) => {
-const cashierUserId = req.user?._id;
+  async (req: Request, res: Response, next: NextFunction) => {
+    const cashierUserId = req.user?._id;
 
-if (!cashierUserId) {
-    return next(new ErrorHandler("Unauthorized.", 401));
-}
+    if (!cashierUserId) {
+      return next(new ErrorHandler("Unauthorized.", 401));
+    }
 
-const cashier = await CashierModel.findOne({
-    userId: cashierUserId,
-    status: "active",
-})
-    .populate("assignedBranchId", "name code address")
-    .lean();
+    const cashier = await CashierModel.findOne({
+      userId: cashierUserId,
+      status: "active",
+    })
+      .populate("assignedBranchId", "name code address")
+      .lean();
 
-if (!cashier) {
-    return next(new ErrorHandler("Active cashier profile not found.", 404));
-}
+    if (!cashier) {
+      return next(new ErrorHandler("Active cashier profile not found.", 404));
+    }
 
-const isCheckedIn =
-    !!cashier.currentShift &&
-    (cashier.currentShift as any).status === "active";
+    const isCheckedIn =
+      !!cashier.currentShift &&
+      (cashier.currentShift as any).status === "active";
 
-const durationMinutes = isCheckedIn
-    ? Math.round(
+    const durationMinutes = isCheckedIn
+      ? Math.round(
         (Date.now() -
-        new Date((cashier.currentShift as any).startedAt).getTime()) /
+          new Date((cashier.currentShift as any).startedAt).getTime()) /
         60000,
-    )
-    : null;
+      )
+      : null;
 
-return res.status(200).json({
-    success: true,
-    data: {
-    isCheckedIn,
-    branch: cashier.assignedBranchId,
-    currentShift: isCheckedIn
-        ? {
+    return res.status(200).json({
+      success: true,
+      data: {
+        isCheckedIn,
+        branch: cashier.assignedBranchId,
+        currentShift: isCheckedIn
+          ? {
             ...(cashier.currentShift as any),
             durationMinutes,
-        }
-        : null,
-    recentScans: (cashier.recentScans as any[]).slice(0, 20),
-    stats: cashier.stats,
-    },
-});
-},
+          }
+          : null,
+        recentScans: (cashier.recentScans as any[]).slice(0, 20),
+        stats: cashier.stats,
+      },
+    });
+  },
 );
 
 
@@ -940,53 +940,53 @@ return res.status(200).json({
 
 
 export const getPendingPackages = catchAsyncError(
-async (req: Request, res: Response, next: NextFunction) => {
-const cashierUserId = req.user?._id;
+  async (req: Request, res: Response, next: NextFunction) => {
+    const cashierUserId = req.user?._id;
 
-const cashier = await resolveCashier(cashierUserId, next);
-if (!cashier) return;
+    const cashier = await resolveCashier(cashierUserId, next);
+    if (!cashier) return;
 
-const { page, limit } = req.query as Record<string, string | undefined>;
-const pageNum  = Math.max(1, parseInt(page  ?? "1",  10));
-const limitNum = Math.min(100, Math.max(1, parseInt(limit ?? "20", 10)));
-const skip = (pageNum - 1) * limitNum;
+    const { page, limit } = req.query as Record<string, string | undefined>;
+    const pageNum = Math.max(1, parseInt(page ?? "1", 10));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit ?? "20", 10)));
+    const skip = (pageNum - 1) * limitNum;
 
-const [packages, total] = await Promise.all([
-    PackageModel.find({
-    originBranchId: cashier.assignedBranchId,
-    status: "pending",
-    })
-    .select(
-        "trackingNumber weight type isFragile totalPrice deliveryType " +
-        "destination senderId createdAt",
-    )
-    .populate("senderId", "firstName lastName phone")
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(limitNum)
-    .lean(),
+    const [packages, total] = await Promise.all([
+      PackageModel.find({
+        originBranchId: cashier.assignedBranchId,
+        status: "pending",
+      })
+        .select(
+          "trackingNumber weight type isFragile totalPrice deliveryType " +
+          "destination senderId createdAt",
+        )
+        .populate("senderId", "firstName lastName phone")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
 
-    PackageModel.countDocuments({
-    originBranchId: cashier.assignedBranchId,
-    status: "pending",
-    }),
-]);
+      PackageModel.countDocuments({
+        originBranchId: cashier.assignedBranchId,
+        status: "pending",
+      }),
+    ]);
 
-const totalPages = Math.ceil(total / limitNum);
+    const totalPages = Math.ceil(total / limitNum);
 
-return res.status(200).json({
-    success: true,
-    data: packages,
-    pagination: {
-    total,
-    page: pageNum,
-    limit: limitNum,
-    totalPages,
-    hasNextPage: pageNum < totalPages,
-    hasPrevPage: pageNum > 1,
-    },
-});
-},
+    return res.status(200).json({
+      success: true,
+      data: packages,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1,
+      },
+    });
+  },
 );
 
 
@@ -1000,16 +1000,16 @@ return res.status(200).json({
 
 
 const COLORS = {
-  primary: "#1a1a1a",        
-  accent: "#d4a017",         
-  light: "#fff3e0",          
-  separator: "#e0a800",      
-  text: "#1a1a1a",          
-  muted: "#666666",          
+  primary: "#1a1a1a",
+  accent: "#d4a017",
+  light: "#fff3e0",
+  separator: "#e0a800",
+  text: "#1a1a1a",
+  muted: "#666666",
   white: "#ffffff",
-  danger: "#dc3545",         
-  headerBg: "#1a1a1a",     
-  sectionBg: "#f5e6d3",    
+  danger: "#dc3545",
+  headerBg: "#1a1a1a",
+  sectionBg: "#f5e6d3",
 };
 
 
@@ -1329,10 +1329,10 @@ export const printSingleBordereau = catchAsyncError(
       },
       destinationBranch: destinationBranch
         ? {
-            name: (destinationBranch as any).name,
-            code: (destinationBranch as any).code,
-            address: (destinationBranch as any).address,
-          }
+          name: (destinationBranch as any).name,
+          code: (destinationBranch as any).code,
+          address: (destinationBranch as any).address,
+        }
         : null,
       totalPrice: pkg.totalPrice,
       paymentMethod: (pkg as any).paymentMethod ?? "cod",
@@ -1498,10 +1498,10 @@ export const printBulkBordereau = catchAsyncError(
         },
         destinationBranch: destinationBranch
           ? {
-              name: (destinationBranch as any).name,
-              code: (destinationBranch as any).code,
-              address: (destinationBranch as any).address,
-            }
+            name: (destinationBranch as any).name,
+            code: (destinationBranch as any).code,
+            address: (destinationBranch as any).address,
+          }
           : null,
         totalPrice: pkg.totalPrice,
         paymentMethod: (pkg as any).paymentMethod ?? "cod",
@@ -1570,7 +1570,7 @@ export const getPackageByTrackingNumber = catchAsyncError(
         assignedBranchId: branchOid,
         status: "active",
       }).lean();
-      
+
       if (!cashier?.currentShift || (cashier.currentShift as any)?.status !== "active") {
         return next(new ErrorHandler("You must be checked in to scan packages", 403));
       }
@@ -1606,11 +1606,11 @@ export const getPackageByTrackingNumber = catchAsyncError(
       cannotClaimReason = `Package cannot be claimed in its current status: ${packageDoc.status}`;
     }
 
-
-    const nextAction = isClaimable 
-      ? "claim_package" 
-      : packageDoc.status === "cashier_claimed" 
-        ? "accept_package" 
+    // Add helpful info for frontend actions
+    const nextAction = isClaimable
+      ? "claim_package"
+      : packageDoc.status === "cashier_claimed"
+        ? "accept_package"
         : null;
 
     return res.status(200).json({
@@ -1619,7 +1619,7 @@ export const getPackageByTrackingNumber = catchAsyncError(
         package: packageDoc,
         isClaimable,
         cannotClaimReason,
-        nextAction, 
+        nextAction,
       },
     });
   }

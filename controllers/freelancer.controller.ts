@@ -352,8 +352,6 @@ export const getMyActivePackages = catchAsyncError(
 
 
 
-
-
 export const getMyDeliveredPackages = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const freelancerUserId = req.user?._id;
@@ -650,7 +648,7 @@ export const cancelPackage = catchAsyncError(
     }
     finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -1028,7 +1026,7 @@ export const updateMeFreelancer = catchAsyncError(
 
 
 interface ICreatePackageBody {
-  freelancerId?: string; 
+  freelancerId?: string;
 
   recipientName: string;
   recipientPhone: string;
@@ -1623,7 +1621,7 @@ export const createPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2463,7 +2461,7 @@ cloudinary.config({
 
 
 const PACKAGE_UPLOAD_FOLDER = "packages";
-const MAX_PACKAGE_IMAGE_BYTES = 10 * 1024 * 1024; 
+const MAX_PACKAGE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_PACKAGE_IMAGES = 10;
 const ALLOWED_IMAGE_FORMATS = ["jpg", "jpeg", "png", "webp"];
 
@@ -3031,7 +3029,7 @@ export const searchBranchesForPickup = catchAsyncError(
     const query: any = {
       companyId: freelancer.companyId,
       status: 'active',
-      branchType: { $in: ['local_branch', 'regional_main_hub'] }, 
+      branchType: { $in: ['local_branch', 'regional_main_hub'] },
     };
 
 

@@ -7,11 +7,9 @@ export type DeliveryType = 'home' | 'branch_pickup';
 
 export type PackageStatus =
   | 'pending'
-
   | 'cashier_claimed'
   | 'accepted'
   | 'at_origin_branch'
-
   | 'manifested'
   | 'in_transit_to_branch'
   | 'at_destination_branch'
