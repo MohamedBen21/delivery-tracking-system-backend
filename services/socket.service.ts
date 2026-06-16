@@ -20,9 +20,6 @@ import BranchModel from "../models/branch.model";
 import VehicleModel from "../models/vehicle.model";
 
 import { PresenceService } from "./presence.service";
-
-// You'll need to install: npm install qrcode
-// and: npm install --save-dev @types/qrcode
 import QRCode from "qrcode";
 import TransportationModel from "../models/transportation.model";
 

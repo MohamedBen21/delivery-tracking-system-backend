@@ -10718,7 +10718,7 @@ export const toggleOnlineStatus = catchAsyncError(
       return res.status(200).json({
         success: true,
         message: `Transporter is now ${transporter.isOnline ? "online" : "offline"}`,
-        data: { isOnline: transporter.isOnline },
+        isOnline: transporter.isOnline ,
       });
     }
 
