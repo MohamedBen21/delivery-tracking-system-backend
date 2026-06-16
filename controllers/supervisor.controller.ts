@@ -18295,3 +18295,662 @@ export const generateStartRouteQR = catchAsyncError(
     }
   }
 );
+
+
+
+
+
+
+
+
+export const getManifestsPaginatedFromRoute = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const limit = Math.min(
+        100,
+        Math.max(1, parseInt(req.query.limit as string) || 20),
+      );
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const skip = (page - 1) * limit;
+
+      const filter: Record<string, any> = {};
+
+      const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
+      const isValidId = (val: string) => mongoose.Types.ObjectId.isValid(val);
+
+      const user = (req as any).user;
+      const userRole = user?.role;
+      const userId = user?._id;
+
+      let assignedTransporterId: mongoose.Types.ObjectId | null = null;
+      let routeManifestIds: mongoose.Types.ObjectId[] | null = null;
+      let manifestStopOrderMap: Map<string, { stopIndex: number; orderInStop: number }> | null = null;
+
+      // ── Company filter ──────────────────────────────────────────────────
+      if (req.query.companyId) {
+        if (!isValidId(req.query.companyId as string))
+          return next(new ErrorHandler("Invalid companyId.", 400));
+        filter.companyId = toObjectId(req.query.companyId as string);
+      }
+
+      // ── Transporter role: get manifests from their active route ──────
+      if (userRole === 'transporter') {
+        const transporter = await TransporterModel.findOne({ userId: userId });
+        if (!transporter) {
+          return next(new ErrorHandler("Transporter profile not found.", 404));
+        }
+
+        const activeRoute = await RouteModel.findOne({
+          assignedTransporterId: transporter._id,
+          status: { $in: ['planned', 'assigned', 'active', 'paused'] }
+        }).lean();
+
+        if (activeRoute && activeRoute.stops && activeRoute.stops.length > 0) {
+          const allManifestIds: mongoose.Types.ObjectId[] = [];
+          const stopOrderMap = new Map<string, { stopIndex: number; orderInStop: number }>();
+
+          for (let stopIndex = 0; stopIndex < activeRoute.stops.length; stopIndex++) {
+            const stop = activeRoute.stops[stopIndex];
+            if (stop.manifestIds && stop.manifestIds.length > 0) {
+              for (let orderInStop = 0; orderInStop < stop.manifestIds.length; orderInStop++) {
+                const manifestId = stop.manifestIds[orderInStop];
+                allManifestIds.push(manifestId);
+                stopOrderMap.set(manifestId.toString(), {
+                  stopIndex: stopIndex,
+                  orderInStop: orderInStop
+                });
+              }
+            }
+          }
+
+          if (allManifestIds.length > 0) {
+            routeManifestIds = allManifestIds;
+            manifestStopOrderMap = stopOrderMap;
+            filter._id = { $in: allManifestIds };
+          } else {
+            routeManifestIds = [];
+            filter._id = { $in: [] };
+          }
+        } else {
+          routeManifestIds = [];
+          filter._id = { $in: [] };
+        }
+
+        assignedTransporterId = transporter._id;
+      }
+
+      // ── Other role: allow manual transporter filter ──────────────────
+      if (req.query.transporterId && userRole !== 'transporter') {
+        if (!isValidId(req.query.transporterId as string))
+          return next(new ErrorHandler("Invalid transporterId.", 400));
+        const transporterId = toObjectId(req.query.transporterId as string);
+        assignedTransporterId = transporterId;
+        filter["transportLeg.transporterId"] = transporterId;
+      }
+
+      // ── Branch filters ──────────────────────────────────────────────────
+      if (req.query.originBranchId) {
+        if (!isValidId(req.query.originBranchId as string))
+          return next(new ErrorHandler("Invalid originBranchId.", 400));
+        filter.originBranchId = toObjectId(req.query.originBranchId as string);
+      }
+
+      if (req.query.destinationBranchId) {
+        if (!isValidId(req.query.destinationBranchId as string))
+          return next(new ErrorHandler("Invalid destinationBranchId.", 400));
+        filter.destinationBranchId = toObjectId(req.query.destinationBranchId as string);
+      }
+
+      if (req.query.branchId) {
+        if (!isValidId(req.query.branchId as string))
+          return next(new ErrorHandler("Invalid branchId.", 400));
+        const branchOid = toObjectId(req.query.branchId as string);
+        filter.$or = [
+          { originBranchId: branchOid },
+          { destinationBranchId: branchOid },
+        ];
+      }
+
+      // ── Created by filter ──────────────────────────────────────────────
+      if (req.query.createdBy) {
+        if (!isValidId(req.query.createdBy as string))
+          return next(new ErrorHandler("Invalid createdBy.", 400));
+        filter.createdBy = toObjectId(req.query.createdBy as string);
+      }
+
+      // ── Vehicle filter ──────────────────────────────────────────────────
+      if (req.query.vehicleId) {
+        if (!isValidId(req.query.vehicleId as string))
+          return next(new ErrorHandler("Invalid vehicleId.", 400));
+        filter["transportLeg.vehicleId"] = toObjectId(req.query.vehicleId as string);
+      }
+
+      // ── Status filters ──────────────────────────────────────────────────
+      const VALID_STATUSES: ManifestStatus[] = [
+        "open", "sealed", "loaded", "in_transit",
+        "arrived", "unloading", "closed", "discrepancy", "cancelled",
+      ];
+
+      if (req.query.status) {
+        const s = req.query.status as string;
+        if (!VALID_STATUSES.includes(s as ManifestStatus))
+          return next(new ErrorHandler(`Invalid status: ${s}.`, 400));
+        filter.status = s;
+      }
+
+      if (req.query.statuses) {
+        const statuses = (req.query.statuses as string).split(",").map(s => s.trim());
+        const invalid = statuses.filter(s => !VALID_STATUSES.includes(s as ManifestStatus));
+        if (invalid.length > 0)
+          return next(new ErrorHandler(`Invalid statuses: ${invalid.join(", ")}.`, 400));
+        filter.status = { $in: statuses };
+      }
+
+      // ── Priority filter ─────────────────────────────────────────────────
+      const VALID_PRIORITIES: ManifestPriority[] = ["standard", "express", "urgent"];
+      if (req.query.priority) {
+        const p = req.query.priority as string;
+        if (!VALID_PRIORITIES.includes(p as ManifestPriority))
+          return next(new ErrorHandler(`Invalid priority: ${p}.`, 400));
+        filter.priority = p;
+      }
+
+      // ── Search filters ──────────────────────────────────────────────────
+      if (req.query.manifestCode) {
+        filter.manifestCode = new RegExp(req.query.manifestCode as string, "i");
+      }
+
+      if (req.query.search) {
+        const searchRe = new RegExp(req.query.search as string, "i");
+        filter.$or = [
+          ...(filter.$or || []),
+          { manifestCode: searchRe },
+          { internalReference: searchRe },
+          { notes: searchRe },
+          { "packages.trackingNumber": searchRe },
+        ];
+      }
+
+      // ── Package containment filter ─────────────────────────────────────
+      if (req.query.containsPackageId) {
+        if (!isValidId(req.query.containsPackageId as string))
+          return next(new ErrorHandler("Invalid containsPackageId.", 400));
+        filter["packages.packageId"] = toObjectId(req.query.containsPackageId as string);
+      }
+
+      // ── Discrepancy filters ─────────────────────────────────────────────
+      if (req.query.hasDiscrepancy !== undefined) {
+        if (req.query.hasDiscrepancy === "true") {
+          filter.$or = [
+            ...(filter.$or || []),
+            { status: "discrepancy" },
+            { discrepancy: { $ne: null } },
+          ];
+        } else {
+          filter.status = { $nin: ["discrepancy"] };
+          filter.discrepancy = null;
+        }
+      }
+
+      // ── Sealed filter ───────────────────────────────────────────────────
+      if (req.query.isSealed !== undefined) {
+        if (req.query.isSealed === "true") {
+          filter.status = { $in: ["sealed", "loaded", "in_transit", "arrived", "unloading", "closed"] };
+        } else {
+          filter.status = { $in: ["open", "cancelled"] };
+        }
+      }
+
+      // ── In transit filter ──────────────────────────────────────────────
+      if (req.query.isInTransit !== undefined) {
+        filter.status = req.query.isInTransit === "true" ? "in_transit" : { $ne: "in_transit" };
+      }
+
+      // ── Weight range filters ────────────────────────────────────────────
+      if (req.query.minWeight || req.query.maxWeight) {
+        const min = req.query.minWeight ? parseFloat(req.query.minWeight as string) : null;
+        const max = req.query.maxWeight ? parseFloat(req.query.maxWeight as string) : null;
+        filter.totalDeclaredWeight = {
+          ...(min !== null && !isNaN(min) && { $gte: min }),
+          ...(max !== null && !isNaN(max) && { $lte: max }),
+        };
+      }
+
+      // ── Package count range filters ────────────────────────────────────
+      if (req.query.minPackageCount || req.query.maxPackageCount) {
+        const min = req.query.minPackageCount ? parseInt(req.query.minPackageCount as string) : null;
+        const max = req.query.maxPackageCount ? parseInt(req.query.maxPackageCount as string) : null;
+        filter.packageCount = {
+          ...(min !== null && !isNaN(min) && { $gte: min }),
+          ...(max !== null && !isNaN(max) && { $lte: max }),
+        };
+      }
+
+      // ── Date range filters ──────────────────────────────────────────────
+      if (req.query.createdFrom || req.query.createdTo) {
+        filter.createdAt = {
+          ...(req.query.createdFrom && { $gte: new Date(req.query.createdFrom as string) }),
+          ...(req.query.createdTo && { $lte: new Date(req.query.createdTo as string) }),
+        };
+      }
+
+      if (req.query.departedFrom || req.query.departedTo) {
+        filter.departedAt = {
+          ...(req.query.departedFrom && { $gte: new Date(req.query.departedFrom as string) }),
+          ...(req.query.departedTo && { $lte: new Date(req.query.departedTo as string) }),
+        };
+      }
+
+      if (req.query.arrivedFrom || req.query.arrivedTo) {
+        filter.arrivedAt = {
+          ...(req.query.arrivedFrom && { $gte: new Date(req.query.arrivedFrom as string) }),
+          ...(req.query.arrivedTo && { $lte: new Date(req.query.arrivedTo as string) }),
+        };
+      }
+
+      // ── Transporter stats ────────────────────────────────────────────────
+      let transporterStats: any = null;
+      if (assignedTransporterId) {
+        const transporter = await TransporterModel.findById(assignedTransporterId)
+          .lean({ virtuals: true });
+
+        if (transporter) {
+          let statsMatchFilter: any = {};
+
+          if (userRole === 'transporter' && routeManifestIds !== null) {
+            if (routeManifestIds.length > 0) {
+              statsMatchFilter._id = { $in: routeManifestIds };
+            } else {
+              statsMatchFilter._id = { $in: [] };
+            }
+          } else {
+            statsMatchFilter["transportLeg.transporterId"] = assignedTransporterId;
+          }
+
+          const manifestStats = await ManifestModel.aggregate([
+            {
+              $match: statsMatchFilter,
+            },
+            {
+              $group: {
+                _id: null,
+                totalManifests: { $sum: 1 },
+                inTransitManifests: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "in_transit"] }, 1, 0],
+                  },
+                },
+                arrivedManifests: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "arrived"] }, 1, 0],
+                  },
+                },
+                closedManifests: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "closed"] }, 1, 0],
+                  },
+                },
+                discrepancyManifests: {
+                  $sum: {
+                    $cond: [{ $eq: ["$status", "discrepancy"] }, 1, 0],
+                  },
+                },
+                loadedManifests: {
+                  $sum: {
+                    $cond: [{ $in: ["$status", ["sealed", "loaded"]] }, 1, 0],
+                  },
+                },
+                totalPackagesTransported: {
+                  $sum: "$packageCount",
+                },
+                totalWeightTransported: {
+                  $sum: "$totalDeclaredWeight",
+                },
+                todayManifests: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gte: ["$departedAt", new Date(new Date().setHours(0, 0, 0, 0))] },
+                          { $lt: ["$departedAt", new Date(new Date().setHours(23, 59, 59, 999))] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+              },
+            },
+          ]);
+
+          const stats = manifestStats[0] || {
+            totalManifests: 0,
+            inTransitManifests: 0,
+            arrivedManifests: 0,
+            closedManifests: 0,
+            discrepancyManifests: 0,
+            loadedManifests: 0,
+            totalPackagesTransported: 0,
+            totalWeightTransported: 0,
+            todayManifests: 0,
+          };
+
+          transporterStats = {
+            id: transporter._id,
+            userId: transporter.userId,
+            companyId: transporter.companyId,
+            transporterType: transporter.transporterType ?? null,
+            isHubTransporter: transporter.isHubTransporter,
+            isHubToHub: transporter.isHubToHub,
+            isHubToBranch: transporter.isHubToBranch,
+            assignedLine: transporter.assignedLine ?? null,
+            assignedBranches: transporter.assignedBranches ?? null,
+            availabilityStatus: transporter.availabilityStatus,
+            verificationStatus: transporter.verificationStatus,
+            isActive: transporter.isActive,
+            isOnline: transporter.isOnline,
+            isSuspended: transporter.isSuspended,
+            isVerified: transporter.isVerified,
+            isAvailable: transporter.isAvailable,
+            isOnDuty: transporter.isOnDuty,
+            rating: transporter.rating,
+            completionRate: transporter.completionRate,
+            todayCompletionRate: transporter.todayCompletionRate,
+            efficiencyScore: transporter.efficiencyScore,
+            totalTrips: transporter.totalTrips,
+            completedTrips: transporter.completedTrips,
+            cancelledTrips: transporter.cancelledTrips,
+            totalManifestsTransported: transporter.totalManifestsTransported,
+            currentActiveManifests: transporter.currentActiveManifests,
+            todayTransportedCount: transporter.todayTransportedCount,
+            todayAssignedManifests: transporter.todayAssignedManifests,
+            todayCompletedTrips: transporter.todayCompletedTrips,
+            todayTotalWeight: transporter.todayTotalWeight,
+            totalDistance: transporter.totalDistance,
+            totalDeliveryTime: transporter.totalDeliveryTime,
+            averageDeliveryTime: transporter.averageDeliveryTime,
+            manifestStats: {
+              totalAssigned: stats.totalManifests,
+              loaded: stats.loadedManifests,
+              inTransit: stats.inTransitManifests,
+              arrived: stats.arrivedManifests,
+              closed: stats.closedManifests,
+              discrepancy: stats.discrepancyManifests,
+              totalPackagesTransported: stats.totalPackagesTransported,
+              totalWeightTransported: stats.totalWeightTransported,
+              todayManifests: stats.todayManifests,
+            },
+            documentStatus: transporter.documentStatus,
+            hasValidLicense: transporter.hasValidLicense,
+            canAcceptJobs: transporter.canAcceptJobs,
+            currentBranchId: transporter.currentBranchId ?? null,
+            currentVehicleId: transporter.currentVehicleId ?? null,
+            currentRouteId: transporter.currentRouteId ?? null,
+            suspensionReason: transporter.suspensionReason ?? null,
+            suspensionEndDate: transporter.suspensionEndDate ?? null,
+            lastActiveAt: transporter.lastActiveAt,
+            createdAt: transporter.createdAt,
+            updatedAt: transporter.updatedAt,
+          };
+        }
+      }
+
+      // ── Execute query ───────────────────────────────────────────────────
+      const [total, manifests] = await Promise.all([
+        ManifestModel.countDocuments(filter),
+        ManifestModel.find(filter)
+          .populate("originBranchId", "name code address.city")
+          .populate("destinationBranchId", "name code address.city")
+          .populate("createdBy", "name email")
+          .populate("transportLeg.transporterId", "name email phone")
+          .populate("transportLeg.vehicleId", "registrationNumber type")
+          .skip(skip)
+          .limit(limit)
+          .lean({ virtuals: true }),
+      ]);
+
+      // ── Sort manifests by route order (for transporter) ────────────────
+      let filteredManifests = manifests as any[];
+
+      if (userRole === 'transporter' && manifestStopOrderMap) {
+        filteredManifests.sort((a, b) => {
+          const orderA = manifestStopOrderMap.get(a._id.toString());
+          const orderB = manifestStopOrderMap.get(b._id.toString());
+
+          if (orderA && orderB) {
+            if (orderA.stopIndex !== orderB.stopIndex) {
+              return orderA.stopIndex - orderB.stopIndex;
+            }
+            return orderA.orderInStop - orderB.orderInStop;
+          }
+
+          if (orderA) return -1;
+          if (orderB) return 1;
+          return 0;
+        });
+      } else {
+        // ── Apply sorting for non-transporter roles ──────────────────────
+        const sortBy = (req.query.sortBy as string) || "createdAt";
+        const order = req.query.order === "desc" ? -1 : 1;
+
+        switch (sortBy) {
+          case "manifestCode":
+            filteredManifests.sort((a, b) => a.manifestCode.localeCompare(b.manifestCode) * order);
+            break;
+          case "totalDeclaredWeight":
+            filteredManifests.sort((a, b) => (a.totalDeclaredWeight - b.totalDeclaredWeight) * order);
+            break;
+          case "packageCount":
+            filteredManifests.sort((a, b) => (a.packageCount - b.packageCount) * order);
+            break;
+          case "departedAt":
+            filteredManifests.sort(
+              (a, b) =>
+                (new Date(a.departedAt || 0).getTime() - new Date(b.departedAt || 0).getTime()) * order,
+            );
+            break;
+          case "arrivedAt":
+            filteredManifests.sort(
+              (a, b) =>
+                (new Date(a.arrivedAt || 0).getTime() - new Date(b.arrivedAt || 0).getTime()) * order,
+            );
+            break;
+          case "status":
+            filteredManifests.sort((a, b) => a.status.localeCompare(b.status) * order);
+            break;
+          case "priority":
+            const priorityRank: Record<'urgent' | 'express' | 'standard', number> = {
+              urgent: 0,
+              express: 1,
+              standard: 2,
+            };
+            filteredManifests.sort(
+              (a, b) =>
+                (priorityRank[a.priority as keyof typeof priorityRank] -
+                  priorityRank[b.priority as keyof typeof priorityRank]) *
+                order,
+            );
+            break;
+          case "createdAt":
+          default:
+            filteredManifests.sort(
+              (a, b) =>
+                (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) * order,
+            );
+            break;
+        }
+      }
+
+      // ── Format manifests (same as original) ─────────────────────────────
+      const formattedManifests = filteredManifests.map((m: any) => ({
+        id: m._id,
+        manifestCode: m.manifestCode,
+        companyId: m.companyId,
+        originBranch: m.originBranchId
+          ? {
+              id: m.originBranchId._id,
+              name: m.originBranchId.name,
+              code: m.originBranchId.code,
+              city: m.originBranchId.address?.city,
+            }
+          : null,
+        destinationBranch: m.destinationBranchId
+          ? {
+              id: m.destinationBranchId._id,
+              name: m.destinationBranchId.name,
+              code: m.destinationBranchId.code,
+              city: m.destinationBranchId.address?.city,
+              coordinates: m.destinationBranchId.location?.coordinates,
+            }
+          : null,
+        status: m.status,
+        priority: m.priority,
+        createdBy: m.createdBy
+          ? { id: m.createdBy._id, name: m.createdBy.name, email: m.createdBy.email }
+          : null,
+        sealInfo: m.sealInfo
+          ? {
+              sealedBy: m.sealInfo.sealedBy,
+              sealedAt: m.sealInfo.sealedAt,
+              sealNumber: m.sealInfo.sealNumber,
+              totalWeight: m.sealInfo.totalWeight,
+              packageCount: m.sealInfo.packageCount,
+              notes: m.sealInfo.notes ?? null,
+            }
+          : null,
+        transportLeg: m.transportLeg
+          ? {
+              vehicle: m.transportLeg.vehicleId
+                ? {
+                    id: m.transportLeg.vehicleId._id,
+                    registrationNumber: m.transportLeg.vehicleId.registrationNumber,
+                    type: m.transportLeg.vehicleId.type,
+                  }
+                : null,
+              transporter: m.transportLeg.transporterId
+                ? {
+                    id: m.transportLeg.transporterId._id,
+                    name: m.transportLeg.transporterId.name,
+                    email: m.transportLeg.transporterId.email,
+                    phone: m.transportLeg.transporterId.phone,
+                  }
+                : null,
+              assignedAt: m.transportLeg.assignedAt,
+              departedAt: m.transportLeg.departedAt ?? null,
+              arrivedAt: m.transportLeg.arrivedAt ?? null,
+              estimatedArrival: m.transportLeg.estimatedArrival ?? null,
+            }
+          : null,
+        totalDeclaredWeight: m.totalDeclaredWeight,
+        packageCount: m.packageCount,
+        packages: (m.packages || []).map((p: any) => ({
+          packageId: p.packageId,
+          trackingNumber: p.trackingNumber,
+          weight: p.weight,
+          sequence: p.sequence,
+          entryStatus: p.entryStatus,
+          scannedInAt: p.scannedInAt,
+          scannedOutAt: p.scannedOutAt ?? null,
+          remanifestId: p.remanifestId ?? null,
+          notes: p.notes ?? null,
+        })),
+        hasDiscrepancy: m.hasDiscrepancy,
+        discrepancy: m.discrepancy
+          ? {
+              reportedBy: m.discrepancy.reportedBy,
+              reportedAt: m.discrepancy.reportedAt,
+              expectedCount: m.discrepancy.expectedCount,
+              actualCount: m.discrepancy.actualCount,
+              missingPackageIds: m.discrepancy.missingPackageIds,
+              extraPackageIds: m.discrepancy.extraPackageIds,
+              notes: m.discrepancy.notes,
+              resolvedBy: m.discrepancy.resolvedBy ?? null,
+              resolvedAt: m.discrepancy.resolvedAt ?? null,
+              resolution: m.discrepancy.resolution ?? null,
+            }
+          : null,
+        isSealed: m.isSealed,
+        isInTransit: m.isInTransit,
+        isClosed: m.isClosed,
+        unloadedCount: m.unloadedCount,
+        remainingCount: m.remainingCount,
+        durationMinutes: m.durationMinutes ?? null,
+        internalReference: m.internalReference ?? null,
+        notes: m.notes ?? null,
+        createdAt: m.createdAt,
+        updatedAt: m.updatedAt,
+        sealedAt: m.sealedAt ?? null,
+        closedAt: m.closedAt ?? null,
+        departedAt: m.departedAt ?? null,
+        arrivedAt: m.arrivedAt ?? null,
+        estimatedArrival: m.estimatedArrival ?? null,
+      }));
+
+      // ── Build response ───────────────────────────────────────────────────
+      const responseData: any = {
+        manifests: formattedManifests,
+        pagination: {
+          total: filteredManifests.length,
+          page,
+          limit,
+          pages: Math.ceil(filteredManifests.length / limit),
+          hasMore: filteredManifests.length > skip + limit,
+        },
+        filters: {
+          status: req.query.status ?? null,
+          statuses: req.query.statuses ?? null,
+          priority: req.query.priority ?? null,
+          isSealed: req.query.isSealed ?? null,
+          isInTransit: req.query.isInTransit ?? null,
+          hasDiscrepancy: req.query.hasDiscrepancy ?? null,
+          minWeight: req.query.minWeight ?? null,
+          maxWeight: req.query.maxWeight ?? null,
+          minPackageCount: req.query.minPackageCount ?? null,
+          maxPackageCount: req.query.maxPackageCount ?? null,
+          manifestCode: req.query.manifestCode ?? null,
+          search: req.query.search ?? null,
+          containsPackageId: req.query.containsPackageId ?? null,
+          companyId: req.query.companyId ?? null,
+          originBranchId: req.query.originBranchId ?? null,
+          destinationBranchId: req.query.destinationBranchId ?? null,
+          branchId: req.query.branchId ?? null,
+          createdBy: req.query.createdBy ?? null,
+          transporterId: req.query.transporterId ?? null,
+          vehicleId: req.query.vehicleId ?? null,
+          createdFrom: req.query.createdFrom ?? null,
+          createdTo: req.query.createdTo ?? null,
+          departedFrom: req.query.departedFrom ?? null,
+          departedTo: req.query.departedTo ?? null,
+          arrivedFrom: req.query.arrivedFrom ?? null,
+          arrivedTo: req.query.arrivedTo ?? null,
+          sortBy: req.query.sortBy ?? "route_order",
+          order: req.query.order ?? "asc",
+        },
+      };
+
+      if (transporterStats) {
+        responseData.transporterStats = transporterStats;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: responseData,
+      });
+    } catch (error: any) {
+      if (error.name === "ValidationError") {
+        return next(
+          new ErrorHandler(
+            Object.values(error.errors)
+              .map((e: any) => e.message)
+              .join(", "),
+            400,
+          ),
+        );
+      }
+      return next(
+        new ErrorHandler(error.message || "Error fetching manifests.", 500),
+      );
+    }
+  },
+);
