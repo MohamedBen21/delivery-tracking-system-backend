@@ -1,20 +1,7 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 
 
-/**
- * Every action a cashier can perform during package intake.
- *
- *  claim_package         → merchant hands over package; cashier scans & accepts it
- *  reject_package        → package refused at intake (damaged, non-compliant, etc.)
- *  weigh_package         → weight/dimensions recorded / verified
- *  update_package        → data correction before acceptance
- *  print_label           → barcode/tracking label printed
- *  collect_payment       → COD or upfront fee collected
- *  issue_receipt         → receipt issued to merchant
- *  assign_to_manifest    → package assigned to an outbound manifest
- *  hold_package          → package put on hold (pending info, payment issue, etc.)
- *  release_hold          → hold removed; package re-enters workflow
- */
+
 
 
 export type CashierScanAction =
@@ -33,9 +20,7 @@ export type CashierShiftStatus = 'active' | 'on_break' | 'ended';
 
 export type CashierStatus = 'active' | 'inactive' | 'suspended';
 
-/**
- * Reason a package was rejected at intake.
- */
+
 export type RejectionReason =
   | 'damaged_on_arrival'
   | 'prohibited_item'
@@ -49,13 +34,11 @@ export type RejectionReason =
 
 
 
-/**
- * A single action logged in the cashier's scan activity feed.
- */
+
 export interface ICashierScanEntry {
   action: CashierScanAction;
   packageId?: mongoose.Types.ObjectId;
-  trackingNumber?: string;           // denormalised
+  trackingNumber?: string;           
 
   manifestId?: mongoose.Types.ObjectId;
   manifestCode?: string;
@@ -66,16 +49,14 @@ export interface ICashierScanEntry {
   success: boolean;
   errorMessage?: string;
 
-  /** For payment actions */
+
   amountCollected?: number;
 
-  /** For rejection actions */
+
   rejectionReason?: RejectionReason;
 }
 
-/**
- * A work shift record per cashier session.
- */
+
 export interface ICashierShift {
   branchId: mongoose.Types.ObjectId;
   startedAt: Date;
@@ -86,15 +67,13 @@ export interface ICashierShift {
   packagesRejectedCount: number;
   labelsIssuedCount: number;
   paymentsCollectedCount: number;
-  totalAmountCollected: number;    // sum of COD + fees collected this shift
+  totalAmountCollected: number;    
 
   durationMinutes?: number;
   notes?: string;
 }
 
-/**
- * Rolling performance counters for the cashier.
- */
+
 export interface ICashierStats {
   totalPackagesClaimed: number;
   totalPackagesRejected: number;
@@ -106,14 +85,10 @@ export interface ICashierStats {
   lastActiveAt?: Date;
 }
 
-/**
- * Merchant interaction record.
- * Keeps a lightweight log of every merchant (client / freelancer)
- * that visited this cashier's counter — useful for audits.
- */
+
 export interface IMerchantVisit {
-  merchantId: mongoose.Types.ObjectId;      // User (client / freelancer)
-  merchantName: string;                     // denormalised snapshot
+  merchantId: mongoose.Types.ObjectId;      
+  merchantName: string;                     
   visitedAt: Date;
   packageCount: number;
   totalWeight: number;
@@ -132,26 +107,23 @@ export interface ICashier extends Document {
 
   assignedBranchId: mongoose.Types.ObjectId;
 
-  /**
-   * The counter/window number at the branch.
-   * A branch may have multiple cashiers at different counters.
-   */
+  
   counterNumber?: number;
 
-  employeeCode: string;   // e.g. CSH-ALG-0007
+  employeeCode: string;  
 
   status: CashierStatus;
 
-  /** Active shift — null when not checked in */
+
   currentShift?: ICashierShift | null;
 
-  /** Recent shifts ring-buffer (last 30) */
+
   recentShifts: ICashierShift[];
 
-  /** Recent scan activity ring-buffer (last 200) */
+
   recentScans: ICashierScanEntry[];
 
-  /** Recent merchant visits ring-buffer (last 100) */
+
   recentMerchantVisits: IMerchantVisit[];
 
   stats: ICashierStats;
@@ -160,11 +132,10 @@ export interface ICashier extends Document {
   createdAt: Date;
   updatedAt: Date;
 
-  // virtuals
   isCheckedIn: boolean;
   currentShiftDurationMinutes?: number;
 
-  // methods
+
   checkIn(branchId: mongoose.Types.ObjectId): Promise<ICashier>;
   checkOut(notes?: string): Promise<ICashier>;
   logScan(entry: Omit<ICashierScanEntry, 'timestamp'>): Promise<ICashier>;
@@ -493,7 +464,7 @@ cashierSchema.methods.checkOut = function (notes?: string): Promise<ICashier> {
   );
   if (notes) this.currentShift.notes = notes;
 
-  // Ring-buffer: keep last 30 shifts
+
   this.recentShifts.unshift(this.currentShift);
   if (this.recentShifts.length > 30) {
     this.recentShifts = this.recentShifts.slice(0, 30);
@@ -509,7 +480,7 @@ cashierSchema.methods.logScan = function (
 ): Promise<ICashier> {
   const scanEntry: ICashierScanEntry = { ...entry, timestamp: new Date() };
 
-  // Ring-buffer: keep last 200 scans
+
   this.recentScans.unshift(scanEntry);
   if (this.recentScans.length > 200) {
     this.recentScans = this.recentScans.slice(0, 200);
@@ -517,7 +488,7 @@ cashierSchema.methods.logScan = function (
 
   this.stats.lastActiveAt = new Date();
 
-  // Update current shift counters
+
   if (this.currentShift && entry.success) {
     switch (entry.action) {
       case 'claim_package':
@@ -544,7 +515,7 @@ cashierSchema.methods.logScan = function (
 cashierSchema.methods.logMerchantVisit = function (
   visit: IMerchantVisit
 ): Promise<ICashier> {
-  // Ring-buffer: keep last 100 merchant visits
+
   this.recentMerchantVisits.unshift(visit);
   if (this.recentMerchantVisits.length > 100) {
     this.recentMerchantVisits = this.recentMerchantVisits.slice(0, 100);

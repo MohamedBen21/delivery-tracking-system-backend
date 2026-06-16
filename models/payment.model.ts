@@ -256,13 +256,13 @@ paymentSchema.methods.markAsRefunded = function(
 
 paymentSchema.pre('save', function(next) {
 
-  // ─── NEW DOCUMENT ───────────────────────────────────────────────────────────
+
   if (this.isNew) {
 
-    // Both delivery types start as 'pending' — no auto-settling at creation
+
     this.settlementDeadline = undefined;
 
-    // Auto-generate receipt number if not provided
+
     if (!this.receiptNumber) {
       const prefix = 'RCP';
       const timestamp = Date.now().toString().slice(-8);
@@ -271,8 +271,8 @@ paymentSchema.pre('save', function(next) {
     }
   }
 
-  // ─── SETTLEMENT DEADLINE ────────────────────────────────────────────────────
-  // Set 7-day deadline when a home_delivery payment transitions to 'collected'
+
+  
   if (
     this.isModified('status') &&
     this.status === 'collected' &&
@@ -284,8 +284,8 @@ paymentSchema.pre('save', function(next) {
     this.settlementDeadline = deadline;
   }
 
-  // ─── COLLECTION VALIDATION ──────────────────────────────────────────────────
-  // Only enforce staff/deliverer presence when payment is no longer pending
+
+  
   if (this.status !== 'pending') {
 
     if (this.collectionMethod === 'home_delivery' && !this.delivererId) {

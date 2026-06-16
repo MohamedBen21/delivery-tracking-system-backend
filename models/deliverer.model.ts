@@ -540,10 +540,7 @@ delivererSchema.methods.canAcceptDelivery = function() {
 
 
 
-/**
- * Record payment collection on delivery completion.
- * Updates both lifetime and today counters.
- */
+
 delivererSchema.methods.recordDeliveryPayment = function(
   amountCollected: number,
   isCOD: boolean,
@@ -551,10 +548,10 @@ delivererSchema.methods.recordDeliveryPayment = function(
   
   const branchAmount = amountCollected - this.commission;
 
-  // Lifetime
+
   this.totalEarnings += this.commission;
 
-  // Today
+
   this.todayEarnings += this.commission;
   this.todayDeliveriesCount += 1;
   this.todayCollectedAmount += amountCollected;
@@ -567,11 +564,7 @@ delivererSchema.methods.recordDeliveryPayment = function(
   return this.save();
 };
 
-/**
- * Called when deliverer returns cash to branch at end of day.
- * Resets daily counters and pending branch return.
- * Returns summary of what was returned.
- */
+
 
 delivererSchema.methods.returnCashToBranch = function() {
 
@@ -582,7 +575,7 @@ delivererSchema.methods.returnCashToBranch = function() {
     todayCollected: this.todayCollectedAmount,
   };
 
-  // Reset daily counters
+
   this.pendingBranchReturn = 0;
   this.todayEarnings = 0;
   this.todayDeliveriesCount = 0;

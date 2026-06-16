@@ -82,7 +82,7 @@ const stopQrSessionSchema = new Schema<IStopQrSession>(
   },
 );
 
-// ── Virtuals ─────────────────────────────────────────────────────────────────
+
 
 stopQrSessionSchema.virtual("isValid").get(function () {
   return !this.verified && this.expiresAt > new Date();
@@ -100,7 +100,7 @@ stopQrSessionSchema.virtual("minutesRemaining").get(function () {
   );
 });
 
-// ── Indexes ─────────────────────────────────────────────────────────────────
+
 
 stopQrSessionSchema.index({ routeId: 1, stopIndex: 1, verified: 1 });
 stopQrSessionSchema.index({ routeId: 1, stopIndex: 1, transporterId: 1, verified: 1 });

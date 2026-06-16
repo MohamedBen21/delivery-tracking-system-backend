@@ -49,13 +49,13 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
       lowercase: true,
       trim: true,
       validate: {
-        // ✅ Regular function so `this` refers to the document
+
         validator: function (this: IUser, value: string) {
-          // If no value and role is client, skip validation
+
           if (!value && this.role === "client") {
             return true;
           }
-          // If value exists, it must be a valid email
+
           if (value) {
             return emailRegex.test(value);
           }
@@ -141,8 +141,8 @@ const userSchema: Schema<IUser> = new mongoose.Schema(
   { timestamps: true }
 );
 
-// userSchema.index({ email: 1 }); // duplicate: email already indexed via `unique: true`
-// userSchema.index({ phone: 1 }); // duplicate: phone already indexed via `unique: true`
+// userSchema.index({ email: 1 }); 
+// userSchema.index({ phone: 1 }); 
 userSchema.index({ role: 1, status: 1 });
 
 

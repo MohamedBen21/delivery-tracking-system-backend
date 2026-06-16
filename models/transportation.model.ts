@@ -7,16 +7,7 @@ export type TransportationStatus =
   | 'completed'
   | 'cancelled';
 
-/**
- * A "trip" of one or more sealed manifests being moved from a source
- * location to a destination location by a transporter.
- *
- * This is intentionally lean: it stores rollup totals (weight, volume,
- * package/manifest counts) computed at creation time from the referenced
- * manifests, plus the actual vs. estimated delivery times needed by the
- * transporter mobile app. It does not duplicate per-manifest or
- * per-package detail — those are fetched via `manifestIds` when needed.
- */
+
 export interface ITransportation extends Document {
   transportationCode: string;
   companyId: mongoose.Types.ObjectId;
@@ -62,20 +53,20 @@ export interface ITransportation extends Document {
   createdAt: Date;
   updatedAt: Date;
 
-  // virtuals
+
   isInTransit: boolean;
   isCompleted: boolean;
   isOverdue: boolean;
   durationMinutes?: number;
 
-  // methods
+
   markDeparted: () => Promise<ITransportation>;
   markArrived: () => Promise<ITransportation>;
   markCompleted: (actualDeliveryTime?: Date) => Promise<ITransportation>;
   cancel: (reason?: string) => Promise<ITransportation>;
 }
 
-// ── Sub-schema: source / destination point ────────────────────────────────
+
 
 const transportPointSchema = new Schema({
   branchId: {
@@ -114,7 +105,7 @@ const transportPointSchema = new Schema({
   },
 }, { _id: false });
 
-// ── Main schema ─────────────────────────────────────────────────────────────
+
 
 const transportationSchema = new Schema<ITransportation>({
 
@@ -220,7 +211,7 @@ const transportationSchema = new Schema<ITransportation>({
   toObject: { virtuals: true },
 });
 
-// ── Virtuals ──────────────────────────────────────────────────────────────────
+
 
 transportationSchema.virtual('isInTransit').get(function () {
   return this.status === 'in_transit';
@@ -242,7 +233,7 @@ transportationSchema.virtual('durationMinutes').get(function () {
   );
 });
 
-// ── Methods ───────────────────────────────────────────────────────────────────
+
 
 transportationSchema.methods.markDeparted = function () {
   this.status = 'in_transit';
@@ -269,7 +260,7 @@ transportationSchema.methods.cancel = function (reason?: string) {
   return this.save();
 };
 
-// ── Pre-save: generate transportationCode ──────────────────────────────────────
+
 
 transportationSchema.pre('save', function (next) {
   if (this.isNew && !this.transportationCode) {

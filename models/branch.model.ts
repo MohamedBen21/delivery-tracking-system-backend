@@ -69,15 +69,11 @@ export interface IBranch extends Document {
   availableCapacity: number;
 
   branchType: BranchType;
-  parentHubId?: mongoose.Types.ObjectId | null; //put if branchType is local_branch
+  parentHubId?: mongoose.Types.ObjectId | null; //if branchType is local_branch
 
   servesBranches?: mongoose.Types.ObjectId[];  // Array of branch IDs this hub serves
 
-  /**
-   * Commune IDs (from communes.json) that this branch handles for branch_pickup.
-   * Optional — branches without this list are not matched by commune lookup.
-   * Does not affect home delivery routing (hubs only).
-   */
+
   servesCommunes?: string[];
 
   updateDayHours(day: WeekDay, hours: IOperatingHours): Promise<IBranch>;
@@ -267,10 +263,7 @@ const branchSchema = new Schema<IBranch, IBranchModel>({
     ref: 'Branch',
   }],
 
-  // Commune IDs this branch handles for branch_pickup resolution.
-  // Stored as strings (commune id from communes.json, e.g. "42").
-  // Not required — omitting it simply means the branch won't be matched
-  // by the commune lookup utility. Existing documents are unaffected.
+
   servesCommunes: [{
     type: String,
     trim: true,
@@ -327,9 +320,7 @@ branchSchema.index({ companyId: 1, status: 1 });
 branchSchema.index({ location: '2dsphere' });
 branchSchema.index({ status: 1 });
 branchSchema.index({ 'address.city': 1 });
-// Sparse: only indexes branches that actually list communes.
-// Allows efficient lookups in findBranchByCommune without touching
-// the large number of branches that have no servesCommunes list.
+
 branchSchema.index({ companyId: 1, servesCommunes: 1, status: 1 }, { sparse: true });
 
 branchSchema.pre('save', function(next) {

@@ -59,24 +59,22 @@ export const WILAYAS: Record<number, string> = {
   58: "El Meniaa",
 };
 
-// Derived helpers — computed once at startup, free to use anywhere
 
-/** All valid wilaya codes as a sorted number array */
 export const WILAYA_CODES = Object.keys(WILAYAS).map(Number).sort((a, b) => a - b);
 
-/** Reverse map: name → code  (useful for seeding / CSV imports) */
+
 export const WILAYA_BY_NAME: Record<string, number> = Object.fromEntries(
   Object.entries(WILAYAS).map(([code, name]) => [name, Number(code)])
 );
 
-/** Returns the display name for a code, or throws if the code is invalid */
+
 export function wilayaName(code: number): string {
   const name = WILAYAS[code];
   if (!name) throw new Error(`Unknown wilaya code: ${code}`);
   return name;
 }
 
-/** Returns true if the code is a valid wilaya number (1–58) */
+
 export function isValidWilayaCode(code: number): boolean {
   return Number.isInteger(code) && code >= 1 && code <= 58 && code in WILAYAS;
 }

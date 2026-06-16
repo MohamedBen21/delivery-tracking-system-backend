@@ -1,8 +1,6 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 
-// Hub route types added:
-//   hub_to_hub    — direct leg between two main hubs (transporter carries manifests)
-//   hub_to_branch — multi-stop run from a main hub to local branches it serves
+
 export type RouteType =
   | 'inter_branch'
   | 'local_delivery'
@@ -20,14 +18,10 @@ export type StopAction = 'pickup' | 'delivery' | 'transfer' | 'service';
 export interface IRouteStop {
   _id?: mongoose.Types.ObjectId;
 
-  /** Raw packages at this stop (deliverer routes and legacy transporter routes). */
+
   packageIds: mongoose.Types.ObjectId[];
 
-  /**
-   * Manifest IDs at this stop (hub_to_hub and hub_to_branch routes).
-   * Each manifest is a sealed bag; the transporter drops off / hands over
-   * the entire bag rather than individual packages.
-   */
+
   manifestIds: mongoose.Types.ObjectId[];
 
   order: number;
@@ -55,9 +49,9 @@ export interface IRouteStop {
   failedPackages: mongoose.Types.ObjectId[];
   skippedPackages: mongoose.Types.ObjectId[];
 
-  /** Manifests successfully handed over at this stop. */
+
   completedManifests: mongoose.Types.ObjectId[];
-  /** Manifests with a discrepancy flagged at this stop. */
+
   discrepancyManifests: mongoose.Types.ObjectId[];
 
   issues?: string[];
@@ -83,11 +77,7 @@ export interface IRoute extends Document {
   type: RouteType;
 
   originBranchId?: mongoose.Types.ObjectId;
-  /**
-   * For hub_to_hub: the destination hub.
-   * For hub_to_branch: not set (multiple destinations, see stops[].branchId).
-   * For inter_branch / local_delivery: same as before.
-   */
+
   destinationBranchId?: mongoose.Types.ObjectId;
 
   assignedVehicleId?: mongoose.Types.ObjectId;
@@ -131,7 +121,7 @@ export interface IRoute extends Document {
   cancellationReason?: string;
   completionNotes?: string;
 
-  // virtuals
+
   isActive: boolean;
   isCompleted: boolean;
   isDelayed: boolean;
@@ -142,11 +132,11 @@ export interface IRoute extends Document {
   remainingStops: IRouteStop[];
   totalPackages: number;
   completedPackages: number;
-  /** Total manifests across all stops (hub routes). */
+
   totalManifests: number;
   isHubRoute: boolean;
 
-  // methods
+
   startRoute: (startedBy?: mongoose.Types.ObjectId) => Promise<IRoute>;
   pauseRoute: (reason?: string) => Promise<IRoute>;
   resumeRoute: () => Promise<IRoute>;
@@ -169,7 +159,7 @@ export interface IRoute extends Document {
 }
 
 
-// ── Sub-schemas ───────────────────────────────────────────────────────────────
+
 
 const routeStopSchema = new Schema<IRouteStop>({
 
@@ -179,7 +169,7 @@ const routeStopSchema = new Schema<IRouteStop>({
     default: [],
   },
 
-  // Hub model: sealed manifest bags at this stop
+
   manifestIds: {
     type: [Schema.Types.ObjectId],
     ref: 'Manifest',
@@ -251,7 +241,7 @@ const routeStopSchema = new Schema<IRouteStop>({
     type: Number,
     default: 15,
     min: 1,
-    max: 480,  // raised from 240 — hub unload can take longer
+    max: 480,  
   },
   completedPackages: {
     type: [Schema.Types.ObjectId],
@@ -297,7 +287,7 @@ const optimizedPathSchema = new Schema<IOptimizedPath>({
 }, { _id: false });
 
 
-// ── Main route schema ─────────────────────────────────────────────────────────
+
 
 const routeSchema = new Schema<IRoute>({
   routeNumber: {
@@ -367,8 +357,7 @@ const routeSchema = new Schema<IRoute>({
   distance: {
     type: Number,
     required: [true, 'Distance is required'],
-    // hub_to_hub routes start at 0 (placeholder — real distance resolved later).
-    // Algeria spans ~2000 km so raise the ceiling to accommodate long hauls.
+ 
     min: [0, 'Distance cannot be negative'],
     max: [3000, 'Distance cannot exceed 3000 km'],
   },
@@ -376,7 +365,7 @@ const routeSchema = new Schema<IRoute>({
     type: Number,
     required: [true, 'Estimated time is required'],
     min: [1, 'Estimated time must be at least 1 minute'],
-    // Long hub-to-hub drives can exceed 24 h (Algiers → Tamanrasset ~2000 km)
+    
     max: [2880, 'Estimated time cannot exceed 48 hours'],
   },
   actualTime:   { type: Number, min: 0 },
@@ -429,7 +418,7 @@ const routeSchema = new Schema<IRoute>({
 });
 
 
-// ── Virtuals ──────────────────────────────────────────────────────────────────
+
 
 routeSchema.virtual('isActive').get(function () {
   return this.status === 'active' || this.status === 'paused';
@@ -481,12 +470,12 @@ routeSchema.virtual('completedPackages').get(function () {
   return this.stops.reduce((total, stop) => total + stop.completedPackages.length, 0);
 });
 
-/** Total sealed manifest bags across all stops (hub routes). */
+
 routeSchema.virtual('totalManifests').get(function () {
   return this.stops.reduce((total, stop) => total + (stop.manifestIds?.length ?? 0), 0);
 });
 
-/** True for hub_to_hub and hub_to_branch routes. */
+
 routeSchema.virtual('isHubRoute').get(function () {
   return this.type === 'hub_to_hub' || this.type === 'hub_to_branch';
 });
@@ -504,7 +493,7 @@ routeSchema.virtual('efficiencyScore').get(function () {
 });
 
 
-// ── Methods ───────────────────────────────────────────────────────────────────
+
 
 routeSchema.methods.startRoute = function (startedBy?: mongoose.Types.ObjectId) {
   this.status       = 'active';
@@ -652,7 +641,6 @@ routeSchema.methods.reorderStops = function (newOrder: number[]) {
 };
 
 
-// ── Indexes ───────────────────────────────────────────────────────────────────
 
 routeSchema.index({ companyId: 1, status: 1 });
 routeSchema.index({ originBranchId: 1, status: 1 });

@@ -1,17 +1,6 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 
-/**
- * The different scanning actions a loader can perform.
- *
- *  scan_in_package       → scanning a package into a manifest (loading)
- *  scan_out_package      → scanning a package out of a manifest (unloading)
- *  scan_manifest_on_truck→ scanning a sealed manifest onto a vehicle
- *  scan_manifest_off_truck→ scanning a manifest off a vehicle at destination
- *  create_manifest       → opening a new manifest bag
- *  seal_manifest         → physically sealing a manifest bag
- *  close_manifest        → completing unloading and closing the manifest
- *  flag_discrepancy      → reporting a count/damage issue
- */
+
 
 export type LoaderScanAction =
   | 'scan_in_package'
@@ -29,63 +18,53 @@ export type LoaderStatus = 'active' | 'inactive' | 'suspended';
 
 
 
-/**
- * A single scan action logged in the loader's activity feed.
- * This is a fast in-document log; a separate ScanLog collection
- * can be used for high-volume analytics if needed.
- */
+
 
 export interface ILoaderScanEntry {
   action: LoaderScanAction;
 
-  /** Scanned entity – either a package or a manifest */
-  scannedId: mongoose.Types.ObjectId;
-  scannedCode: string;           // trackingNumber or manifestCode
 
-  /** The manifest this action was applied to (if applicable) */
+  scannedId: mongoose.Types.ObjectId;
+  scannedCode: string;           
+
+ 
   manifestId?: mongoose.Types.ObjectId;
   manifestCode?: string;
 
-  /** Vehicle involved (for on/off-truck scans) */
+
   vehicleId?: mongoose.Types.ObjectId;
 
   branchId: mongoose.Types.ObjectId;
   timestamp: Date;
   notes?: string;
 
-  /** true = action completed without error */
+
   success: boolean;
   errorMessage?: string;
 }
 
-/**
- * A work shift record.  Every login at a branch starts a shift;
- * logout / end-of-day closes it.
- */
+
 export interface ILoaderShift {
   branchId: mongoose.Types.ObjectId;
   startedAt: Date;
   endedAt?: Date;
   status: LoaderShiftStatus;
 
-  /** Total packages loaded into manifests this shift */
+
   packagesLoadedCount: number;
-  /** Total packages unloaded from manifests this shift */
+
   packagesUnloadedCount: number;
-  /** Total manifests loaded onto vehicles this shift */
+
   manifestsLoadedCount: number;
-  /** Total manifests unloaded from vehicles this shift */
+
   manifestsUnloadedCount: number;
 
-  /** Duration in minutes (computed on shift end) */
+
   durationMinutes?: number;
   notes?: string;
 }
 
-/**
- * Aggregate performance stats maintained as a rolling counter.
- * Updated by the application layer on each action.
- */
+
 export interface ILoaderStats {
   totalPackagesLoaded: number;
   totalPackagesUnloaded: number;
@@ -98,9 +77,7 @@ export interface ILoaderStats {
   lastActiveAt?: Date;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Loader document interface
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export interface ILoader extends Document {
 
@@ -110,23 +87,20 @@ export interface ILoader extends Document {
  
   assignedBranchId: mongoose.Types.ObjectId;
 
-  /**
-   * A loader can be temporarily assigned to assist another branch.
-   * Null when working at their home branch.
-   */
+  
   temporaryBranchId?: mongoose.Types.ObjectId | null;
 
   employeeCode: string;   // e.g. LDR-ALG-0042
 
   status: LoaderStatus;
 
-  /** The loader's current open shift (null when not checked in) */
+
   currentShift?: ILoaderShift | null;
 
-  /** Last N shifts kept in-document for quick access (older shifts → separate collection) */
+
   recentShifts: ILoaderShift[];
 
-  /** Recent scan activity kept in-document (ring-buffer of last 200 scans) */
+
   recentScans: ILoaderScanEntry[];
 
   stats: ILoaderStats;
@@ -135,12 +109,12 @@ export interface ILoader extends Document {
   createdAt: Date;
   updatedAt: Date;
 
-  // virtuals
+
   isCheckedIn: boolean;
-  activeBranchId: mongoose.Types.ObjectId;   // temporaryBranchId ?? assignedBranchId
+  activeBranchId: mongoose.Types.ObjectId;   
   currentShiftDurationMinutes?: number;
 
-  // methods
+
   checkIn(branchId: mongoose.Types.ObjectId): Promise<ILoader>;
   checkOut(notes?: string): Promise<ILoader>;
   logScan(entry: Omit<ILoaderScanEntry, 'timestamp'>): Promise<ILoader>;
@@ -152,9 +126,7 @@ export interface ILoaderModel extends Model<ILoader> {
   findCheckedIn(companyId?: string): Promise<ILoader[]>;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Sub-schemas
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 const loaderScanEntrySchema = new Schema<ILoaderScanEntry>(
   {
@@ -269,9 +241,7 @@ const loaderStatsSchema = new Schema<ILoaderStats>(
   { _id: false }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Loader Schema
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 const loaderSchema = new Schema<ILoader, ILoaderModel>(
   {
@@ -410,7 +380,7 @@ loaderSchema.methods.checkOut = function (notes?: string): Promise<ILoader> {
   );
   if (notes) this.currentShift.notes = notes;
 
-  // Push to recent shifts ring-buffer (keep last 30)
+
   this.recentShifts.unshift(this.currentShift);
   if (this.recentShifts.length > 30) {
     this.recentShifts = this.recentShifts.slice(0, 30);
@@ -421,13 +391,13 @@ loaderSchema.methods.checkOut = function (notes?: string): Promise<ILoader> {
   return this.save();
 };
 
-// need to revise later
+
 loaderSchema.methods.logScan = function (
   entry: Omit<ILoaderScanEntry, 'timestamp'>
 ): Promise<ILoader> {
   const scanEntry: ILoaderScanEntry = { ...entry, timestamp: new Date() };
 
-  // Ring-buffer: keep last 200 scans
+
   this.recentScans.unshift(scanEntry);
   if (this.recentScans.length > 200) {
     this.recentScans = this.recentScans.slice(0, 200);
@@ -435,7 +405,7 @@ loaderSchema.methods.logScan = function (
 
   this.stats.lastActiveAt = new Date();
 
-  // Update current shift counters
+
   if (this.currentShift && entry.success) {
     switch (entry.action) {
       case 'scan_in_package':
@@ -513,7 +483,7 @@ loaderSchema.pre('save', function (next) {
     this.temporaryBranchId &&
     this.temporaryBranchId.toString() === this.assignedBranchId.toString()
   ) {
-    this.temporaryBranchId = null; // clear if same as home branch
+    this.temporaryBranchId = null; 
   }
   next();
 });

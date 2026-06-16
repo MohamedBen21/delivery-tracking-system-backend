@@ -1,20 +1,11 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 import { WILAYA_CODES, isValidWilayaCode, wilayaName } from "./wilayas.constant";
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  One document per company.
-//  Prices are stored as an embedded array of entries, each covering one
-//  wilaya pair in canonical order (wilayaA ≤ wilayaB).
-//
-//  Full matrix:  58 × 57 / 2 + 58 = 1,653 entries  ≈ 80 KB  (well under 16 MB)
-//
-//  Reads:   one findOne(companyId) to get everything — no joins, no bulk reads.
-//  Writes:  $set on the matching array element (positional $ operator).
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export type DeliveryMode = "stopdesk" | "domicile";
 
-// ── Subdocument: one wilaya-pair entry ───────────────────────────────────────
+
 
 export interface ITariffEntry {
   wilayaA: number;  // lower code  (1–58)
@@ -23,7 +14,7 @@ export interface ITariffEntry {
   domicile: number; // price in DA, always >= stopdesk
 }
 
-// ── Root document ─────────────────────────────────────────────────────────────
+
 
 export interface ITariff extends Document {
   companyId: mongoose.Types.ObjectId;
@@ -34,38 +25,16 @@ export interface ITariff extends Document {
 }
 
 export interface ITariffModel extends Model<ITariff> {
-  /**
-   * Returns the single tariff document for a company.
-   * Use this on the manager's config page to render the full price table.
-   */
+
   findByCompany(companyId: string): Promise<ITariff | null>;
 
-  /**
-   * Look up the price for a specific wilaya pair.
-   * Codes can be passed in either order — normalised automatically.
-   *
-   * Returns the matching entry or null if no tariff is configured for that pair.
-   *
-   * @example
-   *   const entry = await TariffModel.findPrice(companyId, 31, 16);
-   *   entry?.stopdesk  // 500
-   *   entry?.domicile  // 700
-   */
   findPrice(
     companyId: string,
     wilayaFrom: number,
     wilayaTo: number
   ): Promise<ITariffEntry | null>;
 
-  /**
-   * Update (or insert) a single entry inside the company's tariff document.
-   * Creates the root document if it doesn't exist yet.
-   * Codes can be passed in either order.
-   *
-   * @example
-   *   await TariffModel.setPrice(companyId, 16, 31,
-   *     { stopdesk: 500, domicile: 700 }, managerId);
-   */
+
   setPrice(
     companyId: string,
     wilayaFrom: number,
@@ -74,17 +43,7 @@ export interface ITariffModel extends Model<ITariff> {
     updatedBy: string
   ): Promise<ITariff>;
 
-  /**
-   * Replace the entire entries array in one shot.
-   * Useful for bulk imports or seeding a new company's price table.
-   *
-   * @example
-   *   await TariffModel.bulkSetPrices(companyId, [
-   *     { wilayaA: 16, wilayaB: 31, stopdesk: 500, domicile: 700 },
-   *     { wilayaA:  9, wilayaB: 16, stopdesk: 400, domicile: 600 },
-   *     ...
-   *   ], managerId);
-   */
+
   bulkSetPrices(
     companyId: string,
     entries: ITariffEntry[],
@@ -92,7 +51,7 @@ export interface ITariffModel extends Model<ITariff> {
   ): Promise<ITariff>;
 }
 
-// ─── Subdocument schema ───────────────────────────────────────────────────────
+
 
 const tariffEntrySchema = new Schema<ITariffEntry>(
   {
@@ -129,10 +88,10 @@ const tariffEntrySchema = new Schema<ITariffEntry>(
       },
     },
   },
-  { _id: false } // no ObjectId per entry — wilayaA+wilayaB is the natural key
+  { _id: false } 
 );
 
-// ─── Root schema ──────────────────────────────────────────────────────────────
+
 
 const tariffSchema = new Schema<ITariff, ITariffModel>(
   {
@@ -140,7 +99,7 @@ const tariffSchema = new Schema<ITariff, ITariffModel>(
       type: Schema.Types.ObjectId,
       ref: "Company",
       required: [true, "Company reference is required"],
-      unique: true, // one document per company, enforced at DB level
+      unique: true, 
     },
     entries: {
       type: [tariffEntrySchema],
@@ -157,13 +116,13 @@ const tariffSchema = new Schema<ITariff, ITariffModel>(
   }
 );
 
-// ─── Helper: normalise a pair so wilayaA <= wilayaB ──────────────────────────
+
 
 function normalisePair(from: number, to: number): [number, number] {
   return from <= to ? [from, to] : [to, from];
 }
 
-// ─── Helper: validate and normalise a full entries array ─────────────────────
+
 
 function normaliseEntries(entries: ITariffEntry[]): ITariffEntry[] {
   return entries.map((e) => {
@@ -177,7 +136,7 @@ function normaliseEntries(entries: ITariffEntry[]): ITariffEntry[] {
   });
 }
 
-// ─── Statics ──────────────────────────────────────────────────────────────────
+
 
 tariffSchema.statics.findByCompany = function (
   companyId: string
@@ -192,10 +151,10 @@ tariffSchema.statics.findPrice = async function (
 ): Promise<ITariffEntry | null> {
   const [a, b] = normalisePair(wilayaFrom, wilayaTo);
 
-  // Project only the matching entry to avoid sending the full array over the wire
+
   const doc = await this.findOne(
     { companyId, "entries.wilayaA": a, "entries.wilayaB": b },
-    { "entries.$": 1 } // positional projection: returns only the matched element
+    { "entries.$": 1 } 
   );
 
   return doc?.entries?.[0] ?? null;
@@ -210,7 +169,7 @@ tariffSchema.statics.setPrice = async function (
 ): Promise<ITariff> {
   const [a, b] = normalisePair(wilayaFrom, wilayaTo);
 
-  // Try to update an existing entry first (positional $ operator)
+
   const updated = await this.findOneAndUpdate(
     {
       companyId,
@@ -229,7 +188,7 @@ tariffSchema.statics.setPrice = async function (
 
   if (updated) return updated;
 
-  // Entry doesn't exist yet — push it, or create the root document entirely
+  
   return this.findOneAndUpdate(
     { companyId },
     {
@@ -269,7 +228,7 @@ tariffSchema.statics.bulkSetPrices = function (
   );
 };
 
-// ─── Model ────────────────────────────────────────────────────────────────────
+
 
 const TariffModel = (
   mongoose.models.Tariff ||

@@ -9,11 +9,11 @@ type NotificationType =
 
   | "package_created"
   | "package_status_update"
-  | "package_claimed"       // cashier physically received the package
-  | "package_rejected"      // cashier rejected the package at counter
+  | "package_claimed"      
+  | "package_rejected"      
   | "package_cancelled"
-  | "package_assigned"      // package assigned to a deliverer
-  | "package_issue"         // issue flagged on a package
+  | "package_assigned"      
+  | "package_issue"         
   | "package_issue_resolved"
 
   | "manifest_sealed"

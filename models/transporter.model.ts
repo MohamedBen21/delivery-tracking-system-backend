@@ -40,30 +40,13 @@ export interface ITransporter extends Document {
   currentVehicleId?: mongoose.Types.ObjectId;
   currentRouteId?: mongoose.Types.ObjectId;
 
-  // ── Hub model fields ────────────────────────────────────────────────────────
 
-  /**
-   * Sub-type of this transporter.
-   * Required once the transporter is assigned to a hub configuration.
-   * Defaults to null (legacy / unset) so the field is optional until onboarding.
-   */
   transporterType?: TransporterType;
 
-  /**
-   * hub_to_hub only.
-   * The two main-hub branch IDs this transporter shuttles between.
-   * Always exactly 2 entries — [originHubId, destinationHubId].
-   * The transporter may travel in either direction; which end is "home" is
-   * determined by currentBranchId at departure time.
-   */
+
   assignedLine?: [mongoose.Types.ObjectId, mongoose.Types.ObjectId];
 
-  /**
-   * hub_to_branch only.
-   * The array of branch IDs (local branches) this transporter serves from
-   * their home hub.  The optimizer builds a multi-stop manifest route using
-   * exactly these branches.
-   */
+
   
   assignedBranches?: mongoose.Types.ObjectId[];
 
@@ -84,22 +67,22 @@ export interface ITransporter extends Document {
   completedTrips: number;
   cancelledTrips: number;
 
-  /** Manifests transported today (count) */
+
   todayTransportedCount: number;
   
-  /** Manifests currently in transit (on the road right now) */
+
   currentActiveManifests: number;
   
-  /** Manifests assigned for today (planned/assigned routes) */
+
   todayAssignedManifests: number;
   
-  /** Total manifests transported (lifetime) */
+ 
   totalManifestsTransported: number;
   
-  /** Today's completed trips count */
+
   todayCompletedTrips: number;
   
-  /** Total weight transported today (kg) */
+
   todayTotalWeight: number;
 
   totalDistance: number;
@@ -210,7 +193,7 @@ const transporterSchema = new Schema<ITransporter>({
     ref: 'Branch',
     validate: {
       validator: function (v: mongoose.Types.ObjectId[]) {
-        // Must be exactly 2 entries when present, or empty/null when absent.
+
         return !v || v.length === 0 || v.length === 2;
       },
       message: 'assignedLine must contain exactly 2 hub branch IDs',
@@ -224,7 +207,7 @@ const transporterSchema = new Schema<ITransporter>({
     default: undefined,
   },
 
-  // ── Availability / verification ─────────────────────────────────────────────
+
 
   availabilityStatus: {
     type: String,
@@ -270,7 +253,7 @@ const transporterSchema = new Schema<ITransporter>({
     maxlength: [500, 'Rejection reason cannot exceed 500 characters'],
   },
 
-  // ── Statistics ──────────────────────────────────────────────────────────────
+
 
   rating: {
     type: Number,
@@ -358,7 +341,7 @@ const transporterSchema = new Schema<ITransporter>({
     min: 0 
   },
 
-  // ── Status flags ────────────────────────────────────────────────────────────
+
 
   isActive:    { type: Boolean, default: true,  index: true },
   isOnline:    { type: Boolean, default: false },
@@ -379,7 +362,7 @@ const transporterSchema = new Schema<ITransporter>({
 });
 
 
-// ── Virtuals ─────────────────────────────────────────────────────────────────
+
 
 transporterSchema.virtual('isVerified').get(function () {
   return this.verificationStatus === 'verified';
@@ -434,31 +417,21 @@ transporterSchema.virtual('documentStatus').get(function () {
   return 'complete';
 });
 
-/**
- * True when the transporter has been configured for the hub model.
- * False for legacy transporters with no transporterType set.
- */
+
 transporterSchema.virtual('isHubTransporter').get(function () {
   return !!this.transporterType;
 });
 
-/** Convenience: true when transporterType === 'hub_to_hub'. */
 transporterSchema.virtual('isHubToHub').get(function () {
   return this.transporterType === 'hub_to_hub';
 });
 
-/** Convenience: true when transporterType === 'hub_to_branch'. */
+
 transporterSchema.virtual('isHubToBranch').get(function () {
   return this.transporterType === 'hub_to_branch';
 });
 
-/**
- * canAcceptJobs — extended for hub logic:
- *
- *  hub_to_hub    → must have assignedLine set (2 hubs).
- *  hub_to_branch → must have at least one assignedBranch.
- *  legacy        → no hub-config check (backward-compatible).
- */
+
 transporterSchema.virtual('canAcceptJobs').get(function () {
   if (!this.isAvailable || !this.isOnDuty) return false;
   if (this.documentStatus !== 'complete') return false;
@@ -470,7 +443,7 @@ transporterSchema.virtual('canAcceptJobs').get(function () {
   if (this.transporterType === 'hub_to_branch') {
     return Array.isArray(this.assignedBranches) && this.assignedBranches.length > 0;
   }
-  // Legacy transporter (no type set) — original check passes.
+
   return true;
 });
 
@@ -493,7 +466,7 @@ transporterSchema.virtual('todayCompletionRate').get(function () {
 });
 
 
-// ── Instance methods ──────────────────────────────────────────────────────────
+
 
 transporterSchema.methods.verify = function (
   verifiedBy: mongoose.Types.ObjectId,
@@ -543,10 +516,7 @@ transporterSchema.methods.release = function () {
   return this.save();
 };
 
-/**
- * Configures a transporter for the hub-to-hub line.
- * Validates that exactly 2 distinct hub IDs are provided.
- */
+
 transporterSchema.methods.assignHubLine = function (
   hubAId: mongoose.Types.ObjectId,
   hubBId: mongoose.Types.ObjectId
@@ -560,10 +530,7 @@ transporterSchema.methods.assignHubLine = function (
   return this.save();
 };
 
-/**
- * Configures a transporter for the hub-to-branch run.
- * Replaces (does not merge) the existing assignedBranches array.
- */
+
 transporterSchema.methods.assignBranches = function (
   branchIds: mongoose.Types.ObjectId[]
 ) {
@@ -578,10 +545,7 @@ transporterSchema.methods.assignBranches = function (
 
 
 
-/**
- * Called when the transporter starts a route.
- * Updates the active manifest count and assigned count.
- */
+
 transporterSchema.methods.startTrip = function (
   manifestCount: number,
   totalWeight: number,
@@ -594,10 +558,7 @@ transporterSchema.methods.startTrip = function (
   return this.save();
 };
 
-/**
- * Called when the transporter completes a stop or finishes a route.
- * Updates today's transported count and completed trips.
- */
+
 transporterSchema.methods.completeTrip = function (
   manifestCount: number,
   isLastStop: boolean,
@@ -617,9 +578,7 @@ transporterSchema.methods.completeTrip = function (
   return this.save();
 };
 
-/**
- * Resets daily counters (called at start of new day by cron or route assignment).
- */
+
 transporterSchema.methods.resetDailyCounters = function () {
 
   this.todayTransportedCount = 0;
@@ -632,9 +591,7 @@ transporterSchema.methods.resetDailyCounters = function () {
   
 };
 
-/**
- * Sets the assigned manifests count for today when routes are planned.
- */
+
 transporterSchema.methods.setAssignedManifests = function (count: number) {
   this.todayAssignedManifests = count;
   this.lastActiveAt = new Date();
@@ -642,7 +599,7 @@ transporterSchema.methods.setAssignedManifests = function (count: number) {
 };
 
 
-// ── Hooks ────────────────────────────────────────────────────────────────────
+
 
 transporterSchema.pre('save', function (next) {
   if (this.isModified('availabilityStatus') || this.isModified('verificationStatus')) {
@@ -660,9 +617,7 @@ transporterSchema.pre('save', function (next) {
     this.availabilityStatus = 'available';
   }
 
-  // Consistency guard: hub_to_hub must have assignedLine, hub_to_branch must
-  // have assignedBranches.  We only enforce this when these fields are
-  // explicitly modified so that partial saves during onboarding are allowed.
+
   if (this.isModified('transporterType')) {
     if (this.transporterType === 'hub_to_hub') {
       if (!this.assignedLine || this.assignedLine.length !== 2) {
@@ -680,7 +635,7 @@ transporterSchema.pre('save', function (next) {
 });
 
 
-// ── Indexes ──────────────────────────────────────────────────────────────────
+
 
 transporterSchema.index({ verificationStatus: 1, availabilityStatus: 1 });
 transporterSchema.index({ transporterType: 1, availabilityStatus: 1 });

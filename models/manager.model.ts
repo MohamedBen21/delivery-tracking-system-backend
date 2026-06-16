@@ -303,7 +303,7 @@ managerSchema.pre('save', function(next) {
     !this.isNew &&
     this.companyId
   ) {
-    // companyId was already set and someone is trying to change it
+
     const original = (this as any)._original;
     if (original && original.companyId && original.companyId.toString() !== this.companyId.toString()) {
       return next(new Error("companyId cannot be changed once set."));
@@ -313,7 +313,7 @@ managerSchema.pre('save', function(next) {
   next();
 });
 
-// managerSchema.index({ userId: 1 }); // duplicate: userId already indexed via `unique: true`
+// managerSchema.index({ userId: 1 }); 
 managerSchema.index({ companyId: 1 });
 managerSchema.index({ isActive: 1 });
 managerSchema.index({ companyId: 1, isActive: 1 });

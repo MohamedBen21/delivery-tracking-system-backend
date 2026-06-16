@@ -20,7 +20,7 @@ export interface IHeadquarters {
 export interface ICompany extends Document {
   name: string;
   businessType: BusinessType;
-  userId: mongoose.Types.ObjectId; // Freelancer or manager
+  userId: mongoose.Types.ObjectId;
   registrationNumber?: string;
   email?: string;
   phone?: string;
@@ -33,7 +33,7 @@ export interface ICompany extends Document {
   createdAt: Date;
   updatedAt: Date;
   
-  // attribut virtuel (for use in controller)
+
   isSolo: boolean;
   isActive: boolean;
   formattedAddress?: string;
@@ -191,7 +191,7 @@ companySchema.virtual("formattedAddress").get(function() {
 });
 
 
-// companySchema.index({ name: 1 }); // duplicate: name already indexed via `unique: true`
+// companySchema.index({ name: 1 }); 
 companySchema.index({ userId: 1 });
 companySchema.index({ status: 1 });
 companySchema.index({ "headquarters.location": "2dsphere" });

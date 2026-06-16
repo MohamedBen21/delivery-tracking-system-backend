@@ -72,7 +72,7 @@ const cashReturnSessionSchema = new Schema<ICashReturnSession>(
   { timestamps: true },
 );
 
-// index: auto-delete expired sessions after 1 hour
+
 cashReturnSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 3600 });
 
 export const CashReturnSessionModel = mongoose.model<ICashReturnSession>(

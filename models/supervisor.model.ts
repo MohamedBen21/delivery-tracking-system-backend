@@ -275,7 +275,7 @@ supervisorSchema.virtual('formattedSchedule').get(function() {
   const formatted: Record<WeekDay, string> = {} as Record<WeekDay, string>;
   const days: WeekDay[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
   
-  // Explicitly iterate over the days array instead of Object.entries
+
   for (const day of days) {
     const schedule = this.workSchedule[day];
     if (!schedule || schedule.dayOff) {
@@ -356,7 +356,7 @@ supervisorSchema.pre('save', function(next) {
   next();
 });
 
-// supervisorSchema.index({ userId: 1 }); // duplicate: userId already indexed via `unique: true`
+// supervisorSchema.index({ userId: 1 }); 
 supervisorSchema.index({ branchId: 1 });
 supervisorSchema.index({ companyId: 1 });
 supervisorSchema.index({ isActive: 1 });

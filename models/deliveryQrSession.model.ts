@@ -25,10 +25,10 @@ const deliveryQrSessionSchema = new mongoose.Schema({
   qrImageUrl: { type: String },
 }, { timestamps: true });
 
-// Index for automatic TTL cleanup (MongoDB will delete expired documents)
+
 deliveryQrSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-// Create and export the model
+
 const DeliveryQrSession = mongoose.model<IDeliveryQrSession>('DeliveryQrSession', deliveryQrSessionSchema);
 
 export default DeliveryQrSession;
