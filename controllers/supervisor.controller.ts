@@ -75,7 +75,7 @@ interface IUpdateDeliverer {
 
 
 
-//  CREATE DELIVERER
+
 export const createDeliverer = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -154,7 +154,7 @@ export const createDeliverer = catchAsyncError(
 
       if (!supervisor || !supervisor.isActive) {
 
-        // throw new ErrorHandler("You are not an active supervisor of this branch", 403);
+
         return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
       }
 
@@ -238,7 +238,7 @@ export const createDeliverer = catchAsyncError(
 
       const branchName = branch?.name || "Branch";
 
-      // Send notifications for new deliverer
+
       Promise.allSettled([
 
         sendDelivererAccountCreatedNotification(
@@ -295,7 +295,7 @@ export const createDeliverer = catchAsyncError(
 
 
 
-//  UPDATE DELIVERER
+
 export const updateDeliverer = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -466,7 +466,7 @@ export const updateDeliverer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -477,7 +477,7 @@ export const updateDeliverer = catchAsyncError(
 
 
 
-//  TOGGLE BLOCK / ACTIVATE DELIVERER
+
 export const toggleBlockDeliverer = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -525,16 +525,16 @@ export const toggleBlockDeliverer = catchAsyncError(
         throw new ErrorHandler("Not authorized to change this deliverer's status", 403);
       }
 
-      // Toggle
+
       const newIsActive = !deliverer.isActive;
 
       if (newIsActive) {
-        // Activating
+
         deliverer.isActive = true;
         deliverer.isSuspended = false;
         deliverer.suspensionReason = "";
       } else {
-        // Suspending
+
         deliverer.isActive = false;
         deliverer.isSuspended = true;
         deliverer.suspensionReason = suspensionReason || "Suspended by supervisor";
@@ -587,7 +587,7 @@ export const toggleBlockDeliverer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -598,7 +598,7 @@ export const toggleBlockDeliverer = catchAsyncError(
 
 
 
-//  GET DELIVERER BY ID
+
 export const getDeliverer = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const supervisorUserId = req.user?._id;
@@ -646,7 +646,7 @@ export const getDeliverer = catchAsyncError(
 
 
 
-//  GET ALL MY DELIVERERS (BRANCH)
+
 export const getMyDeliverers = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const supervisorUserId = req.user?._id;
@@ -730,7 +730,7 @@ export const getMyDeliverers = catchAsyncError(
 
 
 
-//  TRANSPORTERS INTERFACES
+
 
 interface ITransporterDocumentsBody {
   contractImage?: string;
@@ -773,7 +773,7 @@ interface IUpdateTransporter {
 
 
 
-//  CREATE TRANSPORTER
+
 export const createTransporter = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -823,7 +823,7 @@ export const createTransporter = catchAsyncError(
         return next(new ErrorHandler("All required fields must be strings", 400));
       }
 
-      // Check authorization based on role
+
       let isAuthorized = false;
       let supervisor = null;
       let manager = null;
@@ -955,7 +955,7 @@ export const createTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -963,7 +963,8 @@ export const createTransporter = catchAsyncError(
   }
 );
 
-//  UPDATE TRANSPORTER
+
+
 export const updateTransporter = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -1016,7 +1017,7 @@ export const updateTransporter = catchAsyncError(
         throw new ErrorHandler("Transporter not found", 404);
       }
 
-      // Check authorization based on role
+
       let isAuthorized = false;
       let supervisor = null;
 
@@ -1039,11 +1040,11 @@ export const updateTransporter = catchAsyncError(
         if (!supervisor.hasPermission("can_manage_deliverers")) {
           throw new ErrorHandler("You don't have permission to manage transporters", 403);
         }
-        // Supervisors can only update transporters in their branch
+
         if (transporter.currentBranchId?.toString() !== supervisor.branchId.toString()) {
           throw new ErrorHandler("You can only update transporters in your branch", 403);
         }
-        // Supervisors cannot change branch assignment
+
         if (body.currentBranchId) {
           throw new ErrorHandler("Supervisors cannot change transporter branch assignment", 403);
         }
@@ -1102,7 +1103,7 @@ export const updateTransporter = catchAsyncError(
       if (body.currentVehicleId !== undefined) transporterUpdates.currentVehicleId = body.currentVehicleId;
       if (body.currentBranchId !== undefined) transporterUpdates.currentBranchId = body.currentBranchId;
 
-      // Only managers and admins can change branch assignment
+
       if (body.currentBranchId !== undefined && (userRole === "admin" || userRole === "manager")) {
         transporterUpdates.currentBranchId = body.currentBranchId
           ? new mongoose.Types.ObjectId(body.currentBranchId)
@@ -1138,7 +1139,7 @@ export const updateTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -1146,7 +1147,7 @@ export const updateTransporter = catchAsyncError(
   }
 );
 
-//  TOGGLE BLOCK / ACTIVATE TRANSPORTER
+
 export const toggleBlockTransporter = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -1181,7 +1182,7 @@ export const toggleBlockTransporter = catchAsyncError(
         throw new ErrorHandler("Transporter not found", 404);
       }
 
-      // Check authorization based on role
+
       let isAuthorized = false;
 
       if (userRole === "admin") {
@@ -1203,7 +1204,7 @@ export const toggleBlockTransporter = catchAsyncError(
         if (!supervisor.hasPermission("can_manage_deliverers")) {
           throw new ErrorHandler("You don't have permission to manage transporters", 403);
         }
-        // Supervisors can only manage transporters in their branch
+
         if (transporter.currentBranchId?.toString() !== supervisor.branchId.toString()) {
           throw new ErrorHandler("You can only manage transporters in your branch", 403);
         }
@@ -1274,7 +1275,7 @@ export const toggleBlockTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -1282,7 +1283,8 @@ export const toggleBlockTransporter = catchAsyncError(
   }
 );
 
-//  GET TRANSPORTER BY ID
+
+
 export const getTransporter = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?._id;
@@ -1312,7 +1314,7 @@ export const getTransporter = catchAsyncError(
       return next(new ErrorHandler("Transporter not found", 404));
     }
 
-    // Check authorization based on role
+
     let isAuthorized = false;
 
     if (userRole === "admin") {
@@ -1323,7 +1325,7 @@ export const getTransporter = catchAsyncError(
     } else if (userRole === "supervisor") {
       const supervisor = await SupervisorModel.findOne({ userId, companyId });
       if (supervisor && supervisor.isActive) {
-        // Supervisors can only view transporters in their branch
+
         isAuthorized = transporter.currentBranchId?.toString() === supervisor.branchId.toString();
       }
     }
@@ -1339,7 +1341,8 @@ export const getTransporter = catchAsyncError(
   }
 );
 
-//  GET ALL MY TRANSPORTERS (COMPANY)
+
+
 export const getMyTransporters = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?._id;
@@ -1387,7 +1390,7 @@ export const getMyTransporters = catchAsyncError(
       companyId,
     };
 
-    // If supervisor, only show transporters from their branch
+
     if (supervisor) {
       transporterQuery.currentBranchId = supervisor.branchId;
     }
@@ -1406,7 +1409,7 @@ export const getMyTransporters = catchAsyncError(
       transporterQuery.isActive = isActive === "true";
     }
 
-    // Only allow branch filtering for non-supervisors (supervisors are locked to their branch)
+
     if (!supervisor && currentBranchId && typeof currentBranchId === "string") {
       if (mongoose.Types.ObjectId.isValid(currentBranchId)) {
         transporterQuery.currentBranchId = new mongoose.Types.ObjectId(currentBranchId);
@@ -2017,7 +2020,7 @@ export const createPackage = catchAsyncError(
       );
 
 
-      // Create payment record
+
       if (deliveryType === 'home') {
         await PaymentModel.create(
           [{
@@ -2086,7 +2089,7 @@ export const createPackage = catchAsyncError(
       ).catch(error => {
 
         console.error('Package created notification failed:', error);
-        // Will implement proper logging later
+
       });
 
       const populatedPackage = await PackageModel.findById(packageData[0]._id)
@@ -2116,7 +2119,7 @@ export const createPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2126,7 +2129,7 @@ export const createPackage = catchAsyncError(
 
 
 
-//  UPDATE PACKAGE
+
 export const updatePackage = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -2264,7 +2267,7 @@ export const updatePackage = catchAsyncError(
       //   }
       // }
 
-      // Update payment record when payment status changes
+
       if (body.paymentStatus && body.paymentStatus !== packageDoc.paymentStatus) {
         const payment = await PaymentModel.findOne({ packageId: packageDoc._id }).session(session);
 
@@ -2272,7 +2275,7 @@ export const updatePackage = catchAsyncError(
           switch (body.paymentStatus) {
             case 'paid':
               payment.status = 'collected';
-              // If home delivery and deliverer is assigned, set delivererId
+
               if (payment.collectionMethod === 'home_delivery' && body.assignedDelivererId) {
                 payment.delivererId = new mongoose.Types.ObjectId(body.assignedDelivererId);
               }
@@ -2336,7 +2339,7 @@ export const updatePackage = catchAsyncError(
         ).catch(error => {
 
           console.error('Package status update notification failed:', error);
-          // Will implement proper logging later
+
 
         });
       }
@@ -2369,7 +2372,7 @@ export const updatePackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2379,7 +2382,7 @@ export const updatePackage = catchAsyncError(
 
 
 
-//  TOGGLE CANCEL / REACTIVATE PACKAGE
+
 export const toggleCancelPackage = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -2530,7 +2533,7 @@ export const toggleCancelPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2538,7 +2541,8 @@ export const toggleCancelPackage = catchAsyncError(
   }
 );
 
-// GET PACKAGE BY ID (SUPERVISOR)
+
+
 export const getPackage = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const supervisorUserId = req.user?._id;
@@ -2596,7 +2600,8 @@ export const getPackage = catchAsyncError(
   }
 );
 
-//GET MY BRANCH PACKAGES (SUPERVISOR)
+
+
 export const getMyBranchPackages = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const supervisorUserId = req.user?._id;
@@ -2723,7 +2728,8 @@ export const getMyBranchPackages = catchAsyncError(
 
 
 
-//ADD PACKAGE PROBLEM 
+
+
 export const addPackageIssue = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -2855,7 +2861,7 @@ export const addPackageIssue = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2866,7 +2872,8 @@ export const addPackageIssue = catchAsyncError(
 
 
 
-//RESOLVE PACKAGE PROBLEM
+
+
 export const resolvePackageIssue = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -3007,7 +3014,7 @@ export const resolvePackageIssue = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -3049,7 +3056,8 @@ interface IUpdateFreelancer {
 
 
 
-//  CREATE FREELANCER
+
+
 export const createFreelancer = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -3235,7 +3243,7 @@ export const createFreelancer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -3243,7 +3251,8 @@ export const createFreelancer = catchAsyncError(
   }
 );
 
-//  UPDATE FREELANCER
+
+
 export const updateFreelancer = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -3390,7 +3399,7 @@ export const updateFreelancer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -3399,7 +3408,8 @@ export const updateFreelancer = catchAsyncError(
   }
 );
 
-//  TOGGLE BLOCK / ACTIVATE FREELANCER
+
+
 export const toggleBlockFreelancer = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -3508,7 +3518,7 @@ export const toggleBlockFreelancer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -3517,7 +3527,8 @@ export const toggleBlockFreelancer = catchAsyncError(
   }
 );
 
-//  GET FREELANCER BY ID
+
+
 export const getFreelancer = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const supervisorUserId = req.user?._id;
@@ -3563,7 +3574,8 @@ export const getFreelancer = catchAsyncError(
   }
 );
 
-//  GET ALL FREELANCERS IN MY BRANCH
+
+
 export const getMyFreelancers = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     console.log("GET MY FREELANCERS CALLED");
@@ -3866,7 +3878,7 @@ export const assignDeliverer = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -4012,7 +4024,7 @@ export const assignTransporter = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -4146,7 +4158,7 @@ export const assignFreelancer = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -4839,7 +4851,7 @@ interface IBranchPackagesQuery {
 }
 
 
-//  SHARED PIPELINE STAGES
+
 
 
 const COMPUTED_FIELDS_STAGE: mongoose.PipelineStage = {
@@ -4969,7 +4981,7 @@ const PROJECT_STRIP_HISTORY: mongoose.PipelineStage.Project = {
 };
 
 
-//  GET BRANCH PACKAGES
+
 
 
 export const getBranchPackages = catchAsyncError(
@@ -5121,7 +5133,7 @@ export const getBranchPackages = catchAsyncError(
         return next(new ErrorHandler("fromDate must be before toDate", 400));
       }
 
-      // ── Authorization ─────────────────────────────────────────────────────
+
       const [branch, supervisor] = await Promise.all([
         BranchModel.findById(branchId).lean(),
         SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
@@ -5169,7 +5181,7 @@ export const getBranchPackages = catchAsyncError(
         };
       }
 
-      // needsAttention and isOverdue override any explicit status filter
+
       if (needsAttention === "true") {
         baseMatch.status = {
           $in: ["failed_delivery", "failed_delivery_attempt", "damaged", "lost", "on_hold"],
@@ -5246,7 +5258,7 @@ export const getBranchPackages = catchAsyncError(
           { $sort: { [sortBy]: sortDirection } },
           {
             $facet: {
-              // ── Stage 1: At Origin (pending, accepted, at_origin_branch) ──────
+
               pendingPackages: [
                 multiStatusMatch(["pending", "accepted", "at_origin_branch"]),
                 { $skip: skip },
@@ -5258,7 +5270,6 @@ export const getBranchPackages = catchAsyncError(
                 { $count: "count" },
               ],
 
-              // ── Stage 2: In Transit ──────────────────────────────────────────
               inTransit: [
                 multiStatusMatch(["in_transit_to_branch", "manifested"]),
                 { $skip: skip },
@@ -5270,7 +5281,7 @@ export const getBranchPackages = catchAsyncError(
                 { $count: "count" },
               ],
 
-              // ── Stage 3: At Destination Branch ───────────────────────────────
+
               atBranch: [
                 singleStatusMatch("at_destination_branch"),
                 { $skip: skip },
@@ -5282,7 +5293,7 @@ export const getBranchPackages = catchAsyncError(
                 { $count: "count" },
               ],
 
-              // ── Stage 4: Out for Delivery + Failed Attempts ──────────────────
+
               outForDelivery: [
                 multiStatusMatch(["out_for_delivery", "failed_delivery", "failed_delivery_attempt", "rescheduled"]),
                 { $skip: skip },
@@ -5294,7 +5305,7 @@ export const getBranchPackages = catchAsyncError(
                 { $count: "count" },
               ],
 
-              // ── Stage 5: Terminal (completed/finished) ───────────────────────
+
               terminal: [
                 multiStatusMatch(["delivered", "cancelled", "returned", "lost", "damaged", "on_hold"]),
                 { $skip: skip },
@@ -5306,7 +5317,7 @@ export const getBranchPackages = catchAsyncError(
                 { $count: "count" },
               ],
 
-              // ── Summary ──────────────────────────────────────────────────────
+
               statusBreakdown: [
                 { $group: { _id: "$status", count: { $sum: 1 } } },
               ],
@@ -5705,7 +5716,7 @@ export const cancelPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -6378,7 +6389,7 @@ export const getPackageHistory = catchAsyncError(
       return next(new ErrorHandler("Package not found in this branch", 404));
     }
 
-    // Build history query
+
     const historyMatch: Record<string, any> = { packageId: packageOid };
     if (fromDateParsed || toDateParsed) {
       historyMatch.timestamp = {
@@ -6389,7 +6400,7 @@ export const getPackageHistory = catchAsyncError(
 
     const skip = (pageNum - 1) * limitNum;
 
-    // CRITICAL: Use .lean() on the find and also ensure populate returns lean objects
+
     const entries = await PackageHistoryModel.find(historyMatch)
       .sort({ timestamp: -1 })
       .skip(skip)
@@ -6397,14 +6408,14 @@ export const getPackageHistory = catchAsyncError(
       .populate({
         path: "handledBy",
         select: "firstName lastName role",
-        options: { lean: true } // Force populate to return lean objects
+        options: { lean: true } 
       })
       .populate({
         path: "branchId",
         select: "name code",
         options: { lean: true }
       })
-      .lean(); // Convert the main documents to plain objects
+      .lean(); 
 
     const total = await PackageHistoryModel.countDocuments(historyMatch);
 
@@ -6503,14 +6514,7 @@ export const getPackageTracking = catchAsyncError(
     }
 
 
-    // ── Shape the embedded trackingHistory into a timeline ────────────────
-    //
-    // Each entry in trackingHistory already has { status, notes, timestamp, branchId, userId }.
-    // We sort oldest → newest and attach:
-    //   • readableStatus  — human label
-    //   • stepState       — "completed" | "active" | "pending"
-    //   • isException     — true for failure/problem statuses
-    //
+
     const EXCEPTION_STATUSES = new Set<PackageStatus>([
       "failed_delivery", "rescheduled", "returned",
       "cancelled", "lost", "damaged", "on_hold",
@@ -6582,7 +6586,7 @@ export const getPackageTracking = catchAsyncError(
         lastUpdatedAgo,
       },
 
-      // ── Package summary ────────────────────────────────────────────────
+
       package: {
         trackingNumber: packageDoc.trackingNumber,
         deliveryType: packageDoc.deliveryType,
@@ -6613,11 +6617,9 @@ export const getPackageTracking = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  INTERNAL HELPER
+
 //  Write one PackageHistory audit record per package in a single insertMany.
 //  This keeps every function's catch block clean — one shared call, not N saves.
-// ─────────────────────────────────────────────────────────────────────────────
 
 async function writeHistory(
   entries: {
@@ -6640,35 +6642,6 @@ async function writeHistory(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  transporter.controller.ts  (hub-model section)
-//
-//  Two controllers are updated here:
-//
-//  1. transporterMarkManifestsInTransit
-//     Replaces the old "mark packages in transit" action.
-//     The transporter taps "Start Trip" — all manifests on the route are
-//     marked in_transit.  For hub_to_hub routes the single destination manifest
-//     group departs; for hub_to_branch routes every stop's manifest bags depart.
-//
-//  2. transporterMarkArrivedAtStop
-//     Replaces "mark packages arrived at branch".
-//     Called when the transporter arrives at each stop (branch or destination hub).
-//     Marks the manifests for THAT stop as `arrived` and, if it is the last stop,
-//     closes the route.
-//
-//  NOTE: raw-package status updates (in_transit_to_branch, at_destination_branch)
-//  are now driven by manifest events, NOT by the transporter controller directly.
-//  The ManifestModel.markDeparted() and ManifestModel.markArrived() hooks cascade
-//  status changes to their contained packages.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  HELPER — collect manifest IDs from the route (all stops, or a single stop)
-// ─────────────────────────────────────────────────────────────────────────────
-
-
-
 
 function manifestIdsFromRoute(route: any): mongoose.Types.ObjectId[] {
   return route.stops.flatMap(
@@ -6686,9 +6659,7 @@ function manifestIdsFromStop(stop: any): mongoose.Types.ObjectId[] {
 }
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  1.  MARK MANIFESTS IN TRANSIT  (transporter taps "Start Trip")
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const transporterMarkManifestsInTransit = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -6735,18 +6706,18 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
         );
       }
 
-      // ── Detect route type ──────────────────────────────────────────────
+
       const isManifestRoute = route.type === 'hub_to_hub' || route.type === 'hub_to_branch';
 
       if (isManifestRoute) {
-        // ── MANIFEST-BASED ROUTE ────────────────────────────────────────
+
         const allManifestIds = manifestIdsFromRoute(route);
 
         if (allManifestIds.length === 0) {
           throw new ErrorHandler('Route has no manifests assigned', 400);
         }
 
-        // Validate manifests are sealed/loaded
+
         const manifests = await ManifestModel.find({
           _id: { $in: allManifestIds },
         }).session(session);
@@ -6764,12 +6735,12 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
 
         const now = new Date();
 
-        // Mark each manifest as departed — cascade updates packages automatically
+
         for (const manifest of manifests) {
           await manifest.markDeparted(transporterUserId, session);
         }
 
-        // Update route + transporter
+
         await Promise.all([
           RouteModel.findByIdAndUpdate(
             routeId,
@@ -6812,7 +6783,7 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
         });
 
       } else {
-        // ── LEGACY PACKAGE-BASED ROUTE ──────────────────────────────────
+
         const allPackageIds: mongoose.Types.ObjectId[] = route.stops.flatMap(
           (stop: any) =>
             (stop.packageIds || []).map(
@@ -6910,7 +6881,7 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -6919,9 +6890,7 @@ export const transporterMarkManifestsInTransit = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  2.  MARK ARRIVED AT STOP  (transporter arrives at a branch or destination hub)
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const transporterMarkArrivedAtStop = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -6965,7 +6934,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
         );
       }
 
-      // ── Locate stop ─────────────────────────────────────────────────────────
+
       const stopIndex = route.stops.findIndex(
         (s: any) => s._id?.toString() === stopId,
       );
@@ -6987,7 +6956,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
       let resultData: any = {};
 
       if (isManifestRoute) {
-        // ── MANIFEST-BASED ARRIVAL ──────────────────────────────────────
+
         const stopManifestIds = manifestIdsFromStop(stop);
 
         if (stopManifestIds.length === 0) {
@@ -6998,7 +6967,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
           ? new mongoose.Types.ObjectId(stop.branchId.toString())
           : null;
 
-        // Mark each manifest as arrived — cascade updates packages automatically
+
         for (const manifestId of stopManifestIds) {
           const manifest = await ManifestModel.findById(manifestId).session(session);
           if (manifest) {
@@ -7017,7 +6986,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
         };
 
       } else {
-        // ── LEGACY PACKAGE-BASED ARRIVAL ────────────────────────────────
+
         if (!stop.branchId) {
           throw new ErrorHandler('Stop has no branch associated', 400);
         }
@@ -7145,7 +7114,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
         };
       }
 
-      // ── Update route stop + route head ──────────────────────────────────────
+
       await RouteModel.findByIdAndUpdate(
         routeId,
         {
@@ -7171,7 +7140,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
         { session },
       );
 
-      // ── Release transporter when the last stop is completed ─────────────────
+
       if (isLastStop) {
         const releaseUpdate: Record<string, any> = {
           availabilityStatus: 'available',
@@ -7179,8 +7148,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
           lastActiveAt: now,
         };
 
-        // For hub_to_hub routes: place transporter at the destination hub
-        // so they're available for return trips from that hub.
+
         const isHubToHubRoute = route.type === 'hub_to_hub';
         if (isHubToHubRoute && stop.branchId) {
           releaseUpdate.currentBranchId = new mongoose.Types.ObjectId(stop.branchId.toString());
@@ -7219,7 +7187,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -7228,10 +7196,7 @@ export const transporterMarkArrivedAtStop = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  LEGACY — kept for backward compatibility with branches not yet on hub model
-//  (raw-package routes created before the manifest migration).
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const transporterMarkPackagesInTransit = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -7373,7 +7338,7 @@ export const transporterMarkPackagesInTransit = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -7625,7 +7590,7 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -7636,11 +7601,7 @@ export const transporterMarkPackagesArrivedAtBranch = catchAsyncError(
 
 
 
-// DELIVERER — MARK PACKAGES OUT FOR DELIVERY
-//
-//  Called when a deliverer picks up one or more packages from the branch to
-//  deliver to clients. Accepts a single packageId or an array (bulk).
-//  Package must be at_destination_branch and deliveryType must be 'home'.
+
 
 export const arrivedAtBranchOutForDelivery = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -7831,7 +7792,7 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -7842,11 +7803,7 @@ export const arrivedAtBranchOutForDelivery = catchAsyncError(
 
 
 
-// DELIVERER — MARK DELIVERY FAILED
-//  Called when the deliverer could not deliver the package.
-//  Increments attemptCount. If attemptCount >= maxAttempts the package
-//  model's pre-save hook will automatically flip it to 'returned'.
-//  Otherwise it stays 'failed_delivery' and nextAttemptDate is set (+1 day).
+
 
 
 export const deliverPackageFail = catchAsyncError(
@@ -7925,9 +7882,7 @@ export const deliverPackageFail = catchAsyncError(
       const newAttemptCount = packageDoc.attemptCount + 1;
       const maxReached = newAttemptCount >= packageDoc.maxAttempts;
 
-      // When max attempts are reached the pre-save hook flips status to 'returned'
-      // and sets returnInfo i match that behaviour explicitly here so i can
-      // write the correct history status and include it in the response.
+
 
       const newStatus: PackageStatus = maxReached
         ? "failed_delivery"
@@ -8049,7 +8004,7 @@ export const deliverPackageFail = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -8059,10 +8014,7 @@ export const deliverPackageFail = catchAsyncError(
 );
 
 
-// DELIVERER — RETURN PACKAGE TO BRANCH
-//  Called when the deliverer physically brings the package back to the branch
-//  after a failed delivery (or explicit return). Status → 'returned'.
-//  currentBranchId stays the same (it's already this branch).
+
 
 export const deliveryReturnPackage = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -8245,7 +8197,7 @@ export const deliveryReturnPackage = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -8277,7 +8229,6 @@ const ROUTE_POPULATE = [
 
 
 //  UPDATE ROUTE
-//
 //  What can be updated and when:
 //    • name, scheduledStart, scheduledEnd, notes → any non-locked status
 //    • cancellationReason                        → only when cancelling
@@ -8434,7 +8385,7 @@ export const updateRoute = catchAsyncError(
         throw new ErrorHandler("scheduledStart must be before scheduledEnd", 400);
       }
 
-      // ── Per-stop updates (dot-notation positional by _id) 
+
       if (body.stops && body.stops.length > 0) {
         for (const stopUpdate of body.stops) {
           if (!stopUpdate.stopId || !mongoose.Types.ObjectId.isValid(stopUpdate.stopId)) {
@@ -8494,7 +8445,7 @@ export const updateRoute = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -8506,7 +8457,7 @@ export const updateRoute = catchAsyncError(
 
 
 
-//  GET ROUTE BY ID
+
 
 export const getRoute = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -8548,7 +8499,7 @@ export const getRoute = catchAsyncError(
 );
 
 
-//  GET ROUTES (list for this branch — supervisor, deliverer, OR transporter)
+
 
 export const getRoutes = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -8563,7 +8514,7 @@ export const getRoutes = catchAsyncError(
       return next(new ErrorHandler("Invalid branch ID", 400));
     }
 
-    // Query params validation
+
     const VALID_STATUSES: RouteStatus[] = [
       "planned", "assigned", "active", "paused", "completed", "cancelled"
     ];
@@ -8632,7 +8583,7 @@ export const getRoutes = catchAsyncError(
     if (isNaN(pageNum) || pageNum < 1) return next(new ErrorHandler("page must be a positive integer", 400));
     if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) return next(new ErrorHandler("limit must be between 1 and 100", 400));
 
-    // ── Authorize: supervisor / deliverer / transporter ───────────────────────
+
     const branchOid = new mongoose.Types.ObjectId(branchId.toString());
 
     let delivererId: mongoose.Types.ObjectId | null = null;
@@ -8640,7 +8591,7 @@ export const getRoutes = catchAsyncError(
     let supervisorId: mongoose.Types.ObjectId | null = null;
 
     if (userRole === "supervisor" || userRole === "admin" || userRole === "manager") {
-      // Supervisor/Admin/Manager: must be active supervisor of this branch
+
       const supervisor = await SupervisorModel.findOne({
         userId,
         branchId: branchOid,
@@ -8651,7 +8602,7 @@ export const getRoutes = catchAsyncError(
       }
       supervisorId = supervisor._id;
     } else if (userRole === "deliverer") {
-      // Deliverer: must be active deliverer assigned to this branch
+
       const deliverer = await DelivererModel.findOne({
         userId,
         branchId: branchOid,
@@ -8668,7 +8619,7 @@ export const getRoutes = catchAsyncError(
       }
       delivererId = deliverer._id;
     } else if (userRole === "transporter") {
-      // Transporter: find by userId (transporter may not have a fixed branch)
+
       const transporter = await TransporterModel.findOne({ userId }).lean();
 
       if (!transporter) {
@@ -8681,24 +8632,20 @@ export const getRoutes = catchAsyncError(
         return next(new ErrorHandler("Your transporter account is suspended", 403));
       }
 
-      // ── Branch access logic for transporters ──────────────────────────────
-      // hub_to_hub: can access routes involving EITHER hub in their assignedLine
-      // hub_to_branch: can access routes where originBranchId matches their 
-      //                currentBranchId OR any of their assignedBranches
-      // legacy transporter: can access routes where currentBranchId matches
+
 
       const branchOidStr = branchOid.toString();
       let hasAccess = false;
 
       if (transporter.transporterType === "hub_to_hub") {
-        // Check if branch is one of the two hubs in assignedLine
+
         if (transporter.assignedLine) {
           hasAccess = transporter.assignedLine.some(
             (id) => id.toString() === branchOidStr
           );
         }
       } else if (transporter.transporterType === "hub_to_branch") {
-        // Check if branch is in assignedBranches OR is currentBranchId
+
         if (transporter.assignedBranches) {
           hasAccess = transporter.assignedBranches.some(
             (id) => id.toString() === branchOidStr
@@ -8708,7 +8655,7 @@ export const getRoutes = catchAsyncError(
           hasAccess = transporter.currentBranchId.toString() === branchOidStr;
         }
       } else {
-        // Legacy transporter: check currentBranchId
+
         if (transporter.currentBranchId) {
           hasAccess = transporter.currentBranchId.toString() === branchOidStr;
         }
@@ -8723,12 +8670,10 @@ export const getRoutes = catchAsyncError(
       return next(new ErrorHandler("You are not authorized to view routes for this branch", 403));
     }
 
-    // ── Build match stage ─────────────────────────────────────────────────────
+
     const matchStage: Record<string, any> = {};
 
-    // For supervisors/admins/managers: show all routes involving this branch
-    // For deliverers: ONLY show routes assigned to THIS deliverer
-    // For transporters: ONLY show routes assigned to THIS transporter
+
     if (delivererId) {
       matchStage.assignedDelivererId = delivererId;
     } else if (transporterId) {
@@ -8791,7 +8736,7 @@ export const getRoutes = catchAsyncError(
             { $skip: skip },
             { $limit: limitNum },
 
-            // ── Branch lookups ────────────────────────────────────────────────
+
             {
               $lookup: {
                 from: "branches",
@@ -8813,7 +8758,7 @@ export const getRoutes = catchAsyncError(
             },
             { $unwind: { path: "$destinationBranch", preserveNullAndEmptyArrays: true } },
 
-            // ── Vehicle lookup ────────────────────────────────────────────────
+
             {
               $lookup: {
                 from: "vehicles",
@@ -8825,7 +8770,7 @@ export const getRoutes = catchAsyncError(
             },
             { $unwind: { path: "$assignedVehicle", preserveNullAndEmptyArrays: true } },
 
-            // ── Deliverer info lookup ─────────────────────────────────────────
+
             {
               $lookup: {
                 from: "deliverers",
@@ -8847,7 +8792,7 @@ export const getRoutes = catchAsyncError(
             },
             { $unwind: { path: "$assignedDelivererUser", preserveNullAndEmptyArrays: true } },
 
-            // ── Transporter info lookup ───────────────────────────────────────
+
             {
               $lookup: {
                 from: "transporters",
@@ -8869,7 +8814,7 @@ export const getRoutes = catchAsyncError(
             },
             { $unwind: { path: "$assignedTransporterUser", preserveNullAndEmptyArrays: true } },
 
-            // ── Projection (remove heavy fields) ──────────────────────────────
+
             {
               $project: {
                 "stops.completedPackages": 0,
@@ -8926,12 +8871,7 @@ export const getRoutes = catchAsyncError(
 
 
 
-//  TOGGLE DEACTIVATE ROUTE
-//  PATCH /branches/:branchId/routes/:routeId/toggle-cancel
-//  Soft-cancel: planned / assigned → cancelled  (and releases worker + vehicle)
-//  Re-activate: cancelled          → planned    (worker + vehicle must still exist)
-//  Hard delete is intentionally not provided — routes are audit trail.
-//  Body: { reason?: string }
+
 
 
 export const toggleCancelRoute = catchAsyncError(
@@ -9053,8 +8993,7 @@ export const toggleCancelRoute = catchAsyncError(
           );
         }
       } else {
-        // Re activating: re stamp packages with this routeId
-        // Collect all packageIds from stops
+
         const allPackageIds = route.stops.flatMap((s) => s.packageIds);
         if (allPackageIds.length > 0) {
           sideEffects.push(
@@ -9066,7 +9005,7 @@ export const toggleCancelRoute = catchAsyncError(
           );
         }
 
-        // Re mark transporter/deliverer with the route
+
         if (route.assignedTransporterId) {
           sideEffects.push(
             TransporterModel.findByIdAndUpdate(
@@ -9124,7 +9063,7 @@ export const toggleCancelRoute = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -9177,17 +9116,7 @@ const LIST_LOOKUP_STAGES: (
 
 
 
-//  GET ACTIVE ROUTES  (for this branch)
-//  GET /branches/:branchId/routes/active
-//  Returns all routes currently in motion  status: active or paused.
-//  Sorted by scheduledStart ascending so the most urgent shows first.
-//  Includes real-time progress fields: currentStop, nextStop, delayMinutes,
-//  progressPercentage — computed in the aggregation, no extra queries.
-//  Query params:
-//    type          optional — inter_branch | local_delivery | pickup_route | return_route
-//    workerId      optional — filter to one specific driver
-//    branchSearch  optional — partial match on origin/destination branch name or code
-//                             e.g. "Constantine" shows all active routes going there
+
 
 export const getActiveRoutes = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -9307,7 +9236,7 @@ export const getActiveRoutes = catchAsyncError(
               else: null,
             },
           },
-          // Minutes behind schedule ( — ) negative means ahead of schedule
+
           delayMinutes: {
             $cond: {
               if: "$scheduledEnd",
@@ -9320,7 +9249,7 @@ export const getActiveRoutes = catchAsyncError(
               else: null,
             },
           },
-          // 0-100 progress based on stops completed
+
           progressPercentage: {
             $cond: {
               if: { $gt: [{ $size: "$stops" }, 0] },
@@ -9350,19 +9279,7 @@ export const getActiveRoutes = catchAsyncError(
 
 
 
-// GET ROUTES BY BRANCH  (manager / admin scope — across all branches)
-// GET /routes/by-branch
-//  this function lets a supervisor (or admin) query
-//  routes for a specific branch they choose 
-//  useful when a supervisor manages multiple branches or for a manager-level dashboard.
-// query params:
-// branchId    required  — ObjectId of the branch to query
-// status      optional  — comma-separated RouteStatus values
-// type        optional  — inter_branch | local_delivery | pickup_route | return_route
-// fromDate    optional  — ISO date string, defaults to 30 days ago
-// toDate      optional  — ISO date string, defaults to end of tomorrow
-// capped at end of tomorrow (no routes exist beyond that bcz they are generated at midnight by a cron job)
-// page, limit optional  — default 1 / 20, max 100
+
 
 
 export const getRoutesByBranch = catchAsyncError(
@@ -9406,9 +9323,7 @@ export const getRoutesByBranch = catchAsyncError(
     }
 
 
-    // Routes only exist up to tomorrow (scheduler generates one day ahead).
-    // Cap toDate at end-of-tomorrow so querying future dates never returns
-    // a confusing empty result when the user forgets this constraint.
+
     const now = new Date();
 
     const endOfTomorrow = new Date(now);
@@ -9439,8 +9354,7 @@ export const getRoutesByBranch = catchAsyncError(
       }
       toDateParsed.setUTCHours(23, 59, 59, 999);
 
-      // rmake it to end-of-tomorrow if the user enters the toDate in the far future
-      // no error printing (not needed)
+
 
       if (toDateParsed > endOfTomorrow) {
         toDateParsed = endOfTomorrow;
@@ -9592,17 +9506,7 @@ export const getMeSupervisor = catchAsyncError(
 
 
 
-//  UPDATE ME — SUPERVISOR
-//  PATCH /supervisor/me
 
-//  Updatable on User:           firstName, lastName, imageUrl
-//  Updatable on SupervisorModel: workSchedule (one day at a time or full object)
-
-//  workSchedule body format:
-//    { workSchedule: { monday: { start: "09:00", end: "18:00", dayOff: false } } }
-//  Any subset of days can be passed — unmentioned days stay unchanged.
-
-//  Blocked: permissions, branchId, companyId, isActive, performance
 
 
 const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
@@ -9664,7 +9568,7 @@ export const updateMeSupervisor = catchAsyncError(
           return next(new ErrorHandler(`workSchedule.${day} must be an object`, 400));
         }
 
-        // dayOff = true → zero out times, no further validation needed
+
         if (dayData.dayOff === true) {
           scheduleUpdates[`workSchedule.${day}.dayOff`] = true;
           scheduleUpdates[`workSchedule.${day}.start`] = "00:00";
@@ -9673,7 +9577,7 @@ export const updateMeSupervisor = catchAsyncError(
         }
 
         if (dayData.dayOff === false || dayData.dayOff === undefined) {
-          // Validate start / end if provided
+
           const current = (supervisor.workSchedule as any)[day] ?? {};
           const start = dayData.start ?? current.start;
           const end = dayData.end ?? current.end;
@@ -9709,7 +9613,7 @@ export const updateMeSupervisor = catchAsyncError(
       SupervisorModel.findByIdAndUpdate(supervisor._id, { $set: scheduleUpdates }, { runValidators: true }),
     ]);
 
-    // Fetch the refreshed profile to return
+
     const [updatedUser, updatedSupervisor] = await Promise.all([
       userModel.findById(userId)
         .select("firstName lastName email phone imageUrl role status")
@@ -9752,7 +9656,7 @@ export const searchPackages = catchAsyncError(
 
       const matchStage: Record<string, any> = {};
 
-      // companyId scope (supervisors / managers will always pass this)
+
       if (req.query.companyId) {
         if (!mongoose.Types.ObjectId.isValid(req.query.companyId as string)) {
           return next(new ErrorHandler("Invalid companyId.", 400));
@@ -9978,11 +9882,10 @@ export const searchPackages = catchAsyncError(
 
       const pipeline: any[] = [
 
-        //  primary filters (all indexed fields)
+
         { $match: matchStage },
 
-        // compute estimatedTimeRemaining in minutes so we can sort
-        //    Mirrors the virtual: max(0, round((estimatedDeliveryTime - now) / 60000))
+
         {
           $addFields: {
             _estimatedTimeRemaining: {
@@ -10035,7 +9938,7 @@ export const searchPackages = catchAsyncError(
           },
         },
 
-        // isOverdue filter (post-computed)
+
         ...(req.query.isOverdue !== undefined
           ? [
             {
@@ -10046,34 +9949,34 @@ export const searchPackages = catchAsyncError(
           ]
           : []),
 
-        // text search across tracking number, recipient name/phone
+
         ...(rawSearch
           ? [
             {
               $match: {
                 $or: [
-                  // Exact tracking number match (most common lookup — fast)
+
                   {
                     trackingNumber: {
                       $regex: rawSearch,
                       $options: "i",
                     },
                   },
-                  // Recipient name (partial match)
+
                   {
                     "destination.recipientName": {
                       $regex: rawSearch,
                       $options: "i",
                     },
                   },
-                  // Recipient phone (partial match — useful for +213 vs 0 prefix)
+
                   {
                     "destination.recipientPhone": {
                       $regex: rawSearch,
                       $options: "i",
                     },
                   },
-                  // Also check alternative phone
+
                   {
                     "destination.alternativePhone": {
                       $regex: rawSearch,
@@ -10084,12 +9987,12 @@ export const searchPackages = catchAsyncError(
               },
             },
 
-            // ── Relevance scoring: exact tracking number > starts-with > partial
+
             {
               $addFields: {
                 _searchScore: {
                   $add: [
-                    // Exact tracking number → highest priority
+
                     {
                       $cond: [
                         {
@@ -10103,7 +10006,7 @@ export const searchPackages = catchAsyncError(
                         0,
                       ],
                     },
-                    // Tracking number starts-with
+
                     {
                       $cond: [
                         {
@@ -10117,7 +10020,7 @@ export const searchPackages = catchAsyncError(
                         0,
                       ],
                     },
-                    // Recipient name starts-with
+
                     {
                       $cond: [
                         {
@@ -10136,7 +10039,7 @@ export const searchPackages = catchAsyncError(
             },
           ]
           : [
-            // No search query — assign neutral score
+
             { $addFields: { _searchScore: 0 } },
           ]),
 
@@ -10149,18 +10052,18 @@ export const searchPackages = catchAsyncError(
           $sort: {
             _searchScore: -1,
             _estimatedTimeRemaining: 1,
-            createdAt: -1, // tie-breaker
+            createdAt: -1,
           },
         },
 
-        // facet for total count + paginated data in one round-trip
+
         {
           $facet: {
             metadata: [{ $count: "total" }],
             data: [
               { $skip: skip },
               { $limit: limit },
-              // Drop internal pipeline fields from the response
+
               {
                 $project: {
                   _estimatedTimeRemaining: 0,
@@ -10295,34 +10198,34 @@ export const getPackagesPaginated = catchAsyncError(
       const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
       const isValidId = (val: string) => mongoose.Types.ObjectId.isValid(val);
 
-      // ── Authentication and role-based access control ──────────────────────
+
       const user = (req as any).user;
       const userRole = user?.role;
       const userId = user?._id;
 
       let assignedDelivererId: mongoose.Types.ObjectId | null = null;
 
-      // ── COMPANY FILTER ────────────────────────────────────────────────────
+
       if (req.query.companyId) {
         if (!isValidId(req.query.companyId as string))
           return next(new ErrorHandler("Invalid companyId.", 400));
         filter.companyId = toObjectId(req.query.companyId as string);
       }
 
-      // ── STRICT ACCESS CONTROL FOR DELIVERER ROLE ──────────────────────────
+
       if (userRole === 'deliverer') {
-        // Find the deliverer record for this user
+
         const deliverer = await DelivererModel.findOne({ userId: userId });
         if (!deliverer) {
           return next(new ErrorHandler("Deliverer profile not found.", 404));
         }
 
-        // STRICT: Only show packages explicitly assigned to this deliverer
+
         filter.assignedDelivererId = deliverer._id;
         assignedDelivererId = deliverer._id;
       }
 
-      // ── If query explicitly asks for a specific deliverer (admin only) ─────
+
       if (req.query.assignedDelivererId && userRole !== 'deliverer') {
         if (!isValidId(req.query.assignedDelivererId as string))
           return next(new ErrorHandler("Invalid assignedDelivererId.", 400));
@@ -10330,7 +10233,7 @@ export const getPackagesPaginated = catchAsyncError(
         filter.assignedDelivererId = assignedDelivererId;
       }
 
-      // ── Other filters (client, branch, status, etc.) ───────────────────────
+
       if (req.query.clientId) {
         if (!isValidId(req.query.clientId as string))
           return next(new ErrorHandler("Invalid clientId.", 400));
@@ -10349,7 +10252,7 @@ export const getPackagesPaginated = catchAsyncError(
         filter.currentBranchId = toObjectId(req.query.currentBranchId as string);
       }
 
-      // Status filter
+
       const VALID_STATUSES: PackageStatus[] = [
         "pending", "accepted", "at_origin_branch", "in_transit_to_branch",
         "at_destination_branch", "out_for_delivery", "delivered",
@@ -10363,7 +10266,7 @@ export const getPackagesPaginated = catchAsyncError(
         filter.status = s;
       }
 
-      // Type filter
+
       const VALID_TYPES: PackageType[] = [
         "document", "parcel", "fragile", "heavy",
         "perishable", "electronic", "clothing",
@@ -10375,7 +10278,7 @@ export const getPackagesPaginated = catchAsyncError(
         filter.type = t;
       }
 
-      // Payment status filter
+
       const VALID_PAYMENT_STATUSES: PaymentStatus[] = [
         "pending", "paid", "partially_paid", "refunded", "failed",
       ];
@@ -10386,7 +10289,7 @@ export const getPackagesPaginated = catchAsyncError(
         filter.paymentStatus = ps;
       }
 
-      // Delivery priority filter
+
       const VALID_PRIORITIES = ["standard", "express", "same_day"];
       if (req.query.deliveryPriority && req.query.deliveryPriority !== "") {
         const dp = req.query.deliveryPriority as string;
@@ -10395,7 +10298,7 @@ export const getPackagesPaginated = catchAsyncError(
         filter.deliveryPriority = dp;
       }
 
-      // Delivery type filter
+
       const VALID_DELIVERY_TYPES: DeliveryType[] = ["home", "branch_pickup"];
       if (req.query.deliveryType) {
         const dt = req.query.deliveryType as string;
@@ -10404,7 +10307,7 @@ export const getPackagesPaginated = catchAsyncError(
         filter.deliveryType = dt;
       }
 
-      // Boolean filters
+
       if (req.query.isFragile !== undefined && req.query.isFragile !== "") {
         filter.isFragile = req.query.isFragile === "true";
       }
@@ -10420,7 +10323,7 @@ export const getPackagesPaginated = catchAsyncError(
             : { $not: { $elemMatch: { resolved: false } } };
       }
 
-      // Range filters
+
       const applyRange = (
         field: string,
         minKey: string,
@@ -10446,7 +10349,7 @@ export const getPackagesPaginated = catchAsyncError(
       applyRange("dimensions.width", "minWidth", "maxWidth");
       applyRange("dimensions.height", "minHeight", "maxHeight");
 
-      // Location filters
+
       if (req.query.city) {
         filter["destination.city"] = new RegExp(req.query.city as string, "i");
       }
@@ -10454,14 +10357,14 @@ export const getPackagesPaginated = catchAsyncError(
         filter["destination.state"] = new RegExp(req.query.state as string, "i");
       }
 
-      // ── Fetch deliverer stats if filtering by deliverer ────────────────────
+
       let delivererStats: any = null;
       if (assignedDelivererId) {
         const deliverer = await DelivererModel.findById(assignedDelivererId)
           .lean({ virtuals: true });
 
         if (deliverer) {
-          // Aggregate package stats for this deliverer (strictly assigned packages)
+
           const packageStats = await PackageModel.aggregate([
             {
               $match: {
@@ -10606,7 +10509,7 @@ export const getPackagesPaginated = catchAsyncError(
         }
       }
 
-      // ── Fetch packages with pagination ─────────────────────────────────────
+
       const [total, packages] = await Promise.all([
         PackageModel.countDocuments(filter),
         PackageModel.find(filter)
@@ -10616,14 +10519,14 @@ export const getPackagesPaginated = catchAsyncError(
           .lean({ virtuals: true }),
       ]);
 
-      // Apply overdue filter (client-side since it's a virtual)
+
       let filteredPackages = packages as any[];
       if (req.query.isOverdue !== undefined) {
         const wantOverdue = req.query.isOverdue === "true";
         filteredPackages = filteredPackages.filter((pkg) => pkg.isOverdue === wantOverdue);
       }
 
-      // Apply sorting
+
       const sortBy = (req.query.sortBy as string) || "createdAt";
       const order = req.query.order === "desc" ? -1 : 1;
 
@@ -10654,7 +10557,7 @@ export const getPackagesPaginated = catchAsyncError(
           if (order === -1) filteredPackages.reverse();
       }
 
-      // Format packages for response
+
       const formattedPackages = filteredPackages.map((pkg) => ({
         id: pkg._id,
         trackingNumber: pkg.trackingNumber,
@@ -10712,7 +10615,7 @@ export const getPackagesPaginated = catchAsyncError(
         deliveredAt: pkg.deliveredAt ?? null,
       }));
 
-      // Build response
+
       const responseData: any = {
         packages: formattedPackages,
         pagination: {
@@ -10754,7 +10657,7 @@ export const getPackagesPaginated = catchAsyncError(
         },
       };
 
-      // Attach deliverer stats if available
+
       if (delivererStats) {
         responseData.delivererStats = delivererStats;
       }
@@ -10783,7 +10686,7 @@ export const getPackagesPaginated = catchAsyncError(
 
 
 
-// TOGGLE ONLINE STATUS (Deliverer/Transporter)
+
 export const toggleOnlineStatus = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?._id;
@@ -10857,7 +10760,7 @@ async function resolveDelivererId(
 
 export const getMyDeliveries = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    // ── Auth guard ──────────────────────────────────────────────────────────
+
     if (!req.user?._id) {
       return next(new ErrorHandler("Authentication required.", 401));
     }
@@ -10900,7 +10803,7 @@ export const getMyDeliveries = catchAsyncError(
       }
     }
 
-    // enpoint ?statuses=delivered,cancelled
+
     if (req.query.statuses) {
       const rawStatuses = (req.query.statuses as string).split(",").map(s => s.trim());
       const expandedStatuses: string[] = [];
@@ -11377,7 +11280,7 @@ export const getManifestsPaginated = catchAsyncError(
         filter.createdBy = toObjectId(req.query.createdBy as string);
       }
 
-      // ── Track if we're filtering by transporter ────────────────────────────
+
       let transporterId: mongoose.Types.ObjectId | null = null;
 
       if (req.query.transporterId) {
@@ -11518,14 +11421,14 @@ export const getManifestsPaginated = catchAsyncError(
         };
       }
 
-      // ── Fetch transporter stats if filtering by transporter ────────────────
+
       let transporterStats: any = null;
       if (transporterId) {
         const transporter = await TransporterModel.findById(transporterId)
           .lean({ virtuals: true });
 
         if (transporter) {
-          // Aggregate manifest stats for this transporter
+
           const manifestStats = await ManifestModel.aggregate([
             {
               $match: {
@@ -11567,7 +11470,7 @@ export const getManifestsPaginated = catchAsyncError(
                 totalWeightTransported: {
                   $sum: "$totalDeclaredWeight",
                 },
-                // Today's manifests (departed today)
+
                 todayManifests: {
                   $sum: {
                     $cond: [
@@ -11599,12 +11502,12 @@ export const getManifestsPaginated = catchAsyncError(
           };
 
           transporterStats = {
-            // ── Transporter profile ──────────────────────────────────────────
+
             id: transporter._id,
             userId: transporter.userId,
             companyId: transporter.companyId,
 
-            // ── Transporter type & configuration ────────────────────────────
+
             transporterType: transporter.transporterType ?? null,
             isHubTransporter: transporter.isHubTransporter,
             isHubToHub: transporter.isHubToHub,
@@ -11612,7 +11515,7 @@ export const getManifestsPaginated = catchAsyncError(
             assignedLine: transporter.assignedLine ?? null,
             assignedBranches: transporter.assignedBranches ?? null,
 
-            // ── Status & verification ───────────────────────────────────────
+
             availabilityStatus: transporter.availabilityStatus,
             verificationStatus: transporter.verificationStatus,
             isActive: transporter.isActive,
@@ -11622,33 +11525,33 @@ export const getManifestsPaginated = catchAsyncError(
             isAvailable: transporter.isAvailable,
             isOnDuty: transporter.isOnDuty,
 
-            // ── Performance metrics ─────────────────────────────────────────
+
             rating: transporter.rating,
-            completionRate: transporter.completionRate, // virtual: (completedTrips / totalTrips) * 100
+            completionRate: transporter.completionRate, 
             todayCompletionRate: transporter.todayCompletionRate,
             efficiencyScore: transporter.efficiencyScore,
 
-            // ── Lifetime trip stats ─────────────────────────────────────────
+
             totalTrips: transporter.totalTrips,
             completedTrips: transporter.completedTrips,
             cancelledTrips: transporter.cancelledTrips,
 
-            // ── Manifest stats (from transporter model) ─────────────────────
+
             totalManifestsTransported: transporter.totalManifestsTransported,
             currentActiveManifests: transporter.currentActiveManifests,
 
-            // ── Today's stats ───────────────────────────────────────────────
+
             todayTransportedCount: transporter.todayTransportedCount,
             todayAssignedManifests: transporter.todayAssignedManifests,
             todayCompletedTrips: transporter.todayCompletedTrips,
             todayTotalWeight: transporter.todayTotalWeight,
 
-            // ── Distance & time ─────────────────────────────────────────────
+
             totalDistance: transporter.totalDistance,
             totalDeliveryTime: transporter.totalDeliveryTime,
             averageDeliveryTime: transporter.averageDeliveryTime,
 
-            // ── Manifest stats (from aggregation) ───────────────────────────
+
             manifestStats: {
               totalAssigned: stats.totalManifests,
               loaded: stats.loadedManifests,
@@ -11661,17 +11564,17 @@ export const getManifestsPaginated = catchAsyncError(
               todayManifests: stats.todayManifests,
             },
 
-            // ── Document status ─────────────────────────────────────────────
+
             documentStatus: transporter.documentStatus,
             hasValidLicense: transporter.hasValidLicense,
             canAcceptJobs: transporter.canAcceptJobs,
 
-            // ── Current assignment ──────────────────────────────────────────
+
             currentBranchId: transporter.currentBranchId ?? null,
             currentVehicleId: transporter.currentVehicleId ?? null,
             currentRouteId: transporter.currentRouteId ?? null,
 
-            // ── Suspension info ─────────────────────────────────────────────
+
             suspensionReason: transporter.suspensionReason ?? null,
             suspensionEndDate: transporter.suspensionEndDate ?? null,
             lastActiveAt: transporter.lastActiveAt,
@@ -11819,7 +11722,7 @@ export const getManifestsPaginated = catchAsyncError(
         estimatedArrival: m.estimatedArrival ?? null,
       }));
 
-      // ── Build response ──────────────────────────────────────────────────────
+
       const responseData: any = {
         manifests: formattedManifests,
         pagination: {
@@ -11861,7 +11764,7 @@ export const getManifestsPaginated = catchAsyncError(
         },
       };
 
-      // ── Attach transporter stats if available ────────────────────────────────
+
       if (transporterStats) {
         responseData.transporterStats = transporterStats;
       }
@@ -11899,11 +11802,7 @@ export const getManifestsPaginated = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET TODAY'S DELIVERIES
-//  Returns packages assigned to the authenticated deliverer for TODAY only.
-//  Includes filtering by status, priority, etc.
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const getTodayDeliveries = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -11913,7 +11812,7 @@ export const getTodayDeliveries = catchAsyncError(
         return next(new ErrorHandler("Unauthorized — user not found.", 401));
       }
 
-      // Find deliverer profile
+
       const deliverer = await DelivererModel.findOne({ userId: delivererUserId }).lean();
       if (!deliverer) {
         return next(new ErrorHandler("Deliverer profile not found.", 404));
@@ -11934,7 +11833,7 @@ export const getTodayDeliveries = catchAsyncError(
 
       const filter: Record<string, any> = {
         assignedDelivererId: deliverer._id,
-        // Packages that are either scheduled for today OR were created/updated today
+
         $or: [
           { estimatedDeliveryTime: { $gte: todayStart, $lte: todayEnd } },
           { updatedAt: { $gte: todayStart, $lte: todayEnd } },
@@ -12130,12 +12029,7 @@ export const getTodayDeliveries = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET DELIVERY HISTORY
-//  Returns ALL packages assigned to the authenticated deliverer.
-//  Supports period filters: today, yesterday, last7days, last30days,
-//  last6months, or no filter (all time).
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const getDeliveryHistory = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -12162,9 +12056,7 @@ export const getDeliveryHistory = catchAsyncError(
  
       const period = req.query.period ? (req.query.period as PeriodFilter) : "all";
  
-      // ── Resolve "delivered" date window via PackageHistoryModel ────────────
-      // Maps packageId -> most recent 'delivered' timestamp within the window
-      // (or overall, if period === "all" but we still need it for sorting).
+
       let deliveredAtByPackageId: Map<string, Date> | null = null;
       let deliveredDateRange: { $gte?: Date; $lte?: Date } | null = null;
  
@@ -12231,8 +12123,7 @@ export const getDeliveryHistory = catchAsyncError(
  
           for (const entry of deliveredEntries) {
             const key = entry.packageId.toString();
-            // Keep the latest timestamp if a package has multiple
-            // 'delivered' entries in the window (re-delivery edge case).
+
             const existing = deliveredAtByPackageId.get(key);
             if (!existing || entry.timestamp > existing) {
               deliveredAtByPackageId.set(key, entry.timestamp);
@@ -12240,14 +12131,11 @@ export const getDeliveryHistory = catchAsyncError(
             deliveredPackageIds.push(entry.packageId);
           }
  
-          // Restrict the package query to only packages delivered in this
-          // window. If nothing was delivered in the window, force an
-          // empty result set rather than falling through to "all packages".
+
           filter._id = { $in: deliveredPackageIds.length > 0 ? deliveredPackageIds : [new mongoose.Types.ObjectId()] };
         }
       }
- 
-      // Additional filters - these work independently
+
       if (req.query.status) {
         filter.status = req.query.status as string;
       }
@@ -12283,12 +12171,7 @@ export const getDeliveryHistory = catchAsyncError(
         filter.weight = { ...filter.weight, $lte: maxWeight };
       }
  
-      // ── Sorting ──────────────────────────────────────────────────────────
-      // "deliveredAt" is not a real field on IPackage, so it can't be passed
-      // to Mongo's .sort(). If requested (or as the default), we fetch
-      // unsorted/paginated by another stable field, then re-sort the page
-      // in-memory using deliveredAtByPackageId (loaded above if period !==
-      // "all"; loaded on-demand below otherwise).
+
       const sortBy = (req.query.sortBy as string) || "deliveredAt";
       const order = req.query.order === "desc" ? -1 : 1;
  
@@ -12300,8 +12183,7 @@ export const getDeliveryHistory = catchAsyncError(
       };
  
       const sortingByDeliveredAt = sortBy === "deliveredAt";
-      // For DB-level sort, fall back to createdAt when sorting by deliveredAt
-      // (we re-sort in memory afterward); otherwise use the requested field.
+
       const sort = sortingByDeliveredAt
         ? { createdAt: -1 }
         : (dbSortMap[sortBy] || { createdAt: -1 });
@@ -12319,9 +12201,7 @@ export const getDeliveryHistory = catchAsyncError(
  
       let packages = packagesRaw;
  
-      // If sorting by deliveredAt and we don't already have the map (i.e.
-      // period === "all"), fetch delivered timestamps just for this page's
-      // packageIds.
+
       if (sortingByDeliveredAt) {
         if (!deliveredAtByPackageId) {
           deliveredAtByPackageId = new Map();
@@ -12351,17 +12231,17 @@ export const getDeliveryHistory = catchAsyncError(
         });
       }
  
-      // ── Stats - Apply the SAME filters as the main query ─────────────────────
+
       let statsFilter: Record<string, any> = {
         assignedDelivererId: deliverer._id,
       };
  
-      // Apply the same delivered-date-window filter to stats for consistency
+
       if (period !== "all" && filter._id) {
         statsFilter._id = filter._id;
       }
  
-      // ✅ CRITICAL FIX: Copy all relevant filters from main filter to stats
+
       if (filter.status) {
         statsFilter.status = filter.status;
       }
@@ -12498,10 +12378,7 @@ export const getDeliveryHistory = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET TODAY'S MANIFESTS
-//  Returns all manifests assigned to the authenticated transporter for today
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const getTodayManifests = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -12715,12 +12592,7 @@ export const getTodayManifests = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET MANIFEST HISTORY
-//  Returns ALL manifests assigned to the authenticated transporter.
-//  Supports period filters: today, yesterday, last7days, last30days,
-//  last6months, or no filter (all time).
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const getManifestHistory = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -13018,7 +12890,7 @@ export const generateCashReturnQrCode = catchAsyncError(async (req: Request, res
     return next(new ErrorHandler("delivererId is required.", 400));
   }
 
-  // Get branch ID based on role
+
   let branchId: string;
 
   if (userRole === "supervisor") {
@@ -13028,7 +12900,7 @@ export const generateCashReturnQrCode = catchAsyncError(async (req: Request, res
     }
     branchId = supervisor.branchId.toString();
   } else {
-    // manager or admin — must provide branchId
+
     branchId = req.body.branchId;
     if (!branchId) {
       return next(new ErrorHandler("branchId is required for managers/admins.", 400));
@@ -13112,7 +12984,7 @@ export const viewCashReturnQrPage = catchAsyncError(
       });
     }
 
-    // Get deliverer name for display
+
     const deliverer = await DelivererModel.findById(session.delivererId)
       .populate("userId", "firstName lastName")
       .lean();
@@ -13130,7 +13002,7 @@ export const viewCashReturnQrPage = catchAsyncError(
         todayEarnings: session.todayEarnings,
         todayCollected: session.todayCollected,
         expiresAt: session.expiresAt,
-        code, // frontend uses this to render the QR
+        code, 
       },
     });
   });
@@ -13242,15 +13114,7 @@ export const getMyTransporterStats = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  SUPERVISOR/MANAGER: Generate Stop QR
-//  POST /api/stop-qr/generate
-//  Body: { routeId: "...", stopIndex: 0 }
-//
-//  Called when the branch supervisor wants to generate a QR for the transporter
-//  to scan. Validates that the route is active, the stop belongs to their branch,
-//  and the transporter has arrived.
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 interface IGenerateStopQrBody {
   routeId: string;
@@ -13281,7 +13145,7 @@ export const generateStopQr = catchAsyncError(
         return next(new ErrorHandler("Valid stopIndex is required.", 400));
       }
 
-      // ── Determine branch ID based on role ──────────────────────────────
+
       let branchId: string;
 
       if (userRole === "supervisor") {
@@ -13314,7 +13178,7 @@ export const generateStopQr = catchAsyncError(
         throw new ErrorHandler(`Stop ${stopIndex} not found in this route.`, 404);
       }
 
-      // Verify this stop belongs to the supervisor's branch
+
       if (!stop.branchId || stop.branchId.toString() !== branchId) {
         throw new ErrorHandler("This stop does not belong to your branch.", 403);
       }
@@ -13326,7 +13190,7 @@ export const generateStopQr = catchAsyncError(
         );
       }
 
-      // ── Expire any existing unverified QR sessions for this stop ───────
+
       await StopQrSessionModel.updateMany(
         {
           routeId,
@@ -13389,7 +13253,7 @@ export const generateStopQr = catchAsyncError(
     } catch (error: any) {
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -13399,14 +13263,7 @@ export const generateStopQr = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  DELIVERER/TRANSPORTER: Scan Stop QR
-//  POST /api/stop-qr/scan
-//  Body: { code: "abc123...", coordinates: [lng, lat] }
-//
-//  Called by the transporter when they scan the QR displayed by the branch.
-//  Validates the session and marks the stop as completed.
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 interface IScanStopQrBody {
   code: string;
@@ -13445,7 +13302,7 @@ export const scanStopQr = catchAsyncError(
         return next(new ErrorHandler("Valid coordinates [lng, lat] are required.", 400));
       }
 
-      // ── Find QR session ──────────────────────────────────────────────────
+
       const qrSession = await StopQrSessionModel.findOne({ code }).session(session);
       if (!qrSession) {
         throw new ErrorHandler("Invalid QR code. Session not found.", 404);
@@ -13459,7 +13316,7 @@ export const scanStopQr = catchAsyncError(
         throw new ErrorHandler("QR code has expired. Please request a new one.", 400);
       }
 
-      // ── Verify transporter ───────────────────────────────────────────────
+
       const transporter = await TransporterModel.findOne({ userId }).session(session).lean();
       if (!transporter) {
         throw new ErrorHandler("Transporter profile not found.", 404);
@@ -13469,7 +13326,7 @@ export const scanStopQr = catchAsyncError(
         throw new ErrorHandler("This QR code is for a different transporter.", 403);
       }
 
-      // ── Load route ───────────────────────────────────────────────────────
+
       const route = await RouteModel.findById(qrSession.routeId).session(session);
       if (!route) {
         throw new ErrorHandler("Route not found.", 404);
@@ -13491,21 +13348,21 @@ export const scanStopQr = catchAsyncError(
         throw new ErrorHandler("Stop not found in route.", 404);
       }
 
-      // ── Mark QR session verified ─────────────────────────────────────────
+
       qrSession.verified = true;
       qrSession.verifiedAt = new Date();
       qrSession.verifiedBy = new mongoose.Types.ObjectId(userId.toString());
       await qrSession.save({ session });
 
-      // ── Complete the stop ────────────────────────────────────────────────
+
       const now = new Date();
       const isLastStop = qrSession.isLastStop;
 
-      // Set arrival timestamps, then let completeStop handle status + index advancement
+
       stop.actualArrival = stop.actualArrival || now;
       stop.actualDeparture = now;
 
-      // Manifest breakdown
+
       if (completedManifestIds?.length) {
         stop.completedManifests = completedManifestIds.map(
           (id) => new mongoose.Types.ObjectId(id),
@@ -13519,7 +13376,7 @@ export const scanStopQr = catchAsyncError(
 
       await route.completeStop(qrSession.stopIndex, [], [], notes);
 
-      // ── Manifest cascade ─────────────────────────────────────────────────
+
       const isHubRoute = route.type === "hub_to_hub" || route.type === "hub_to_branch";
 
       if (isHubRoute && qrSession.manifestCount > 0) {
@@ -13555,7 +13412,7 @@ export const scanStopQr = catchAsyncError(
         }
       }
 
-      // ── If last stop, complete route ─────────────────────────────────────
+
       let routeCompleted = false;
 
       if (isLastStop) {
@@ -13563,7 +13420,7 @@ export const scanStopQr = catchAsyncError(
 
         const transporterDoc = await TransporterModel.findById(transporter._id).session(session);
         if (transporterDoc) {
-          // Hub-to-hub: place transporter at destination hub
+
           if (route.type === "hub_to_hub" && stop.branchId) {
             transporterDoc.currentBranchId = stop.branchId;
           }
@@ -13574,7 +13431,7 @@ export const scanStopQr = catchAsyncError(
           transporterDoc.totalTrips += 1;
           transporterDoc.completedTrips += 1;
 
-          // Update daily stats
+
           const loadCount = isHubRoute ? qrSession.manifestCount : qrSession.packageCount;
           transporterDoc.todayTransportedCount += loadCount;
           transporterDoc.totalManifestsTransported += isHubRoute ? loadCount : 0;
@@ -13589,7 +13446,7 @@ export const scanStopQr = catchAsyncError(
 
         routeCompleted = true;
       } else {
-        // Intermediate stop — update transporter stats
+
         const transporterDoc = await TransporterModel.findById(transporter._id).session(session);
         if (transporterDoc) {
           const loadCount = isHubRoute ? qrSession.manifestCount : qrSession.packageCount;
@@ -13626,7 +13483,7 @@ export const scanStopQr = catchAsyncError(
     } catch (error: any) {
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -13635,13 +13492,7 @@ export const scanStopQr = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET STOP QR INFO (for the QR display page)
-//  GET /api/stop-qr/:code
-//
-//  Public — no auth required. Returns info about the QR session
-//  so the frontend can render the QR image and show details.
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const getStopQrInfo = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -13708,13 +13559,7 @@ export const getStopQrInfo = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET MY ROUTES (for authenticated user - transporter OR deliverer)
-//
-//  GET /my-routes
-//  Returns today's routes for the authenticated user (transporter or deliverer),
-//  ordered by scheduledStart ASC. Designed for the "Today's Routes" screen.
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const getMyRoutes = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -13725,7 +13570,7 @@ export const getMyRoutes = catchAsyncError(
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
 
-    // Determine if user is transporter or deliverer
+
     let isTransporter = false;
     let isDeliverer = false;
     let transporter = null;
@@ -13767,7 +13612,7 @@ export const getMyRoutes = catchAsyncError(
     const dayEnd = new Date(now);
     dayEnd.setUTCHours(23, 59, 59, 999);
 
-    // Build query based on role
+
     let query: any = {
       status: { $in: ["assigned", "active", "paused"] },
       $or: [
@@ -13820,12 +13665,12 @@ export const getMyRoutes = catchAsyncError(
       return res.status(200).json(baseResponse);
     }
 
-    // Collect branch IDs for population
+
     const branchIds = new Set<string>();
     for (const r of routes) {
       if (r.originBranchId) branchIds.add(r.originBranchId.toString());
       if (r.destinationBranchId) branchIds.add(r.destinationBranchId.toString());
-      // Also collect stop branch IDs
+
       for (const stop of (r.stops as any[])) {
         if (stop.branchId) branchIds.add(stop.branchId.toString());
       }
@@ -13843,7 +13688,7 @@ export const getMyRoutes = catchAsyncError(
       ])
     );
 
-    // Determine which route can be started
+
     const activeOrPausedIdx = routes.findIndex(
       (r) => r.status === "active" || r.status === "paused"
     );
@@ -13859,7 +13704,7 @@ export const getMyRoutes = catchAsyncError(
         ? branchMap.get(r.destinationBranchId.toString())
         : null;
 
-      // Count items based on route type
+
       const isHubRoute = r.type === "hub_to_hub" || r.type === "hub_to_branch";
       const totalManifests = (r.stops as any[]).reduce(
         (sum: number, s: any) => sum + (s.manifestIds?.length ?? 0), 0
@@ -13871,7 +13716,7 @@ export const getMyRoutes = catchAsyncError(
       const isCurrentRoute = idx === currentRouteIndex;
       const isLocked = idx > currentRouteIndex && currentRouteIndex !== -1;
 
-      // Build stops for frontend
+
       const stops = (r.stops as any[]).map((s) => ({
         stopId: s._id,
         order: s.order,
@@ -13895,7 +13740,7 @@ export const getMyRoutes = catchAsyncError(
       const originLabel = origin ? `${origin.name} (${origin.code})` : "—";
       const destinationLabel = destination ? `${destination.name} (${destination.code})` : "—";
 
-      // Status label for UI
+
       let statusLabel: string;
       let actionHint: string | null = null;
 
@@ -13993,7 +13838,7 @@ export const getMyRoutes = catchAsyncError(
   }
 );
 
-// Helper function to format minutes
+
 function formatMinutes(minutes: number): string {
   if (!minutes || minutes <= 0) return "—";
   const h = Math.floor(minutes / 60);
@@ -14018,9 +13863,7 @@ function _formatMinutes(minutes: number): string {
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 const PERMISSIONS = {
   MANAGE_DELIVERERS: "can_manage_deliverers",
@@ -14029,14 +13872,9 @@ const PERMISSIONS = {
   MANAGE_LOADERS: "can_manage_loaders",
 } as const;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Returns the requesting user's role from the DB (one query, shared by all handlers).
- * Used to decide whether the caller is an admin, manager, or supervisor.
- */
+
+
 async function getRequestingUserRole(
   userId: mongoose.Types.ObjectId,
   session?: mongoose.ClientSession
@@ -14047,10 +13885,7 @@ async function getRequestingUserRole(
   return user?.role;
 }
 
-/**
- * Verifies the caller is either an admin or an active supervisor with the given
- * permission for the given branch. Throws ErrorHandler on failure.
- */
+
 async function assertSupervisorOrAdmin(
   requestingUserId: mongoose.Types.ObjectId,
   branchId: string,
@@ -14062,7 +13897,7 @@ async function assertSupervisorOrAdmin(
     SupervisorModel.findOne({ userId: requestingUserId, branchId }).session(session),
   ]);
 
-  if (role === "admin") return; // admins bypass all checks
+  if (role === "admin") return; 
 
   if (!supervisor || !supervisor.isActive) {
     throw new ErrorHandler("You are not an active supervisor of this branch", 403);
@@ -14073,11 +13908,7 @@ async function assertSupervisorOrAdmin(
   }
 }
 
-/**
- * Generates an auto-incrementing-style employee code that is unique in the DB.
- * Format: PREFIX-BRANCHCODE-NNNNNN (e.g. CSH-ALG-000042)
- * Falls back to a random suffix after 20 collision attempts.
- */
+
 async function generateEmployeeCode(
   prefix: "CSH" | "LDR",
   branchCode: string,
@@ -14085,16 +13916,16 @@ async function generateEmployeeCode(
 ): Promise<string> {
   const tag = branchCode.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 5) || "BR";
 
-  // Try 20 times with random numbers
+
   for (let attempt = 0; attempt < 20; attempt++) {
-    const random = Math.floor(100000 + Math.random() * 900000); // 6 digits
+    const random = Math.floor(100000 + Math.random() * 900000); 
     const code = `${prefix}-${tag}-${random}`;
 
     const existing = await (Model as any).findOne({ employeeCode: code }).lean();
     if (!existing) return code;
   }
 
-  // Fallback: use timestamp + random for absolute uniqueness
+
   const timestamp = Date.now().toString().slice(-6);
   const random = Math.floor(1000 + Math.random() * 9000);
   const fallbackCode = `${prefix}-${tag}-${timestamp}${random}`;
@@ -14105,9 +13936,7 @@ async function generateEmployeeCode(
   throw new ErrorHandler("Failed to generate a unique employee code, please try again", 500);
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  CASHIER CONTROLLERS
-// ═════════════════════════════════════════════════════════════════════════════
+
 
 interface ICreateCashier {
   email: string;
@@ -14129,9 +13958,7 @@ interface IUpdateCashier {
   // password?: string;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  CREATE CASHIER
-// ─────────────────────────────────────────────────────────────────────────────
+
 export const createCashier = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     console.log("hello")
@@ -14161,7 +13988,7 @@ export const createCashier = catchAsyncError(
         notes,
       } = req.body as ICreateCashier;
 
-      // ── required fields ──────────────────────────────────────────────────
+
       if (!email || !phone || !password || !firstName || !lastName) {
         return next(
           new ErrorHandler(
@@ -14186,7 +14013,7 @@ export const createCashier = catchAsyncError(
         return next(new ErrorHandler("counterNumber must be a number between 1 and 999", 400));
       }
 
-      // ── auth & branch checks ─────────────────────────────────────────────
+
       const branch = await BranchModel.findById(branchId).session(session);
 
       await assertSupervisorOrAdmin(requestingUserId, branchId.toString(), PERMISSIONS.MANAGE_DELIVERERS, session);
@@ -14199,7 +14026,7 @@ export const createCashier = catchAsyncError(
         throw new ErrorHandler("Cannot create cashier for an inactive branch", 400);
       }
 
-      // ── uniqueness checks ────────────────────────────────────────────────
+
       let normalizedPhone: string;
       try {
         normalizedPhone = userModel.normalizePhone(phone);
@@ -14218,7 +14045,7 @@ export const createCashier = catchAsyncError(
       // ── employee code ────────────────────────────────────────────────────
       const employeeCode = await generateEmployeeCode("CSH", branch.code || branch.name, CashierModel);
 
-      // ── create user + cashier ────────────────────────────────────────────
+
       console.log("before create user")
       const [user] = await userModel.create(
         [
@@ -14275,7 +14102,7 @@ export const createCashier = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -14283,9 +14110,7 @@ export const createCashier = catchAsyncError(
   }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  UPDATE CASHIER
-// ─────────────────────────────────────────────────────────────────────────────
+
 export const updateCashier = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const session = await mongoose.startSession();
@@ -14314,7 +14139,7 @@ export const updateCashier = catchAsyncError(
         return next(new ErrorHandler("No update data provided", 400));
       }
 
-      // ── type guards ──────────────────────────────────────────────────────
+
       if (body.email !== undefined && typeof body.email !== "string") {
         return next(new ErrorHandler("email must be a string", 400));
       }
@@ -14334,7 +14159,7 @@ export const updateCashier = catchAsyncError(
         return next(new ErrorHandler("counterNumber must be a number between 1 and 99", 400));
       }
 
-      // ── fetch cashier + auth ─────────────────────────────────────────────
+
       const cashier = await CashierModel.findOne({ _id: cashierId, assignedBranchId: branchId }).session(session);
 
       await assertSupervisorOrAdmin(requestingUserId, branchId.toString(), PERMISSIONS.MANAGE_DELIVERERS, session);
@@ -14343,7 +14168,6 @@ export const updateCashier = catchAsyncError(
         throw new ErrorHandler("Cashier not found in this branch", 404);
       }
 
-      // ── uniqueness checks for changed fields ─────────────────────────────
       const duplicateChecks: Promise<any>[] = [];
 
       if (body.email) {
@@ -14369,7 +14193,7 @@ export const updateCashier = catchAsyncError(
         throw new ErrorHandler("Email or phone already exists", 400);
       }
 
-      // ── apply updates ────────────────────────────────────────────────────
+
       const userUpdates: Record<string, any> = {};
       const cashierUpdates: Record<string, any> = {};
 
@@ -14416,7 +14240,7 @@ export const updateCashier = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -14425,9 +14249,7 @@ export const updateCashier = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  TOGGLE BLOCK / ACTIVATE CASHIER
-// ─────────────────────────────────────────────────────────────────────────────
+
 export const toggleBlockCashier = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const session = await mongoose.startSession();
@@ -14459,7 +14281,7 @@ export const toggleBlockCashier = catchAsyncError(
         throw new ErrorHandler("Cashier not found in this branch", 404);
       }
 
-      // Auth: admin, manager of this company, or active supervisor of this branch
+
       let isAuthorized = requestingRole === "admin";
 
       if (!isAuthorized && requestingRole === "manager") {
@@ -14486,7 +14308,7 @@ export const toggleBlockCashier = catchAsyncError(
         throw new ErrorHandler("Not authorized to change this cashier's status", 403);
       }
 
-      // Toggle: active → suspended, suspended/inactive → active
+
       let newStatus: "active" | "suspended";
 
       if (cashier.status === "active") {
@@ -14530,7 +14352,7 @@ export const toggleBlockCashier = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -14538,9 +14360,7 @@ export const toggleBlockCashier = catchAsyncError(
   }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET CASHIER BY ID
-// ─────────────────────────────────────────────────────────────────────────────
+
 export const getCashier = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const requestingUserId = req.user?._id;
@@ -14571,7 +14391,7 @@ export const getCashier = catchAsyncError(
       return next(new ErrorHandler("Cashier not found in this branch", 404));
     }
 
-    // Auth: admin, or active supervisor/manager of this branch/company
+
     const isAdmin = requestingUser?.role === "admin";
     let isAuthorized = isAdmin;
 
@@ -14596,9 +14416,9 @@ export const getCashier = catchAsyncError(
   }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET ALL CASHIERS OF A BRANCH
-// ─────────────────────────────────────────────────────────────────────────────
+
+
+
 export const getMyCashiers = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const requestingUserId = req.user?._id;
@@ -14621,7 +14441,7 @@ export const getMyCashiers = catchAsyncError(
       return next(new ErrorHandler("Branch not found", 404));
     }
 
-    // Auth check
+
     const isAdmin = requestingUser?.role === "admin";
     let isAuthorized = isAdmin;
 
@@ -14648,7 +14468,8 @@ export const getMyCashiers = catchAsyncError(
       return next(new ErrorHandler("Not authorized to view cashiers of this branch", 403));
     }
 
-    // ── query filters ────────────────────────────────────────────────────────
+
+
     const cashierQuery: mongoose.FilterQuery<ICashier> = {
       assignedBranchId: branchId,
     };
@@ -14659,7 +14480,7 @@ export const getMyCashiers = catchAsyncError(
       cashierQuery.status = status;
     }
 
-    // Filter by whether cashier is currently on an active shift
+
     if (isCheckedIn !== undefined) {
       if (isCheckedIn === "true") {
         cashierQuery["currentShift.status"] = "active";
@@ -14672,7 +14493,7 @@ export const getMyCashiers = catchAsyncError(
     }
 
     if (search && typeof search === "string") {
-      // Search by employeeCode directly, or look up by name/email on the user side
+
       const matchingUsers = await userModel
         .find({
           $or: [
@@ -14691,7 +14512,7 @@ export const getMyCashiers = catchAsyncError(
         { employeeCode: { $regex: search, $options: "i" } },
       ];
 
-      // If nothing can match, short-circuit
+
       if (matchingUserIds.length === 0 && !/^CSH-/i.test(search)) {
         return res.status(200).json({ success: true, count: 0, data: [] });
       }
@@ -14711,9 +14532,9 @@ export const getMyCashiers = catchAsyncError(
   }
 );
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  LOADER CONTROLLERS
-// ═════════════════════════════════════════════════════════════════════════════
+
+
+
 
 interface ICreateLoader {
   email: string;
@@ -14734,9 +14555,7 @@ interface IUpdateLoader {
   // password?: string;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  CREATE LOADER
-// ─────────────────────────────────────────────────────────────────────────────
+
 export const createLoader = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const session = await mongoose.startSession();
@@ -14764,7 +14583,7 @@ export const createLoader = catchAsyncError(
         notes,
       } = req.body as ICreateLoader;
 
-      // ── required fields ──────────────────────────────────────────────────
+
       if (!email || !phone || !password || !firstName || !lastName) {
         return next(
           new ErrorHandler(
@@ -14784,7 +14603,7 @@ export const createLoader = catchAsyncError(
         return next(new ErrorHandler("All required fields must be strings", 400));
       }
 
-      // ── auth & branch checks ─────────────────────────────────────────────
+
       await assertSupervisorOrAdmin(requestingUserId, branchId.toString(), PERMISSIONS.MANAGE_DELIVERERS, session);
 
       const branch = await BranchModel.findById(branchId).session(session);
@@ -14797,7 +14616,7 @@ export const createLoader = catchAsyncError(
         throw new ErrorHandler("Cannot create loader for an inactive branch", 400);
       }
 
-      // ── uniqueness checks ────────────────────────────────────────────────
+
       let normalizedPhone: string;
       try {
         normalizedPhone = userModel.normalizePhone(phone);
@@ -14813,10 +14632,10 @@ export const createLoader = catchAsyncError(
       if (existingEmail) throw new ErrorHandler("Email already exists", 400);
       if (existingPhone) throw new ErrorHandler("Phone number already exists", 400);
 
-      // ── employee code ────────────────────────────────────────────────────
+
       const employeeCode = await generateEmployeeCode("LDR", branch.code || branch.name, LoaderModel);
 
-      // ── create user + loader ─────────────────────────────────────────────
+
       const [user] = await userModel.create(
         [
           {
@@ -14871,7 +14690,7 @@ export const createLoader = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -14879,9 +14698,9 @@ export const createLoader = catchAsyncError(
   }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  UPDATE LOADER
-// ─────────────────────────────────────────────────────────────────────────────
+
+
+
 export const updateLoader = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const session = await mongoose.startSession();
@@ -14910,7 +14729,7 @@ export const updateLoader = catchAsyncError(
         return next(new ErrorHandler("No update data provided", 400));
       }
 
-      // ── type guards ──────────────────────────────────────────────────────
+
       if (body.email !== undefined && typeof body.email !== "string") {
         return next(new ErrorHandler("email must be a string", 400));
       }
@@ -14931,7 +14750,7 @@ export const updateLoader = catchAsyncError(
         return next(new ErrorHandler("Invalid temporaryBranchId", 400));
       }
 
-      // ── fetch loader + auth ──────────────────────────────────────────────
+
       const loader = await LoaderModel.findOne({
         _id: loaderId,
         assignedBranchId: branchId,
@@ -14943,7 +14762,7 @@ export const updateLoader = catchAsyncError(
         throw new ErrorHandler("Loader not found in this branch", 404);
       }
 
-      // If a temporaryBranchId is given, verify that branch exists
+
       if (body.temporaryBranchId) {
         const tempBranch = await BranchModel.findById(body.temporaryBranchId).session(session);
         if (!tempBranch) {
@@ -14951,7 +14770,7 @@ export const updateLoader = catchAsyncError(
         }
       }
 
-      // ── uniqueness checks ────────────────────────────────────────────────
+
       const duplicateChecks: Promise<any>[] = [];
 
       if (body.email) {
@@ -14977,7 +14796,7 @@ export const updateLoader = catchAsyncError(
         throw new ErrorHandler("Email or phone already exists", 400);
       }
 
-      // ── apply updates ────────────────────────────────────────────────────
+
       const userUpdates: Record<string, any> = {};
       const loaderUpdates: Record<string, any> = {};
 
@@ -15030,7 +14849,7 @@ export const updateLoader = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -15039,9 +14858,7 @@ export const updateLoader = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  TOGGLE BLOCK / ACTIVATE LOADER
-// ─────────────────────────────────────────────────────────────────────────────
+
 export const toggleBlockLoader = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const session = await mongoose.startSession();
@@ -15073,7 +14890,7 @@ export const toggleBlockLoader = catchAsyncError(
         throw new ErrorHandler("Loader not found in this branch", 404);
       }
 
-      // Auth: admin, manager of this company, or active supervisor of this branch
+
       let isAuthorized = requestingRole === "admin";
 
       if (!isAuthorized && requestingRole === "manager") {
@@ -15100,7 +14917,7 @@ export const toggleBlockLoader = catchAsyncError(
         throw new ErrorHandler("Not authorized to change this loader's status", 403);
       }
 
-      // Toggle: active → suspended, suspended/inactive → active
+
       let newStatus: "active" | "suspended";
 
       if (loader.status === "active") {
@@ -15144,7 +14961,7 @@ export const toggleBlockLoader = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -15152,9 +14969,9 @@ export const toggleBlockLoader = catchAsyncError(
   }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET LOADER BY ID
-// ─────────────────────────────────────────────────────────────────────────────
+
+
+
 export const getLoader = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const requestingUserId = req.user?._id;
@@ -15210,9 +15027,9 @@ export const getLoader = catchAsyncError(
   }
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET ALL LOADERS OF A BRANCH
-// ─────────────────────────────────────────────────────────────────────────────
+
+
+
 export const getMyLoaders = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const requestingUserId = req.user?._id;
@@ -15235,7 +15052,7 @@ export const getMyLoaders = catchAsyncError(
       return next(new ErrorHandler("Branch not found", 404));
     }
 
-    // Auth check
+
     const isAdmin = requestingUser?.role === "admin";
     let isAuthorized = isAdmin;
 
@@ -15262,7 +15079,7 @@ export const getMyLoaders = catchAsyncError(
       return next(new ErrorHandler("Not authorized to view loaders of this branch", 403));
     }
 
-    // ── query filters ────────────────────────────────────────────────────────
+
     const loaderQuery: mongoose.FilterQuery<ILoader> = {
       $or: [
         { assignedBranchId: branchId },
@@ -15339,9 +15156,8 @@ export const getMyLoaders = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  DELETE CASHIER
-// ─────────────────────────────────────────────────────────────────────────────
+
+
 export const deleteCashier = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const session = await mongoose.startSession();
@@ -15404,12 +15220,12 @@ export const deleteCashier = catchAsyncError(
         throw new ErrorHandler("Not authorized to delete this cashier", 403);
       }
 
-      // If the cashier is currently active, prevent deletion
+
       if (cashier.currentShift && cashier.currentShift.status === "active") {
         throw new ErrorHandler("Cannot delete a cashier that is currently checked in", 400);
       }
 
-      // Perform deletion
+
       await userModel.findByIdAndDelete(cashier.userId, { session });
       await CashierModel.findByIdAndDelete(cashierId, { session });
 
@@ -15442,9 +15258,7 @@ export const deleteCashier = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  DELETE LOADER
-// ─────────────────────────────────────────────────────────────────────────────
+
 export const deleteLoader = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const session = await mongoose.startSession();
@@ -15513,12 +15327,12 @@ export const deleteLoader = catchAsyncError(
         throw new ErrorHandler("Not authorized to delete this loader", 403);
       }
 
-      // If the loader is currently active, prevent deletion
+
       if (loader.currentShift && loader.currentShift.status === "active") {
         throw new ErrorHandler("Cannot delete a loader that is currently checked in", 400);
       }
 
-      // Perform deletion
+
       await userModel.findByIdAndDelete(loader.userId, { session });
       await LoaderModel.findByIdAndDelete(loaderId, { session });
 
@@ -15570,7 +15384,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
       const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
       const isValidId = (val: string) => mongoose.Types.ObjectId.isValid(val);
 
-      // ── Authentication and role-based access control ──────────────────────
+
       const user = (req as any).user;
       const userRole = user?.role;
       const userId = user?._id;
@@ -15579,36 +15393,36 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
       let routePackageIds: mongoose.Types.ObjectId[] | null = null;
       let packageStopOrderMap: Map<string, { stopIndex: number; orderInStop: number }> | null = null;
 
-      // ── COMPANY FILTER ────────────────────────────────────────────────────
+
       if (req.query.companyId) {
         if (!isValidId(req.query.companyId as string))
           return next(new ErrorHandler("Invalid companyId.", 400));
         filter.companyId = toObjectId(req.query.companyId as string);
       }
 
-      // ── STRICT ACCESS CONTROL FOR DELIVERER ROLE ──────────────────────────
+
       if (userRole === 'deliverer') {
-        // Find the deliverer record for this user
+
         const deliverer = await DelivererModel.findOne({ userId: userId });
         if (!deliverer) {
           return next(new ErrorHandler("Deliverer profile not found.", 404));
         }
 
-        // Find the active route for this deliverer (not completed or cancelled)
+
         const activeRoute = await RouteModel.findOne({
           assignedDelivererId: deliverer._id,
           status: { $in: ['planned', 'assigned', 'active', 'paused'] }
         }).lean();
 
         if (activeRoute && activeRoute.stops && activeRoute.stops.length > 0) {
-          // Extract all package IDs with their stop order information
+
           const allPackageIds: mongoose.Types.ObjectId[] = [];
           const stopOrderMap = new Map<string, { stopIndex: number; orderInStop: number }>();
 
           for (let stopIndex = 0; stopIndex < activeRoute.stops.length; stopIndex++) {
             const stop = activeRoute.stops[stopIndex];
             if (stop.packageIds && stop.packageIds.length > 0) {
-              // Add each package with its stop index and order within the stop
+
               for (let orderInStop = 0; orderInStop < stop.packageIds.length; orderInStop++) {
                 const packageId = stop.packageIds[orderInStop];
                 allPackageIds.push(packageId);
@@ -15623,15 +15437,15 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
           if (allPackageIds.length > 0) {
             routePackageIds = allPackageIds;
             packageStopOrderMap = stopOrderMap;
-            // Filter packages to only those in the active route
+
             filter._id = { $in: allPackageIds };
           } else {
-            // No packages in the route, return empty result
+
             routePackageIds = [];
             filter._id = { $in: [] };
           }
         } else {
-          // No active route found, return empty result
+
           routePackageIds = [];
           filter._id = { $in: [] };
         }
@@ -15643,7 +15457,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
 
       }
 
-      // ── If query explicitly asks for a specific deliverer (admin only) ─────
+
       if (req.query.assignedDelivererId && userRole !== 'deliverer') {
         if (!isValidId(req.query.assignedDelivererId as string))
           return next(new ErrorHandler("Invalid assignedDelivererId.", 400));
@@ -15651,7 +15465,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         filter.assignedDelivererId = assignedDelivererId;
       }
 
-      // ── Other filters (client, branch, status, etc.) ───────────────────────
+
       if (req.query.clientId) {
         if (!isValidId(req.query.clientId as string))
           return next(new ErrorHandler("Invalid clientId.", 400));
@@ -15670,7 +15484,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         filter.currentBranchId = toObjectId(req.query.currentBranchId as string);
       }
 
-      // Status filter
+
       const VALID_STATUSES: PackageStatus[] = [
         "pending", "accepted", "at_origin_branch", "in_transit_to_branch",
         "at_destination_branch", "out_for_delivery", "delivered",
@@ -15684,7 +15498,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         filter.status = s;
       }
 
-      // Type filter
+
       const VALID_TYPES: PackageType[] = [
         "document", "parcel", "fragile", "heavy",
         "perishable", "electronic", "clothing",
@@ -15696,7 +15510,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         filter.type = t;
       }
 
-      // Payment status filter
+
       const VALID_PAYMENT_STATUSES: PaymentStatus[] = [
         "pending", "paid", "partially_paid", "refunded", "failed",
       ];
@@ -15707,7 +15521,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         filter.paymentStatus = ps;
       }
 
-      // Delivery priority filter
+
       const VALID_PRIORITIES = ["standard", "express", "same_day"];
       if (req.query.deliveryPriority && req.query.deliveryPriority !== "") {
         const dp = req.query.deliveryPriority as string;
@@ -15716,7 +15530,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         filter.deliveryPriority = dp;
       }
 
-      // Delivery type filter
+
       const VALID_DELIVERY_TYPES: DeliveryType[] = ["home", "branch_pickup"];
       if (req.query.deliveryType) {
         const dt = req.query.deliveryType as string;
@@ -15725,7 +15539,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         filter.deliveryType = dt;
       }
 
-      // Boolean filters
+
       if (req.query.isFragile !== undefined && req.query.isFragile !== "") {
         filter.isFragile = req.query.isFragile === "true";
       }
@@ -15741,7 +15555,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
             : { $not: { $elemMatch: { resolved: false } } };
       }
 
-      // Range filters
+
       const applyRange = (
         field: string,
         minKey: string,
@@ -15767,7 +15581,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
       applyRange("dimensions.width", "minWidth", "maxWidth");
       applyRange("dimensions.height", "minHeight", "maxHeight");
 
-      // Location filters
+
       if (req.query.city) {
         filter["destination.city"] = new RegExp(req.query.city as string, "i");
       }
@@ -15775,30 +15589,29 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         filter["destination.state"] = new RegExp(req.query.state as string, "i");
       }
 
-      // ── Fetch deliverer stats if filtering by deliverer ────────────────────
+
       let delivererStats: any = null;
       if (assignedDelivererId) {
         const deliverer = await DelivererModel.findById(assignedDelivererId)
           .lean({ virtuals: true });
 
         if (deliverer) {
-          // For deliverer stats, we still need to count based on assigned packages
-          // But for deliverer role, we use routePackageIds, otherwise use assignedDelivererId filter
+
           let statsMatchFilter: any = {};
 
           if (userRole === 'deliverer' && routePackageIds !== null) {
-            // For deliverer role, stats should only count packages in the active route
+
             if (routePackageIds.length > 0) {
               statsMatchFilter._id = { $in: routePackageIds };
             } else {
               statsMatchFilter._id = { $in: [] };
             }
           } else {
-            // For admin queries, use the assignedDelivererId filter
+
             statsMatchFilter.assignedDelivererId = assignedDelivererId;
           }
 
-          // Aggregate package stats
+
           const packageStats = await PackageModel.aggregate([
             {
               $match: statsMatchFilter,
@@ -15941,7 +15754,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         }
       }
 
-      // ── Fetch packages with pagination ─────────────────────────────────────
+
       const [total, packages] = await Promise.all([
         PackageModel.countDocuments(filter),
         PackageModel.find(filter)
@@ -15950,20 +15763,20 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
           .lean({ virtuals: true }),
       ]);
 
-      // Apply overdue filter (client-side since it's a virtual)
+
       let filteredPackages = packages as any[];
       if (req.query.isOverdue !== undefined) {
         const wantOverdue = req.query.isOverdue === "true";
         filteredPackages = filteredPackages.filter((pkg) => pkg.isOverdue === wantOverdue);
       }
 
-      // Sort packages by route stop order (for deliverer role only)
+
       if (userRole === 'deliverer' && packageStopOrderMap) {
         filteredPackages.sort((a, b) => {
           const orderA = packageStopOrderMap.get(a._id.toString());
           const orderB = packageStopOrderMap.get(b._id.toString());
 
-          // If both have order info, sort by stop index first, then by order within stop
+
           if (orderA && orderB) {
             if (orderA.stopIndex !== orderB.stopIndex) {
               return orderA.stopIndex - orderB.stopIndex;
@@ -15971,13 +15784,13 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
             return orderA.orderInStop - orderB.orderInStop;
           }
 
-          // If one doesn't have order info (shouldn't happen), put it at the end
+
           if (orderA) return -1;
           if (orderB) return 1;
           return 0;
         });
       } else {
-        // Apply client-side sorting for non-deliverer roles
+
         const sortBy = (req.query.sortBy as string) || "createdAt";
         const order = req.query.order === "desc" ? -1 : 1;
 
@@ -16009,7 +15822,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         }
       }
 
-      // Format packages for response
+
       const formattedPackages = filteredPackages.map((pkg) => ({
         id: pkg._id,
         trackingNumber: pkg.trackingNumber,
@@ -16068,7 +15881,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         deliveredAt: pkg.deliveredAt ?? null,
       }));
 
-      // Build response
+
       const responseData: any = {
         packages: formattedPackages,
         pagination: {
@@ -16110,7 +15923,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
         },
       };
 
-      // Attach deliverer stats if available
+
       if (delivererStats) {
         responseData.delivererStats = delivererStats;
       }
@@ -16144,15 +15957,7 @@ export const getPackagesPaginatedFromRoute = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  HTTP  FOR DELIVERER QR SCAN
-//  POST /api/delivery/complete-qr-bridge
-//
-//  This endpoint acts as a bridge - it validates the deliverer and session,
-//  then calls the existing Socket.IO complete_delivery event.
-//  All business logic (proximity, package updates, route progression, etc.)
-//  is handled by the socket event.
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const completeDeliveryByQrCode = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -16167,7 +15972,7 @@ export const completeDeliveryByQrCode = catchAsyncError(
         return next(new ErrorHandler("Only deliverers can complete deliveries.", 403));
       }
 
-      // Accept the payload exactly as it comes from the QR link
+
       const { payload, coordinates, notes } = req.body;
 
       if (!payload || typeof payload !== "string") {
@@ -16178,7 +15983,7 @@ export const completeDeliveryByQrCode = catchAsyncError(
         return next(new ErrorHandler("Valid coordinates [lng, lat] are required.", 400));
       }
 
-      // Decode the payload (it comes as base64 from the QR link)
+
       let qrPayload;
       try {
         const decodedString = Buffer.from(payload, 'base64').toString();
@@ -16187,7 +15992,7 @@ export const completeDeliveryByQrCode = catchAsyncError(
         return next(new ErrorHandler("Invalid payload format. Unable to decode QR data.", 400));
       }
 
-      // Extract the QR payload fields (exactly what's in generateAndSendDeliveryQR)
+
       const { sessionId, code, packageId, trackingNumber, timestamp } = qrPayload;
 
       if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
@@ -16211,7 +16016,7 @@ export const completeDeliveryByQrCode = catchAsyncError(
         return next(new ErrorHandler("Deliverer account is not active.", 403));
       }
 
-      // Find the route that has this package at the current stop
+
       const route = await RouteModel.findOne({
         assignedDelivererId: deliverer._id,
         status: "active",
@@ -16222,7 +16027,7 @@ export const completeDeliveryByQrCode = catchAsyncError(
         return next(new ErrorHandler("No active route found for this package.", 404));
       }
 
-      // Find which stop contains this package
+
       const stopIndex = route.stops.findIndex((stop: any) =>
         stop.packageIds.some((id: mongoose.Types.ObjectId) => id.toString() === packageId)
       );
@@ -16243,7 +16048,7 @@ export const completeDeliveryByQrCode = catchAsyncError(
         return next(new ErrorHandler("QR session not found.", 404));
       }
 
-      // Verify the QR session matches the package
+
       if (qrSession.packageId.toString() !== packageId) {
         return next(new ErrorHandler("QR session does not match the package.", 400));
       }
@@ -16264,13 +16069,13 @@ export const completeDeliveryByQrCode = catchAsyncError(
         return next(new ErrorHandler("Socket IO not available.", 500));
       }
 
-      // Emit with the structure the socket handler expects
+
       io.to(delivererSocketId).emit("complete_delivery", {
         sessionId,
         qrCode: code,
         routeId: route._id.toString(),
         stopIndex,
-        coordinates, // This comes from the deliverer's device, not the QR
+        coordinates, 
         notes: notes || "",
       });
 
@@ -16308,9 +16113,7 @@ export const completeDeliveryByQrCode = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  START ROUTE BY QR CODE (Transporter scans QR shown by Loader)
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const startRouteByQrCode = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -16424,9 +16227,7 @@ export const startRouteByQrCode = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ARRIVE AT STOP BY QR CODE (Transporter scans QR shown by Loader)
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const arriveAtStopByQrCode = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -16563,7 +16364,7 @@ export const searchDeliveries = catchAsyncError(
 
       const rawSearch = (req.query.q as string)?.trim() ?? "";
 
-      // Date range filters (yesterday, last7days, etc.)
+
       type PeriodFilter = "today" | "yesterday" | "last7days" | "last30days" | "last6months" | "custom" | "all";
       const period = req.query.period ? (req.query.period as PeriodFilter) : "all";
 
@@ -16610,7 +16411,7 @@ export const searchDeliveries = catchAsyncError(
         }
       }
 
-      // First, get all routes assigned to this deliverer, ordered newest to oldest
+
       const routesPipeline: any[] = [
         {
           $match: {
@@ -16676,12 +16477,12 @@ export const searchDeliveries = catchAsyncError(
         return;
       }
 
-      // Build the match stage for packages (same as searchPackages)
+
       const matchStage: Record<string, any> = {
         _id: { $in: allPackageIds },
       };
 
-      // Company filter (optional)
+
       if (req.query.companyId) {
         if (!mongoose.Types.ObjectId.isValid(req.query.companyId as string)) {
           return next(new ErrorHandler("Invalid companyId.", 400));
@@ -16689,7 +16490,7 @@ export const searchDeliveries = catchAsyncError(
         matchStage.companyId = new mongoose.Types.ObjectId(req.query.companyId as string);
       }
 
-      // Client filter
+
       if (req.query.clientId) {
         if (!mongoose.Types.ObjectId.isValid(req.query.clientId as string)) {
           return next(new ErrorHandler("Invalid clientId.", 400));
@@ -16697,18 +16498,18 @@ export const searchDeliveries = catchAsyncError(
         matchStage.clientId = new mongoose.Types.ObjectId(req.query.clientId as string);
       }
 
-      // Date filter from period
+
       if (Object.keys(dateFilter).length > 0) {
         matchStage.createdAt = dateFilter;
       }
 
-      // Status groups for deliverer-friendly filtering
+
       const FAILED_STATUS_GROUP = ["failed_delivery", "cancelled", "returned"];
       const DELIVERED_STATUS_GROUP = ["delivered"];
       const IN_PROGRESS_STATUS_GROUP = ["out_for_delivery", "at_destination_branch", "in_transit_to_branch"];
       const PENDING_STATUS_GROUP = ["pending", "accepted", "at_origin_branch"];
 
-      // Status filter - supports single, multiple, or grouped statuses
+
       const VALID_STATUSES: PackageStatus[] = [
         "pending", "accepted", "at_origin_branch", "in_transit_to_branch",
         "at_destination_branch", "out_for_delivery", "delivered", 'failed_delivery_attempt',
@@ -16716,7 +16517,7 @@ export const searchDeliveries = catchAsyncError(
         "lost", "damaged", "on_hold",
       ];
 
-      // Helper function to expand status groups
+
       const expandStatusGroup = (statusValue: string): string[] => {
         switch (statusValue.toLowerCase()) {
           case "failed":
@@ -16736,15 +16537,15 @@ export const searchDeliveries = catchAsyncError(
 
       if (req.query.statuses) {
         const rawStatuses = (req.query.statuses as string).split(",").map(s => s.trim());
-        // Expand any group keywords and collect all individual statuses
+
         const expandedStatuses: string[] = [];
         for (const status of rawStatuses) {
           const expanded = expandStatusGroup(status);
           expandedStatuses.push(...expanded);
         }
-        // Remove duplicates
+
         const uniqueStatuses = [...new Set(expandedStatuses)];
-        // Validate each status
+
         const invalidStatuses = uniqueStatuses.filter(s => !VALID_STATUSES.includes(s as PackageStatus));
         if (invalidStatuses.length > 0) {
           return next(new ErrorHandler(`Invalid status(es): ${invalidStatuses.join(", ")}`, 400));
@@ -16752,17 +16553,17 @@ export const searchDeliveries = catchAsyncError(
         matchStage.status = { $in: uniqueStatuses };
       } else if (req.query.status) {
         const s = req.query.status as string;
-        // Check if it's a group keyword
+
         const expanded = expandStatusGroup(s);
         if (expanded.length > 1 || expanded[0] !== s) {
-          // It was a group keyword
+
           const invalidStatuses = expanded.filter(stat => !VALID_STATUSES.includes(stat as PackageStatus));
           if (invalidStatuses.length > 0) {
             return next(new ErrorHandler(`Invalid status(es) in group: ${invalidStatuses.join(", ")}`, 400));
           }
           matchStage.status = { $in: expanded };
         } else {
-          // Single status
+
           if (!VALID_STATUSES.includes(s as PackageStatus)) {
             return next(new ErrorHandler(`Invalid status: ${s}`, 400));
           }
@@ -16770,7 +16571,7 @@ export const searchDeliveries = catchAsyncError(
         }
       }
 
-      // Type filter - supports multiple
+ 
       const VALID_TYPES: PackageType[] = [
         "document", "parcel", "fragile", "heavy",
         "perishable", "electronic", "clothing",
@@ -16791,7 +16592,7 @@ export const searchDeliveries = catchAsyncError(
         matchStage.type = t;
       }
 
-      // Payment status filter - supports multiple
+
       const VALID_PAYMENT_STATUSES: PaymentStatus[] = [
         "pending", "paid", "partially_paid", "refunded", "failed",
       ];
@@ -16811,7 +16612,7 @@ export const searchDeliveries = catchAsyncError(
         matchStage.paymentStatus = ps;
       }
 
-      // Delivery priority filter - supports multiple
+
       const VALID_PRIORITIES = ["standard", "express", "same_day"];
 
       if (req.query.deliveryPriorities) {
@@ -16829,7 +16630,7 @@ export const searchDeliveries = catchAsyncError(
         matchStage.deliveryPriority = dp;
       }
 
-      // Delivery type filter - supports multiple
+
       const VALID_DELIVERY_TYPES: DeliveryType[] = ["home", "branch_pickup"];
 
       if (req.query.deliveryTypes) {
@@ -16847,17 +16648,17 @@ export const searchDeliveries = catchAsyncError(
         matchStage.deliveryType = dt;
       }
 
-      // Fragile filter
+
       if (req.query.isFragile !== undefined) {
         matchStage.isFragile = req.query.isFragile === "true";
       }
 
-      // Return filter
+
       if (req.query.isReturn !== undefined) {
         matchStage["returnInfo.isReturn"] = req.query.isReturn === "true";
       }
 
-      // Issues filter
+
       if (req.query.hasIssues !== undefined) {
         if (req.query.hasIssues === "true") {
           matchStage["issues"] = { $elemMatch: { resolved: false } };
@@ -16868,14 +16669,14 @@ export const searchDeliveries = catchAsyncError(
         }
       }
 
-      // Needs attention filter
+
       if (req.query.needsAttention === "true") {
         matchStage.status = {
           $in: ["failed_delivery", "damaged", "lost", "on_hold"],
         };
       }
 
-      // Weight filter
+ 
       if (req.query.minWeight || req.query.maxWeight) {
         matchStage.weight = {
           ...(req.query.minWeight && { $gte: parseFloat(req.query.minWeight as string) }),
@@ -16883,7 +16684,7 @@ export const searchDeliveries = catchAsyncError(
         };
       }
 
-      // Volume filter
+
       if (req.query.minVolume || req.query.maxVolume) {
         matchStage.volume = {
           ...(req.query.minVolume && { $gte: parseFloat(req.query.minVolume as string) }),
@@ -16891,7 +16692,7 @@ export const searchDeliveries = catchAsyncError(
         };
       }
 
-      // Dimensions filters
+
       if (req.query.minLength || req.query.maxLength) {
         matchStage["dimensions.length"] = {
           ...(req.query.minLength && { $gte: parseFloat(req.query.minLength as string) }),
@@ -16913,7 +16714,7 @@ export const searchDeliveries = catchAsyncError(
         };
       }
 
-      // Location filters
+
       if (req.query.city) {
         matchStage["destination.city"] = new RegExp(req.query.city as string, "i");
       }
@@ -16922,11 +16723,11 @@ export const searchDeliveries = catchAsyncError(
         matchStage["destination.state"] = new RegExp(req.query.state as string, "i");
       }
 
-      // Build the aggregation pipeline for packages
+
       const pipeline: any[] = [
         { $match: matchStage },
 
-        // Add computed fields (same as searchPackages)
+
         {
           $addFields: {
             _estimatedTimeRemaining: {
@@ -16972,12 +16773,12 @@ export const searchDeliveries = catchAsyncError(
           },
         },
 
-        // Overdue filter
+
         ...(req.query.isOverdue !== undefined
           ? [{ $match: { _isOverdue: req.query.isOverdue === "true" } }]
           : []),
 
-        // Text search across tracking number, recipient name/phone
+
         ...(rawSearch
           ? [
               {
@@ -17004,7 +16805,7 @@ export const searchDeliveries = catchAsyncError(
             ]
           : [{ $addFields: { _searchScore: 0 } }]),
 
-        // Sort
+
         {
           $sort: {
             _searchScore: -1,
@@ -17013,7 +16814,7 @@ export const searchDeliveries = catchAsyncError(
           },
         },
 
-        // Facet for pagination
+
         {
           $facet: {
             metadata: [{ $count: "total" }],
@@ -17037,7 +16838,7 @@ export const searchDeliveries = catchAsyncError(
       const total: number = result.metadata[0]?.total ?? 0;
       const packages: any[] = result.data ?? [];
 
-      // Format packages (same format as searchPackages)
+
       const formattedPackages = packages.map((pkg) => ({
         id: pkg._id,
         trackingNumber: pkg.trackingNumber,
@@ -17130,36 +16931,11 @@ export const searchDeliveries = catchAsyncError(
 
 
 
-/**
- * GET /transportation/today
- *
- * Returns the transporter's transportation "trip" for today, creating it
- * from their newest route (scheduled or actually started today) if it
- * doesn't exist yet. Calling this repeatedly is idempotent — it will not
- * create duplicate Transportation docs for the same route.
- *
- * Query params (all optional):
- *   - transporterId   (required in practice — who we're fetching for)
- *   - minWeight / maxWeight         → totalWeight
- *   - minVolume / maxVolume         → totalVolume
- *   - minPackageCount / maxPackageCount
- *   - minManifestCount / maxManifestCount
- *   - routeStatus                   → underlying route's status (planned|assigned|active|paused|completed|cancelled)
- *   - status                        → transportation's own status (pending|in_transit|arrived|completed|cancelled)
- *
- * Response shape:
- *   { success: true, data: <Transportation fields> | null, message?: string }
- *
- * `data` is null in two cases:
- *   1. No route for this transporter is scheduled/started today (their
- *      schedule for the day hasn't begun or has ended).
- *   2. A transportation exists / was created, but it doesn't pass the
- *      supplied filters.
- */
+
 export const getOrCreateTodayTransportation = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
 
-    // ── Section 1: pure validation (no DB writes) ────────────────────────────
+
 
     const isValidId = (val: string) => mongoose.Types.ObjectId.isValid(val);
     const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
@@ -17203,8 +16979,7 @@ export const getOrCreateTodayTransportation = catchAsyncError(
     const minManifestCount = parseNum("minManifestCount");
     const maxManifestCount = parseNum("maxManifestCount");
 
-    // ["minWeight", req.query.minWeight], ["maxWeight", ...], etc — anything
-    // passed but not parseable as a number is a 400, same as getManifestsPaginated.
+
     const numericKeys = [
       "minWeight", "maxWeight", "minVolume", "maxVolume",
       "minPackageCount", "maxPackageCount",
@@ -17216,13 +16991,12 @@ export const getOrCreateTodayTransportation = catchAsyncError(
       }
     }
 
-    // ── "Today" window ─────────────────────────────────────────────────────
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
     const endOfToday = new Date();
     endOfToday.setHours(23, 59, 59, 999);
 
-    // ── Section 2: DB work — find route, get-or-create transportation ────────
+
 
     const session = await mongoose.startSession();
     let transactionCommitted = false;
@@ -17233,15 +17007,14 @@ export const getOrCreateTodayTransportation = catchAsyncError(
     try {
       session.startTransaction();
 
-      // Newest route for this transporter scheduled OR actually started today.
-      // "Newest" = latest scheduledStart, since that's the day's schedule order.
+
       const todaysRoute = await RouteModel.findOne({
         assignedTransporterId: transporterId,
         $or: [
           { scheduledStart: { $gte: startOfToday, $lte: endOfToday } },
           { actualStart: { $gte: startOfToday, $lte: endOfToday } },
         ],
-        // any status — pending/active/completed/cancelled are all valid "today" routes
+
       })
         .sort({ scheduledStart: -1 })
         .session(session);
@@ -17250,21 +17023,19 @@ export const getOrCreateTodayTransportation = catchAsyncError(
         noRouteToday = true;
       } else {
 
-        // Idempotent: reuse an existing Transportation for this route if present.
+
         let transportation = await TransportationModel.findOne({
           sourceRouteId: todaysRoute._id,
         }).session(session);
 
         if (!transportation) {
-          // Flatten manifestIds across all stops (hub_to_hub usually has one
-          // stop; hub_to_branch may have several).
+
           const manifestIds = todaysRoute.stops.reduce<mongoose.Types.ObjectId[]>(
             (acc, stop) => acc.concat(stop.manifestIds || []),
             [],
           );
 
-          // Sum rollups directly from manifest docs — both fields already
-          // exist on IManifest, no aggregation needed.
+
           let totalWeight = 0;
           let totalPackages = 0;
           if (manifestIds.length > 0) {
@@ -17278,10 +17049,7 @@ export const getOrCreateTodayTransportation = catchAsyncError(
             }
           }
 
-          // Source / destination location: pull from route's first/last stop.
-          // hub_to_hub routes typically have exactly one stop (the destination
-          // hub); origin coordinates aren't stored on the route itself, so we
-          // fall back to the first stop's location for both if there's only one.
+
           const firstStop = todaysRoute.stops[0];
           const lastStop = todaysRoute.stops[todaysRoute.stops.length - 1];
 
@@ -17308,7 +17076,7 @@ export const getOrCreateTodayTransportation = catchAsyncError(
               manifestCount: manifestIds.length,
               packageCount: totalPackages,
               totalWeight,
-              totalVolume: 0, // TODO: no volume field on Manifest/Package yet — confirm source
+              totalVolume: 0, 
               assignedTransporterId: todaysRoute.assignedTransporterId,
               assignedVehicleId: todaysRoute.assignedVehicleId,
               status: "pending",
@@ -17347,7 +17115,7 @@ export const getOrCreateTodayTransportation = catchAsyncError(
       session.endSession();
     }
 
-    // ── Section 3: response shaping (no further DB writes) ───────────────────
+
 
     if (noRouteToday || !resultDoc) {
       res.status(200).json({
@@ -17358,9 +17126,7 @@ export const getOrCreateTodayTransportation = catchAsyncError(
       return;
     }
 
-    // Apply filters to the single result. If it doesn't pass, the response
-    // is null (filtered out) rather than an error — same null contract as
-    // the "no route today" case above.
+
     const t = resultDoc;
 
     if (req.query.status && t.status !== (req.query.status as string)) {
@@ -17400,8 +17166,7 @@ export const getOrCreateTodayTransportation = catchAsyncError(
       return;
     }
     if (req.query.routeStatus) {
-      // Re-check the underlying route's current status (it may have changed
-      // since the transportation was created — e.g. transporter started driving).
+
       const route = await RouteModel.findById(t.sourceRouteId).select("status").lean();
       if (!route || route.status !== (req.query.routeStatus as string)) {
         res.status(200).json({ success: true, data: null, message: "Transportation does not match routeStatus filter." });
@@ -17409,7 +17174,7 @@ export const getOrCreateTodayTransportation = catchAsyncError(
       }
     }
 
-    // Return ONLY transportation-model fields, as requested.
+
     const data = (t as any).toObject ? (t as any).toObject({ virtuals: true }) : t;
 
     res.status(200).json({
@@ -17423,44 +17188,16 @@ export const getOrCreateTodayTransportation = catchAsyncError(
 
 
 
-/**
- * GET /transportation/history
- *
- * Returns paginated transportation history for a specific transporter.
- * Includes all past transportations (completed, cancelled, etc.) with
- * comprehensive filtering options.
- *
- * Query params:
- *   - transporterId     (required) - ID of the transporter
- *   - page             (optional, default: 1) - Page number
- *   - limit            (optional, default: 20, max: 100) - Items per page
- *   - sortBy           (optional, default: createdAt) - Field to sort by
- *   - sortOrder        (optional, default: desc) - 'asc' or 'desc'
- *   
- *   - status           (optional) - Filter by transportation status
- *   - routeStatus      (optional) - Filter by underlying route status
- *   - dateFrom         (optional) - Start date for date range filter
- *   - dateTo           (optional) - End date for date range filter
- *   - minWeight        (optional) - Minimum total weight (kg)
- *   - maxWeight        (optional) - Maximum total weight (kg)
- *   - minVolume        (optional) - Minimum total volume
- *   - maxVolume        (optional) - Maximum total volume
- *   - minPackageCount  (optional) - Minimum package count
- *   - maxPackageCount  (optional) - Maximum package count
- *   - minManifestCount (optional) - Minimum manifest count
- *   - maxManifestCount (optional) - Maximum manifest count
- *   - sourceBranchId   (optional) - Filter by source branch
- *   - destinationBranchId (optional) - Filter by destination branch
- */
+
 export const getTransportationsHistory = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    // ── Validation ────────────────────────────────────────────────────────────
+
     const isValidId = (val: string) => mongoose.Types.ObjectId.isValid(val);
     const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
 
     let transporterId: mongoose.Types.ObjectId;
 
-    // Check if transporter is authenticated or provided in query
+
     if (req.user?.role === 'transporter') {
       const transporter = await TransporterModel.findOne({ userId: req.user._id });
       if (!transporter) {
@@ -17473,18 +17210,18 @@ export const getTransportationsHistory = catchAsyncError(
       return next(new ErrorHandler("Valid transporterId is required.", 400));
     }
 
-    // Validate transporter exists
+
     const transporter = await TransporterModel.findById(transporterId).lean();
     if (!transporter) {
       return next(new ErrorHandler("Transporter not found.", 404));
     }
 
-    // Pagination parameters
+
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
     const skip = (page - 1) * limit;
 
-    // Sorting
+
     const validSortFields = [
       'createdAt', 'updatedAt', 'departedAt', 'actualDeliveryTime',
       'estimatedDeliveryTime', 'totalWeight', 'packageCount', 'manifestCount',
@@ -17496,7 +17233,7 @@ export const getTransportationsHistory = catchAsyncError(
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort: Record<string, 1 | -1> = { [sortBy]: sortOrder };
 
-    // Status validation
+
     const VALID_TRANSPORTATION_STATUSES: TransportationStatus[] = [
       "pending", "in_transit", "arrived", "completed", "cancelled",
     ];
@@ -17504,7 +17241,6 @@ export const getTransportationsHistory = catchAsyncError(
       "planned", "assigned", "active", "paused", "completed", "cancelled",
     ];
 
-    // Date range validation
     const dateFrom = req.query.dateFrom ? new Date(req.query.dateFrom as string) : null;
     const dateTo = req.query.dateTo ? new Date(req.query.dateTo as string) : null;
 
@@ -17518,7 +17254,7 @@ export const getTransportationsHistory = catchAsyncError(
       return next(new ErrorHandler("dateFrom cannot be after dateTo.", 400));
     }
 
-    // Numeric filters
+
     const parseNum = (key: string): number | null => {
       if (req.query[key] === undefined) return null;
       const n = parseFloat(req.query[key] as string);
@@ -17544,7 +17280,7 @@ export const getTransportationsHistory = catchAsyncError(
     const minManifestCount = parseNum("minManifestCount");
     const maxManifestCount = parseNum("maxManifestCount");
 
-    // Branch filters
+
     const sourceBranchId = req.query.sourceBranchId as string;
     const destinationBranchId = req.query.destinationBranchId as string;
 
@@ -17555,10 +17291,10 @@ export const getTransportationsHistory = catchAsyncError(
       return next(new ErrorHandler("Invalid destinationBranchId format.", 400));
     }
 
-    // ── Build Query ───────────────────────────────────────────────────────────
+
     const query: any = { assignedTransporterId: transporterId };
 
-    // Status filter
+
     if (req.query.status) {
       const status = req.query.status as string;
       if (!VALID_TRANSPORTATION_STATUSES.includes(status as TransportationStatus)) {
@@ -17567,7 +17303,7 @@ export const getTransportationsHistory = catchAsyncError(
       query.status = status;
     }
 
-    // Date range filter
+
     if (dateFrom || dateTo) {
       query.$or = [
         { createdAt: {} as any },
@@ -17583,7 +17319,7 @@ export const getTransportationsHistory = catchAsyncError(
       }
     }
 
-    // Numeric filters
+
     if (minWeight !== null) query.totalWeight = { $gte: minWeight };
     if (maxWeight !== null) {
       query.totalWeight = { ...(query.totalWeight || {}), $lte: maxWeight };
@@ -17601,7 +17337,7 @@ export const getTransportationsHistory = catchAsyncError(
       query.manifestCount = { ...(query.manifestCount || {}), $lte: maxManifestCount };
     }
 
-    // Branch filters
+
     let routeStatusFilter: string | null = null;
     if (req.query.routeStatus) {
       const rs = req.query.routeStatus as string;
@@ -17611,7 +17347,7 @@ export const getTransportationsHistory = catchAsyncError(
       routeStatusFilter = rs;
     }
 
-    // ── Execute Queries ───────────────────────────────────────────────────────
+
     const needsAdvancedFiltering = routeStatusFilter || sourceBranchId || destinationBranchId;
 
     let transportations: any[] = [];
@@ -17663,7 +17399,7 @@ export const getTransportationsHistory = catchAsyncError(
       transportations = transportationsResult;
     }
 
-    // ── Calculate Summary Statistics ──────────────────────────────────────────
+
     const allTransporterTransportations = await TransportationModel.find({
       assignedTransporterId: transporterId,
     }).lean();
@@ -17799,77 +17535,13 @@ export const getTransportationsHistory = catchAsyncError(
 
 
 
-/**
- * GET /manifest/history
- *
- * Returns paginated manifest history for a specific transporter.
- * Includes all manifests that have been assigned to or transported by the transporter,
- * with comprehensive filtering options similar to getManifestsPaginated but scoped
- * to historical/completed manifests.
- *
- * Query params:
- *   - transporterId     (required) - ID of the transporter
- *   - page              (optional, default: 1) - Page number
- *   - limit             (optional, default: 20, max: 100) - Items per page
- *   - sortBy            (optional, default: createdAt) - Field to sort by
- *   - order             (optional, default: desc) - 'asc' or 'desc'
- *   
- *   - status            (optional) - Filter by manifest status
- *   - statuses          (optional) - Comma-separated list of statuses
- *   - priority          (optional) - Filter by priority
- *   - manifestCode      (optional) - Search by manifest code (partial match)
- *   - search            (optional) - Search across manifestCode, internalReference, notes
- *   - containsPackageId (optional) - Filter manifests containing specific package
- *   - hasDiscrepancy    (optional) - 'true' or 'false'
- *   
- *   - minWeight         (optional) - Minimum total declared weight (kg)
- *   - maxWeight         (optional) - Maximum total declared weight (kg)
- *   - minPackageCount   (optional) - Minimum package count
- *   - maxPackageCount   (optional) - Maximum package count
- *   
- *   - createdFrom       (optional) - Start date for manifest creation
- *   - createdTo         (optional) - End date for manifest creation
- *   - departedFrom      (optional) - Start date for departure
- *   - departedTo        (optional) - End date for departure
- *   - arrivedFrom       (optional) - Start date for arrival
- *   - arrivedTo         (optional) - End date for arrival
- *   
- *   - originBranchId    (optional) - Filter by origin branch
- *   - destinationBranchId (optional) - Filter by destination branch
- *   - branchId          (optional) - Filter by either origin or destination branch
- *
- * Response shape:
- *   {
- *     success: true,
- *     data: {
- *       manifests: IManifest[],
- *       pagination: {
- *         page: number,
- *         limit: number,
- *         total: number,
- *         pages: number,
- *         hasMore: boolean
- *       },
- *       summary: {
- *         totalManifests: number,
- *         completedCount: number,
- *         cancelledCount: number,
- *         discrepancyCount: number,
- *         totalPackagesTransported: number,
- *         totalWeightTransported: number,
- *         averageWeightPerManifest: number,
- *         averageDurationMinutes: number | null,
- *         manifestsByStatus: Record<ManifestStatus, number>,
- *         manifestsByPriority: Record<ManifestPriority, number>
- *       },
- *       filters: { ... }
- *     }
- *   }
- */
+
+
+
 export const getManifestsHistory = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      // ── Validation ────────────────────────────────────────────────────────────
+
       const isValidId = (val: string) => mongoose.Types.ObjectId.isValid(val);
       const toObjectId = (val: string) => new mongoose.Types.ObjectId(val);
 
@@ -17884,12 +17556,12 @@ export const getManifestsHistory = catchAsyncError(
         return next(new ErrorHandler("Transporter not found.", 404));
       }
 
-      // Pagination
+
       const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
       const skip = (page - 1) * limit;
 
-      // Sorting
+
       const sortBy = (req.query.sortBy as string) || "createdAt";
       const order = req.query.order === "asc" ? 1 : -1;
       const sortMap: Record<string, any> = {
@@ -17905,12 +17577,12 @@ export const getManifestsHistory = catchAsyncError(
       };
       const sort = sortMap[sortBy] || { createdAt: -1 };
 
-      // ── Build Filter ──────────────────────────────────────────────────────────
+
       const filter: Record<string, any> = {
         "transportLeg.transporterId": transporterId,
       };
 
-      // Status filters
+
       const VALID_STATUSES: ManifestStatus[] = [
         "open", "sealed", "loaded", "in_transit",
         "arrived", "unloading", "closed", "discrepancy", "cancelled",
@@ -17933,7 +17605,7 @@ export const getManifestsHistory = catchAsyncError(
         filter.status = { $in: statuses };
       }
 
-      // Priority filter
+
       const VALID_PRIORITIES: ManifestPriority[] = ["standard", "express", "urgent"];
       if (req.query.priority) {
         const p = req.query.priority as string;
@@ -17943,7 +17615,7 @@ export const getManifestsHistory = catchAsyncError(
         filter.priority = p;
       }
 
-      // Text search
+
       if (req.query.manifestCode) {
         filter.manifestCode = new RegExp(req.query.manifestCode as string, "i");
       }
@@ -17958,7 +17630,7 @@ export const getManifestsHistory = catchAsyncError(
         ];
       }
 
-      // Package filter
+
       if (req.query.containsPackageId) {
         if (!isValidId(req.query.containsPackageId as string)) {
           return next(new ErrorHandler("Invalid containsPackageId.", 400));
@@ -17966,7 +17638,7 @@ export const getManifestsHistory = catchAsyncError(
         filter["packages.packageId"] = toObjectId(req.query.containsPackageId as string);
       }
 
-      // Discrepancy filter
+
       if (req.query.hasDiscrepancy !== undefined) {
         if (req.query.hasDiscrepancy === "true") {
           filter.$or = [
@@ -17980,7 +17652,7 @@ export const getManifestsHistory = catchAsyncError(
         }
       }
 
-      // Numeric filters
+ 
       if (req.query.minWeight || req.query.maxWeight) {
         const min = req.query.minWeight ? parseFloat(req.query.minWeight as string) : null;
         const max = req.query.maxWeight ? parseFloat(req.query.maxWeight as string) : null;
@@ -18005,7 +17677,7 @@ export const getManifestsHistory = catchAsyncError(
         };
       }
 
-      // Date range filters
+
       if (req.query.createdFrom || req.query.createdTo) {
         filter.createdAt = {
           ...(req.query.createdFrom && { $gte: new Date(req.query.createdFrom as string) }),
@@ -18027,7 +17699,7 @@ export const getManifestsHistory = catchAsyncError(
         };
       }
 
-      // Branch filters
+ 
       if (req.query.originBranchId) {
         if (!isValidId(req.query.originBranchId as string)) {
           return next(new ErrorHandler("Invalid originBranchId.", 400));
@@ -18054,7 +17726,7 @@ export const getManifestsHistory = catchAsyncError(
         ];
       }
 
-      // ── Execute Queries ───────────────────────────────────────────────────────
+
       const [total, manifests] = await Promise.all([
         ManifestModel.countDocuments(filter),
         ManifestModel.find(filter)
@@ -18069,8 +17741,7 @@ export const getManifestsHistory = catchAsyncError(
           .lean({ virtuals: true }),
       ]);
 
-      // ── Calculate Summary Statistics ─────────────────────────────────────────
-      // Get all manifests for this transporter (for summary)
+
       const allTransporterManifests = await ManifestModel.find({
         "transportLeg.transporterId": transporterId,
       }).lean();
@@ -18085,7 +17756,7 @@ export const getManifestsHistory = catchAsyncError(
         m => m.status === "discrepancy" || m.discrepancy
       );
 
-      // Calculate average duration (for manifests with both departedAt and arrivedAt)
+
       const manifestsWithDuration = allTransporterManifests.filter(
         m => m.departedAt && m.arrivedAt
       );
@@ -18097,7 +17768,7 @@ export const getManifestsHistory = catchAsyncError(
         ? Math.round(totalDurationMinutes / manifestsWithDuration.length)
         : null;
 
-      // Status breakdown
+
       const statusBreakdown: Record<ManifestStatus, number> = {} as any;
       VALID_STATUSES.forEach(status => {
         statusBreakdown[status] = 0;
@@ -18106,7 +17777,7 @@ export const getManifestsHistory = catchAsyncError(
         statusBreakdown[m.status]++;
       });
 
-      // Priority breakdown
+      
       const priorityBreakdown: Record<ManifestPriority, number> = {
         standard: 0,
         express: 0,
@@ -18134,7 +17805,7 @@ export const getManifestsHistory = catchAsyncError(
         manifestsByPriority: priorityBreakdown,
       };
 
-      // ── Format Response ──────────────────────────────────────────────────────
+
       const formattedManifests = manifests.map((m: any) => ({
         id: m._id,
         manifestCode: m.manifestCode,
