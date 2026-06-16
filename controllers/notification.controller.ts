@@ -5,7 +5,7 @@ import notificationModel from "../models/notification.model";
 
 
 
-// Get all notifications for a user (Optimized)
+
 export const getAllNotifications = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -54,7 +54,7 @@ export const getAllNotifications = catchAsyncError(
   }
 );
 
-// Mark a single notification as read
+
 export const markNotificationAsRead = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -101,47 +101,7 @@ export const markNotificationAsRead = catchAsyncError(
   }
 );
 
-// // Mark all notifications as read
-// export const markAllNotificationsAsRead = catchAsyncError(
-//   async (req: Request, res: Response, next: NextFunction) => {
-//     try {
-//       const userId = req.user?._id;
 
-//       if (!userId) {
-//         return next(new ErrorHandler("User not found", 404));
-//       }
-// 
-//       const [updateResult, updatedCount] = await Promise.all([
-//         notificationModel.updateMany(
-//           {
-//             user_id: userId,
-//             is_read: false, 
-//           },
-//           {
-//             is_read: true,
-//           }
-//         ),
-//         notificationModel.countDocuments({
-//           user_id: userId,
-//           is_read: false,
-//         }),
-//       ]);
-
-//       res.status(200).json({
-//         success: true,
-//         message: "All notifications marked as read",
-//         updated_count: updateResult.modifiedCount || updatedCount,
-//       });
-//     } catch (error: any) {
-//       return next(new ErrorHandler(error.message, 400));
-//     }
-//   }
-// );
-
-
-// interface IMarkMultipleNotificationsAsRead {
-//   notification_ids: string[];
-// }
 
 export const markMultipleNotificationsAsRead = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {

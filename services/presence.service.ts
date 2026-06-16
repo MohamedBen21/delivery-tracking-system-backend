@@ -2,9 +2,7 @@ import { getRedisClient } from "../databases/Redis.database";
 import { Logger } from "../utils/Logger.util";
 import { dbConf } from "../conifg/db.conf";
 
-// ─── Key Helpers ─────────────────────────────────────────────────────────────
-// hash  → presence:<role>:<userId>   { lastActiveAt: ISO string }
-// set   → presence:<role>:online     { userId, userId, … }
+
 
 const hashKey  = (role: string, userId: string) => `presence:${role}:${userId}`;
 const setKey   = (role: string)                 => `presence:${role}:online`;
@@ -53,8 +51,7 @@ export class PresenceService {
   }
 
 
-  // Refreshes the hash TTL and updates the timestamp; no-op if the key is gone
-  // (expired while the app was running) – caller should re-call setOnline then.
+
   static async updateHeartbeat(userId: string, role: string): Promise<boolean> {
     try {
       const redis    = getRedisClient();
@@ -64,7 +61,7 @@ export class PresenceService {
 
       pipeline.hset(hashKey(role, userId), "lastActiveAt", now);
       pipeline.expire(hashKey(role, userId), ttl);
-      // Keep the online set consistent in case it lost the member somehow
+
       pipeline.sadd(setKey(role), userId);
 
       await pipeline.exec();
@@ -88,8 +85,7 @@ export class PresenceService {
   }
 
 
-  // Returns every userId currently in the online set for the given role.
-  // Note: SMEMBERS is O(n) on the set size – fine for thousands of users.
+
   static async getAllOnline(role: string): Promise<string[]> {
     try {
       const redis  = getRedisClient();

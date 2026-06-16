@@ -42,7 +42,7 @@ export async function calculateSmartETA(input: ETAInput): Promise<ETAResult> {
   const { osrm, origin, destination } = input;
   const now = input.departureTime ?? new Date();
 
-  // Use midpoint for weather — more representative than either endpoint alone
+
   const midpoint: Coordinates = {
     lat: (origin.lat + destination.lat) / 2,
     lon: (origin.lon + destination.lon) / 2,

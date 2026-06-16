@@ -7,7 +7,7 @@ import TransporterModel from '../models/transporter.model';
 export const startStalePresenceCleanup = () => {
 
   cron.schedule('*/30 * * * *', async () => {
-    console.log('🧹 [SAFETY NET] Running stale presence cleanup...');
+    console.log('[SAFETY NET] Running stale presence cleanup...');
     
     try {
 
@@ -32,7 +32,7 @@ export const startStalePresenceCleanup = () => {
           { userId: { $in: staleDeliverers.map(d => d.userId) }, isOnline: true },
           { isOnline: false, lastActiveAt: new Date() }
         );
-        console.log(`✅ [SAFETY NET] Cleaned up ${staleDeliverers.length} stale deliverers`);
+        console.log(`[SAFETY NET] Cleaned up ${staleDeliverers.length} stale deliverers`);
       }
       
 
@@ -41,17 +41,17 @@ export const startStalePresenceCleanup = () => {
           { userId: { $in: staleTransporters.map(t => t.userId) }, isOnline: true },
           { isOnline: false, lastActiveAt: new Date() }
         );
-        console.log(`✅ [SAFETY NET] Cleaned up ${staleTransporters.length} stale transporters`);
+        console.log(`[SAFETY NET] Cleaned up ${staleTransporters.length} stale transporters`);
       }
       
       if (staleDeliverers.length === 0 && staleTransporters.length === 0) {
-        console.log('✨ [SAFETY NET] No stale online users found');
+        console.log('[SAFETY NET] No stale online users found');
       }
       
     } catch (error) {
-      console.error('❌ [SAFETY NET] Stale presence cleanup failed:', error);
+      console.error('[SAFETY NET] Stale presence cleanup failed:', error);
     }
   });
   
-  console.log('🟢 [SAFETY NET] Stale presence cleanup scheduled (every 30 minutes)');
+  console.log('[SAFETY NET] Stale presence cleanup scheduled (every 30 minutes)');
 };

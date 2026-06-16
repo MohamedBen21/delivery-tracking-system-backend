@@ -1,50 +1,15 @@
-// ─────────────────────────────────────────────────────────────────────────────
-//  utils/findNearestHub.util.ts
-//
-//  Fix (Problem 3 — root cause):
-//  ──────────────────────────────
-//  For home delivery packages, destinationBranchId must be set to the
-//  nearest REGIONAL MAIN HUB, not the nearest any-branch.
-//
-//  Why hubs only?
-//    A home delivery package travels: origin branch → hub → deliverer.
-//    The hub is the correct routing anchor because:
-//      1. Hub-to-hub transporters carry manifests between hubs.
-//      2. Hub-to-branch transporters distribute from hub to local branches.
-//      3. Deliverers operate out of the hub that serves the customer's area.
-//
-//    If destinationBranchId is set to a local branch instead of a hub,
-//    the package gets routed to that small branch but there is no deliverer
-//    there to do last-mile delivery — it sits stranded.
-//
-//  The existing findNearestBranch() finds any branch, which can return a
-//  local branch that has no deliverers. This function queries only branches
-//  with branchType = "regional_main_hub".
-//
-//  Usage (in createPackage):
-//    Replace: findNearestBranch([lon, lat], companyId)
-//    With:    findNearestHub([lon, lat], companyId)
-// ─────────────────────────────────────────────────────────────────────────────
-
 import mongoose from "mongoose";
 import BranchModel from "../models/branch.model";
+import path from "path";
+import fs   from "fs";
 
-/**
- * Returns the _id of the nearest active regional_main_hub to the given
- * [longitude, latitude] coordinates, scoped to a company.
- *
- * Uses MongoDB's $near geospatial query on the branch location index.
- * Falls back to a haversine-sorted in-memory search if $near is unavailable.
- *
- * Returns null if no active hub is found (caller should surface a 400 error).
- */
+
 export async function findNearestHub(
   coordinates: [number, number],   // [longitude, latitude]
   companyId:   mongoose.Types.ObjectId,
 ): Promise<mongoose.Types.ObjectId | null> {
 
-  // Primary: use $nearSphere for efficient indexed geospatial lookup.
-  // Limit to 1 result — we only need the closest hub.
+  
   try {
     const hub = await BranchModel.findOne({
       companyId,
@@ -54,9 +19,9 @@ export async function findNearestHub(
         $nearSphere: {
           $geometry: {
             type:        "Point",
-            coordinates,             // [lng, lat]
+            coordinates,             
           },
-          $maxDistance: 2_000_000,   // 2 000 km — covers all of Algeria
+          $maxDistance: 2_000_000,  
         },
       },
     })
@@ -99,10 +64,7 @@ export async function findNearestHub(
   return closestId;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Internal haversine — avoids importing from route-planning utils which
-//  may not be available in all environments.
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 function haversineKm(a: [number, number], b: [number, number]): number {
   const R      = 6371;
@@ -141,8 +103,6 @@ function toRad(deg: number): number {
 //  overridden via the COMMUNES_JSON_PATH env variable.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import path from "path";
-import fs   from "fs";
 
 export interface ICommune {
   id:        string;
@@ -150,11 +110,11 @@ export interface ICommune {
   name:      string;
   wilaya_id: string;
   ar_name:   string;
-  longitude: string;  // string in the JSON — parse before use
+  longitude: string;  
   latitude:  string;
 }
 
-/** Module-level cache so the JSON is only read once per process. */
+
 let _communesCache: ICommune[] | null = null;
 
 export function loadCommunes(): ICommune[] {
@@ -167,40 +127,27 @@ export function loadCommunes(): ICommune[] {
   return _communesCache;
 }
 
-/**
- * Strips common French/Arabic diacritics and lowercases a string so that
- * "Béjaïa", "bejaia", and "BEJAIA" all normalise to the same key.
- */
+
 function normaliseCommune(s: string): string {
   return s
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // strip combining diacritics
+    .replace(/[\u0300-\u036f]/g, "") 
     .trim();
 }
 
-/**
- * Finds a commune record that matches the given string.
- * Matching order (first hit wins):
- *   1. Exact normalised name match
- *   2. Post-code exact match (useful for numeric input)
- *   3. Partial normalised name match (commune name starts with input)
- *
- * Returns null if nothing matches.
- */
+
 export function lookupCommune(input: string): ICommune | null {
   const communes  = loadCommunes();
   const normInput = normaliseCommune(input);
 
-  // 1 — exact name
+
   let found = communes.find(c => normaliseCommune(c.name) === normInput);
   if (found) return found;
 
-  // 2 — post code
   found = communes.find(c => c.post_code === input.trim());
   if (found) return found;
 
-  // 3 — starts-with (for partial typing like "Beja" → "Béjaïa")
   found = communes.find(c => normaliseCommune(c.name).startsWith(normInput));
   if (found) return found;
 
@@ -209,34 +156,24 @@ export function lookupCommune(input: string): ICommune | null {
 
 export interface ICommuneBranchResult {
   branchId:    mongoose.Types.ObjectId;
-  branchDoc:   any;                        // lean branch document for response building
+  branchDoc:   any;                        
   communeId:   string;
   communeName: string;
-  coordinates: [number, number] | null;    // [lon, lat] from communes.json, null if missing
+  coordinates: [number, number] | null;    
 }
 
-/**
- * Given a commune name (as typed by the freelancer) and a companyId, finds
- * the active branch that has declared it handles that commune.
- *
- * Returns null when:
- *   - The commune name doesn't match any record in communes.json, OR
- *   - No active branch for this company lists that commune id in servesCommunes.
- *
- * The caller decides what to do on null (surface a clear error or fall back
- * to requiring a manual destinationBranchId).
- */
+
 export async function findBranchByCommune(
   communeInput: string,
   companyId:    mongoose.Types.ObjectId,
   session?:     mongoose.ClientSession,
 ): Promise<ICommuneBranchResult | null> {
 
-  // Step 1: resolve commune record
+
   const commune = lookupCommune(communeInput);
   if (!commune) return null;
 
-  // Step 2: find branch that serves this commune
+
   const branch = await BranchModel.findOne({
     companyId,
     status:         "active",
@@ -247,7 +184,7 @@ export async function findBranchByCommune(
 
   if (!branch) return null;
 
-  // Parse coordinates — longitude/latitude are strings in the JSON
+
   const lon = parseFloat(commune.longitude);
   const lat = parseFloat(commune.latitude);
   const coordinates: [number, number] | null =

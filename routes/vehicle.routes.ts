@@ -13,7 +13,7 @@ import {
 
 const vehicleRouter = express.Router();
 
-// ── Vehicle CRUD ──
+
 
 vehicleRouter.post(
   "/company/:companyId/vehicle",
@@ -50,7 +50,7 @@ vehicleRouter.get(
   getCompanyVehicles
 );
 
-// ── Vehicle assignment ──
+
 
 vehicleRouter.patch(
   "/company/:companyId/vehicle/:vehicleId/assign",

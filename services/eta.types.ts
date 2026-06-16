@@ -4,8 +4,8 @@ export interface Coordinates {
 }
 
 export interface OSRMResponse {
-  baseDuration: number;  // seconds
-  distance: number;      // meters
+  baseDuration: number; 
+  distance: number;     
   avgSpeedKmh: number;
 }
 

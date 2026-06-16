@@ -35,7 +35,7 @@ freelancerRouter.post("/packages", isAuthenticated, authorizeRoles("freelancer",
 
 freelancerRouter.get("/branches/search", isFreelancer, searchBranchesForPickup);
 
-// // For autocomplete as they type
+
 // freelancerRouter.get(
 //   "/communes/search",
 //   isAuthenticated,
@@ -43,7 +43,7 @@ freelancerRouter.get("/branches/search", isFreelancer, searchBranchesForPickup);
 //   searchServedCommunes
 // );
 
-// // For validation before submission
+
 // freelancerRouter.get(
 //   "/communes/check",
 //   isAuthenticated,

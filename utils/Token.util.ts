@@ -128,7 +128,7 @@ export const sendToken = async (
     const accessToken = user.SignAccessToken();
     const refreshToken = user.SignRefreshToken();
 
-    // Store user in Redis with 7 days expiry (matching refresh token)
+
     const redis = getRedisClient();
     const userId = user._id?.toString();
 
@@ -136,10 +136,10 @@ export const sendToken = async (
       throw new Error("User ID not found");
     }
 
-    // Store user data in Redis with proper expiration
+
     await redis.setex(
       `user:${userId}`,
-      refreshTokenExpire * 24 * 60 * 60, // Convert days to seconds
+      refreshTokenExpire * 24 * 60 * 60, 
       JSON.stringify({
         _id: user._id,
         email: user.email,
@@ -152,7 +152,7 @@ export const sendToken = async (
       }),
     );
 
-    // Store refresh token in Redis for invalidation if needed
+
     await redis.setex(
       `refresh:${userId}`,
       refreshTokenExpire * 24 * 60 * 60,
@@ -160,7 +160,7 @@ export const sendToken = async (
     );
 
 
-    //switch case for role 
+
 
     let associated ;
     switch (user.role){
@@ -204,15 +204,13 @@ export const sendToken = async (
        associated = null;
 
     }
-    // Set cookies
+
     res.cookie("accessToken", accessToken, accessTokenOptions);
     res.cookie("refreshToken", refreshToken, refreshTokenOptions);
 
-    // // Also set for compatibility with both naming conventions
-    // res.cookie("access_token", accessToken, accessTokenOptions);
-    // res.cookie("refresh_token", refreshToken, refreshTokenOptions);
 
-    // Remove sensitive data
+
+
     const userWithoutPassword = { ...user.toObject(), passwordHash: undefined };
 
     res.status(statusCode).json({
@@ -230,16 +228,16 @@ export const sendToken = async (
   }
 };
 
-// Function to clear tokens on logout
+
 export const clearTokens = async (userId: string, res: Response) => {
   try {
     const redis = getRedisClient();
 
-    // Remove user from Redis
+
     await redis.del(`user:${userId}`);
     await redis.del(`refresh:${userId}`);
 
-    // Clear cookies
+
     const cookieOptions = {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",

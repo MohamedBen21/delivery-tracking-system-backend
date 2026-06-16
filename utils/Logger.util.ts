@@ -1,5 +1,3 @@
-// utils/Logger.util.ts
-
 export class Logger {
   private static getTimestamp(): string {
     return new Date().toISOString();

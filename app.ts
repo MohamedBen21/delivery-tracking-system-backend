@@ -46,5 +46,3 @@ app.use("/api/loader", loaderRouter);
 app.use("/api/tariffs", tarrifRouter);
 app.use("/api/notifications", notificationRouter);
 
-// REMOVED the app.all("*") and app.use(ErrorMiddleware) from here
-// They will be moved to server.ts

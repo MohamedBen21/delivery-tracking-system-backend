@@ -1,4 +1,3 @@
-// services/cashReturn.service.ts
 import crypto from "crypto";
 import mongoose from "mongoose";
 import DelivererModel from "../models/deliverer.model";
@@ -7,10 +6,7 @@ import { CashReturnSessionModel } from "../models/cashReturnSession.model";
 
 const CASH_RETURN_QR_EXPIRY_MINUTES = 30;
 
-/**
- * Called by branch supervisor/manager.
- * Generates a QR code for the deliverer to scan and confirm cash return.
- */
+
 export async function generateCashReturnQr(
   delivererId: string,
   branchId: string,
@@ -82,10 +78,7 @@ export async function generateCashReturnQr(
   };
 }
 
-/**
- * Called when the deliverer scans the QR code.
- * Validates the session, processes the cash return, and resets daily counters.
- */
+
 export async function verifyAndProcessCashReturn(
   code: string,
   delivererUserId: string,
@@ -109,7 +102,7 @@ export async function verifyAndProcessCashReturn(
     throw new Error("QR code has expired. Please request a new one from your branch supervisor.");
   }
 
-  // Verify the deliverer scanning is the correct one
+ 
   const deliverer = await DelivererModel.findById(session.delivererId);
   if (!deliverer) {
     throw new Error("Deliverer not found.");
@@ -119,10 +112,10 @@ export async function verifyAndProcessCashReturn(
     throw new Error("This QR code is for a different deliverer.");
   }
 
-  // Process the cash return (resets daily counters)
+
   const summary = await deliverer.returnCashToBranch();
 
-  // Mark session as verified
+
   session.verified = true;
   session.verifiedAt = new Date();
   await session.save();
@@ -130,9 +123,7 @@ export async function verifyAndProcessCashReturn(
   return summary;
 }
 
-/**
- * Get pending cash return info for the QR display page.
- */
+
 export async function getCashReturnInfo(code: string) {
   const session = await CashReturnSessionModel.findOne({ code })
     .populate("delivererId", "userId")

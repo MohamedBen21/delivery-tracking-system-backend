@@ -106,7 +106,7 @@ export async function checkFailedLogins(
     const key = failedLoginKey(email, req.ip || "unknown");
     const raw = await redis.get(key);
 
-    if (!raw) return next(); // No failed attempts yet
+    if (!raw) return next(); 
 
     const count = parseInt(raw, 10);
     if (count >= FAILED_LOGIN_MAX) {
@@ -119,12 +119,12 @@ export async function checkFailedLogins(
       return;
     }
 
-    // Attach remaining attempts so the controller can include it in the error message
+
     req.remainingLoginAttempts = Math.max(0, FAILED_LOGIN_MAX - count);
     next();
   } catch (error) {
     Logger.error("checkFailedLogins error:", error);
-    next(); // Fail open
+    next();
   }
 }
 

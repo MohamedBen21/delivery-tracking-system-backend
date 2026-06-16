@@ -29,7 +29,7 @@ transporterRouter.post(
   generateStopQr,
 );
 
-// Transporter: Scan QR to complete stop
+
 transporterRouter.post(
   "/scan",
   isAuthenticated,
@@ -37,7 +37,7 @@ transporterRouter.post(
   scanStopQr,
 );
 
-// Public: View QR page (for rendering QR image)
+
 transporterRouter.get("/:code", getStopQrInfo);
 
 export default transporterRouter;

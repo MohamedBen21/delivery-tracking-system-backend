@@ -5,7 +5,7 @@ import ErrorHandler from "./utils/ErrorHandler";
 
 dotenv.config();
 
-// Load the service account JSON - use direct path since env var is not set
+
 const serviceAccountPath = path.resolve("./" + process.env.FIREBASE_SERVICE_ACCOUNT_PATH);
 
 console.log("Firebase service account path:", serviceAccountPath);
@@ -26,7 +26,7 @@ export const sendNotificationToDevice = async (
   title: string,
   body: string,
   data?: INotificationData,
-  imageUrl?: string // Add image support
+  imageUrl?: string
 ) => {
   try {
     console.log("Sending notification to FCM...");
@@ -40,34 +40,34 @@ export const sendNotificationToDevice = async (
       notification: {
         title,
         body,
-        ...(imageUrl && { imageUrl }), // Add image if provided
+        ...(imageUrl && { imageUrl }),
       },
       data: data ? {
         ...data,
-        // Ensure all data values are strings (FCM requirement)
+
         type: data.type,
         ...(data.route && { route: data.route }),
         ...(data.id && { id: data.id }),
       } : {},
-      // Android specific configuration
+
       android: {
         notification: {
           ...(imageUrl && { imageUrl }),
           clickAction: data?.route ? "FLUTTER_NOTIFICATION_CLICK" : undefined,
-          channelId: "default", // Make sure this matches your app's channel
+          channelId: "default", 
         },
         priority: "high" as const,
       },
-      // iOS specific configuration
+
       apns: imageUrl ? {
         payload: {
           aps: {
-            "mutable-content": 1, // Required for images on iOS
+            "mutable-content": 1,
             sound: "default",
           },
         },
         fcmOptions: {
-          imageUrl: imageUrl, // Correct property for iOS images
+          imageUrl: imageUrl,
         },
       } : {
         payload: {
@@ -94,7 +94,7 @@ export const sendNotificationToMultipleDevices = async (
   title: string,
   body: string,
   data?: INotificationData,
-  imageUrl?: string // Add image support
+  imageUrl?: string
 ) => {
   try {
     const tokens = (fcmTokens || []).filter(Boolean);

@@ -1,20 +1,16 @@
 import { TrafficResult, TrafficLevel } from './eta.types';
 
 interface TrafficProfile {
-  hour: number;       // center of peak
-  intensity: number;  // max factor at center (0–1 scale)
-  width: number;      // std-deviation in hours (controls smoothness)
+  hour: number;       
+  intensity: number;  
+  width: number;     
 }
 
-/**
- * Algiers-tuned weekday congestion peaks.
- * - Evening peak extended + widened (rush tail effect)
- * - Morning slightly stronger
- */
+
 const WEEKDAY_PEAKS: TrafficProfile[] = [
-  { hour: 8,    intensity: 0.25, width: 1.2 },  // morning rush
-  { hour: 13,   intensity: 0.10, width: 1.0 },  // midday shoulder
-  { hour: 18.5, intensity: 0.30, width: 2.2 },  // evening rush (extended)
+  { hour: 8,    intensity: 0.25, width: 1.2 },  
+  { hour: 13,   intensity: 0.10, width: 1.0 },  
+  { hour: 18.5, intensity: 0.30, width: 2.2 }, 
 ];
 
 const WEEKEND_PEAKS: TrafficProfile[] = [
@@ -22,8 +18,8 @@ const WEEKEND_PEAKS: TrafficProfile[] = [
   { hour: 17, intensity: 0.14, width: 1.8 },
 ];
 
-const NIGHT_DISCOUNT = -0.04;       // 23:00–05:00 slight speed bonus
-const LATE_EVENING_FLOOR = 0.06;    // city never fully clears (20:00–23:00)
+const NIGHT_DISCOUNT = -0.04;       
+const LATE_EVENING_FLOOR = 0.06;    
 
 function hourDistance(h: number, center: number): number {
   const diff = ((h - center + 24) % 24);
@@ -67,11 +63,11 @@ export function estimateTrafficFactor(
     0
   );
 
-  // Night discount (23:00–05:00)
+
   const isNight = hour >= 23 || hour < 5;
   if (isNight) factor += NIGHT_DISCOUNT;
 
-  // Late evening floor (Algiers stays active)
+
   const isLateEvening = hour >= 20 && hour < 23;
   if (!weekend && isLateEvening) {
     factor = Math.max(factor, LATE_EVENING_FLOOR);

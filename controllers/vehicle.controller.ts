@@ -424,7 +424,7 @@ export const createVehicle = catchAsyncError(
       ).catch(error => {
 
         console.error('Admin notification for new vehicle failed:', error);
-        // Will implement proper logging later
+
       });
 
       const [populatedVehicle] = await VehicleModel.aggregate([
@@ -469,7 +469,7 @@ export const createVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -480,7 +480,7 @@ export const createVehicle = catchAsyncError(
 
 
 
-//  UPDATE VEHICLE  (info only — no assignment)
+
 
 
 export const updateVehicle = catchAsyncError(
@@ -849,7 +849,7 @@ export const updateVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -858,9 +858,7 @@ export const updateVehicle = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────
-//  TOGGLE VEHICLE STATUS (available ↔ out_of_service)
-// ─────────────────────────────────────────────
+
 
 export const toggleVehicleStatus = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -935,7 +933,7 @@ export const toggleVehicleStatus = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -943,9 +941,7 @@ export const toggleVehicleStatus = catchAsyncError(
   }
 );
 
-// ─────────────────────────────────────────────
-//  GET VEHICLE BY ID
-// ─────────────────────────────────────────────
+
 
 export const getVehicle = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1029,7 +1025,7 @@ export const getVehicle = catchAsyncError(
 
 
 
-//  GET COMPANY VEHICLES
+
 
 export const getCompanyVehicles = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1328,9 +1324,7 @@ export const getCompanyVehicles = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────
-//  ASSIGN VEHICLE TO USER
-// ─────────────────────────────────────────────
+
 
 export const assignVehicle = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1403,7 +1397,7 @@ export const assignVehicle = catchAsyncError(
         throw new ErrorHandler(`Vehicle cannot be assigned. Current status: ${vehicle.status}`, 400);
       }
 
-      // ── Update vehicle document ──────────────────────────────────────────────
+
       vehicle.assignedUserId = assignedUserId;
       vehicle.assignedUserRole = assignedUserRole || assignedUser.role;
       vehicle.currentBranchId = branchId;
@@ -1411,7 +1405,7 @@ export const assignVehicle = catchAsyncError(
 
       await vehicle.save({ session });
 
-      // ── Update assigned user's document (deliverer or transporter) ───────────
+
       const userRole = assignedUserRole || assignedUser.role;
 
       if (userRole === "deliverer") {
@@ -1421,7 +1415,7 @@ export const assignVehicle = catchAsyncError(
           throw new ErrorHandler("Deliverer profile not found for this user", 404);
         }
 
-        // // Check if deliverer is already assigned to another vehicle
+
         // if (deliverer.currentVehicleId) {
         //   throw new ErrorHandler(`Deliverer already has an assigned vehicle: ${deliverer.currentVehicleId}`, 400);
         // }
@@ -1429,7 +1423,7 @@ export const assignVehicle = catchAsyncError(
         deliverer.currentVehicleId = vehicle._id;
         deliverer.lastActiveAt = new Date();
 
-        // If deliverer is available, set to on_route (or keep as is)
+
         // if (deliverer.availabilityStatus === "available") {
         //   deliverer.availabilityStatus = "on_route";
         // }
@@ -1443,7 +1437,7 @@ export const assignVehicle = catchAsyncError(
           throw new ErrorHandler("Transporter profile not found for this user", 404);
         }
 
-        // // Check if transporter is already assigned to another vehicle
+
         // if (transporter.currentVehicleId) {
         //   throw new ErrorHandler(`Transporter already has an assigned vehicle: ${transporter.currentVehicleId}`, 400);
         // }
@@ -1451,7 +1445,7 @@ export const assignVehicle = catchAsyncError(
         transporter.currentVehicleId = vehicle._id;
         transporter.lastActiveAt = new Date();
 
-        // If transporter is available, set to on_route
+
         // if (transporter.availabilityStatus === "available") {
         //   transporter.availabilityStatus = "on_route";
         // }
@@ -1465,14 +1459,14 @@ export const assignVehicle = catchAsyncError(
       await session.commitTransaction();
       transactionCommitted = true;
 
-      // ── Fetch updated vehicle with populated fields ─────────────────────────
+
       const updatedVehicle = await VehicleModel.findById(vehicleId)
         .populate("companyId", "name businessType status")
         .populate("currentBranchId", "name code address status")
         .populate("assignedUserId", "firstName lastName email phone role")
         .lean();
 
-      // ── Fetch updated assigned user profile (for response) ──────────────────
+
       let assignedProfile = null;
       if (userRole === "deliverer") {
         assignedProfile = await DelivererModel.findOne({ userId: assignedUserId })
@@ -1505,7 +1499,7 @@ export const assignVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -1513,9 +1507,7 @@ export const assignVehicle = catchAsyncError(
   }
 );
 
-// ─────────────────────────────────────────────
-//  RELEASE VEHICLE (unassign)
-// ─────────────────────────────────────────────
+
 
 export const releaseVehicle = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1556,7 +1548,7 @@ export const releaseVehicle = catchAsyncError(
         throw new ErrorHandler("Vehicle is not currently in use", 400);
       }
 
-      // ── Clear vehicle from assigned user's profile ───────────────────────
+
       if (vehicle.assignedUserId) {
         const assignedRole = vehicle.assignedUserRole;
 
@@ -1564,15 +1556,15 @@ export const releaseVehicle = catchAsyncError(
           const updated = await DelivererModel.findOneAndUpdate(
             { userId: vehicle.assignedUserId },
             {
-              $unset: { currentVehicleId: "" },      // ← Use $unset to remove the field entirely
+              $unset: { currentVehicleId: "" },      
               $set: {
                 availabilityStatus: "available",
                 lastActiveAt: new Date(),
               },
             },
-            { new: true, session },                   // ← Add new: true
+            { new: true, session },                   
           );
-          // console.log("Deliverer after release:", updated?.currentVehicleId);
+
         } else if (assignedRole === "transporter") {
           const updated = await TransporterModel.findOneAndUpdate(
             { userId: vehicle.assignedUserId },
@@ -1589,7 +1581,7 @@ export const releaseVehicle = catchAsyncError(
         }
       }
 
-      // ── Release the vehicle ─────────────────────────────────────────────
+
       vehicle.assignedUserId = undefined;
       vehicle.assignedUserRole = undefined;
       vehicle.status = "available";
@@ -1616,7 +1608,7 @@ export const releaseVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();

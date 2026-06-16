@@ -20,33 +20,33 @@ export function connectRedis(): Redis {
         port: dbKeys.redis.port,
         password: dbKeys.redis.password || undefined,
         retryStrategy(times) {
-          const delay = Math.min(times * 50, 2000); // max 2s
+          const delay = Math.min(times * 50, 2000); 
           return delay;
         },
       });
     }
 
-    // Event listeners
+
     client.on("connect", () => {
-      Logger.info("🔌 Redis connected via ioredis");
+      Logger.info("Redis connected via ioredis");
     });
 
     client.on("ready", () => {
-      Logger.info("✅ Redis ready");
+      Logger.info("Redis ready");
     });
 
     client.on("error", (err) => {
-      Logger.error("❌ Redis error:", err.message);
+      Logger.error("Redis error:", err.message);
     });
 
     client.on("close", () => {
-      Logger.warn("⚠️ Redis connection closed");
+      Logger.warn("Redis connection closed");
     });
 
     redisClient = client;
     return client;
   } catch (error) {
-    Logger.error("💥 Failed to create Redis client:", error);
+    Logger.error("Failed to create Redis client:", error);
     throw new Error("Redis initialization failed");
   }
 }

@@ -25,11 +25,11 @@ export const isAuthenticated = catchAsyncError(
         return next(new ErrorHandler("Access token is invalid", 401));
       }
 
-      // Get Redis client
+
       const redis = getRedisClient();
 
-      // Get user from Redis
-      const user = await redis.get(`user:${decoded.id}`); // Adding prefix for better organization
+
+      const user = await redis.get(`user:${decoded.id}`); 
 
       if (!user) {
         return next(
@@ -51,7 +51,7 @@ export const isAuthenticated = catchAsyncError(
   },
 );
 
-// Alternative version without Redis (using JWT only)
+
 export const isAuthenticatedJWTOnly = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const access_token = req.cookies.accessToken || req.cookies.access_token;
@@ -72,7 +72,7 @@ export const isAuthenticatedJWTOnly = catchAsyncError(
         return next(new ErrorHandler("Access token is invalid", 401));
       }
 
-      // Create user object from JWT claims
+
       req.user = {
         _id: decoded.id,
         email: decoded.email,

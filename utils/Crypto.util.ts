@@ -3,11 +3,11 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// Read CRYPTO_KEY and strip any whitespace/newlines pasted in Netlify UI
+
 const raw = (process.env.CRYPTO_KEY || "").replace(/\s+/g, "");
 if (!raw) throw new Error("CRYPTO_KEY is missing");
 
-// Accept 64-char hex OR base64 (~44 chars). Choose decoder based on pattern.
+
 const cryptoKey = Buffer.from(
   raw,
   /^[0-9a-f]{64}$/i.test(raw) ? "hex" : "base64",
@@ -16,7 +16,7 @@ if (cryptoKey.length !== 32) {
   throw new Error("CRYPTO_KEY must decode to 32 bytes for AES-256.");
 }
 
-// Encrypt (AES-256-CBC needs a 16-byte IV per message)
+
 export const encrypt = (data: unknown): { iv: string; data: string } => {
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv("aes-256-cbc", cryptoKey, iv);

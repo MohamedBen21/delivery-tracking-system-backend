@@ -13,17 +13,17 @@ import communesRaw from "../data/algeria_communes.json";
 
 const NOMINATIM_BASE = process.env.NOMINATIM_URL ?? "http://nominatim:8080";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+
 
 export interface AlgeriaCommune {
   id: number;
-  commune_name_ascii: string;   // French / Latin name  e.g. "El Khroub"
-  commune_name: string;         // Arabic name           e.g. "الخروب"
+  commune_name_ascii: string;   
+  commune_name: string;         
   daira_name_ascii: string;
   daira_name: string;
-  wilaya_code: string;          // "01", "25", …
-  wilaya_name_ascii: string;    // "Constantine"
-  wilaya_name: string;          // "قسنطينة"
+  wilaya_code: string;          
+  wilaya_name_ascii: string;   
+  wilaya_name: string;          
 }
 
 export interface PlaceSuggestion {
@@ -35,7 +35,7 @@ export interface PlaceSuggestion {
   wilayaCode: string;
   wilayaNameAscii: string;
   wilayaName: string;
-  label: string;   // ready-to-display label for the dropdown
+  label: string;   
 }
 
 export interface ResolvedPlace {
@@ -44,7 +44,7 @@ export interface ResolvedPlace {
   wilayaNameAscii: string;
   wilayaName: string;
   wilayaCode: string;
-  displayName: string;   // from Nominatim
+  displayName: string;   
   lat: number;
   lon: number;
 }
@@ -65,17 +65,17 @@ export interface ReverseGeocodeResult {
   lon: number;
 }
 
-// ─── Build the in-memory search index once at startup ────────────────────────
+
 
 const communes = communesRaw as AlgeriaCommune[];
 
-// Pre-normalise everything so search is fast on every request
+
 interface IndexedCommune {
   original: AlgeriaCommune;
-  normAscii: string;    // normalised French name
-  normAr: string;       // normalised Arabic name
-  normWilaya: string;   // normalised wilaya name
-  normDaira: string;    // normalised daira name
+  normAscii: string;    
+  normAr: string;      
+  normWilaya: string;   
+  normDaira: string;    
 }
 
 function normaliseInput(raw: string): string {
@@ -83,13 +83,13 @@ function normaliseInput(raw: string): string {
     .trim()
     .replace(/\s+/g, " ")
     .toLowerCase()
-    // Arabic letter variants
+
     .replace(/[أإآٱ]/g, "ا")
     .replace(/ة/g, "ه")
     .replace(/ى/g, "ي")
-    // Arabic diacritics
+
     .replace(/[\u064B-\u065F]/g, "")
-    // French accents
+
     .replace(/[éèêë]/g, "e")
     .replace(/[àâä]/g, "a")
     .replace(/[îï]/g, "i")
@@ -98,7 +98,7 @@ function normaliseInput(raw: string): string {
     .replace(/ç/g, "c");
 }
 
-// Export so controller can use it too
+
 export { normaliseInput };
 
 const INDEX: IndexedCommune[] = communes.map((c) => ({
@@ -109,7 +109,7 @@ const INDEX: IndexedCommune[] = communes.map((c) => ({
   normDaira:  normaliseInput(c.daira_name_ascii),
 }));
 
-// ─── Local prefix search ──────────────────────────────────────────────────────
+
 
 /**
  * Searches all 1541 communes instantly from memory.
@@ -275,7 +275,7 @@ export async function geocodeConfirmedPlace(
   }
 }
 
-// ─── Reverse geocode ──────────────────────────────────────────────────────────
+
 
 export async function reverseGeocode(
   lat: number,
@@ -318,7 +318,7 @@ export async function reverseGeocode(
   }
 }
 
-// ─── Internal fetch helper ────────────────────────────────────────────────────
+
 
 async function nominatimFetch(url: string): Promise<any> {
   const res = await fetch(url, {

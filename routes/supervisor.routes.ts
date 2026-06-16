@@ -145,60 +145,40 @@ supervisorRouter.get("/packages/search", isAuthenticated, searchPackages);
 supervisorRouter.get("/packages", isAuthenticated, authorizeRoles("deliverer", "transporter", "cashier", 'supervisor'), getPackagesPaginatedFromRoute);
 
 
-// Role-based middleware for supervisor, manager, or admin
+
 const supMgrAdmin = [isAuthenticated, authorizeRoles("supervisor", "manager", "admin")] as const;
 
 
 
-/**
- * @route   POST /api/supervisor/branches/:branchId/cashiers
- * @desc    Create a new cashier for a specific branch
- * @access  Supervisor, Manager, Admin
- */
+
 supervisorRouter.post(
   "/branches/:branchId/cashiers",
   ...supMgrAdmin,
   createCashier
 );
 
-/**
- * @route   GET /api/supervisor/branches/:branchId/cashiers
- * @desc    Get all cashiers of a specific branch (with optional filters)
- * @access  Supervisor, Manager, Admin
- */
+
 supervisorRouter.get(
   "/branches/:branchId/cashiers",
   ...supMgrAdmin,
   getMyCashiers
 );
 
-/**
- * @route   GET /api/supervisor/branches/:branchId/cashiers/:cashierId
- * @desc    Get a specific cashier by ID
- * @access  Supervisor, Manager, Admin
- */
+
 supervisorRouter.get(
   "/branches/:branchId/cashiers/:cashierId",
   ...supMgrAdmin,
   getCashier
 );
 
-/**
- * @route   PATCH /api/supervisor/branches/:branchId/cashiers/:cashierId
- * @desc    Update a cashier's information
- * @access  Supervisor, Manager, Admin
- */
+
 supervisorRouter.patch(
   "/branches/:branchId/cashiers/:cashierId",
   ...supMgrAdmin,
   updateCashier
 );
 
-/**
- * @route   PATCH /api/supervisor/branches/:branchId/cashiers/:cashierId/toggle-block
- * @desc    Toggle cashier status (activate/suspend)
- * @access  Supervisor, Manager, Admin
- */
+
 supervisorRouter.patch(
   "/branches/:branchId/cashiers/:cashierId/toggle-block",
   ...supMgrAdmin,
@@ -208,77 +188,49 @@ supervisorRouter.patch(
 
 
 
-/**
- * @route   POST /api/supervisor/branches/:branchId/loaders
- * @desc    Create a new loader for a specific branch
- * @access  Supervisor, Manager, Admin
- */
+
 supervisorRouter.post(
   "/branches/:branchId/loaders",
   ...supMgrAdmin,
   createLoader
 );
 
-/**
- * @route   GET /api/supervisor/branches/:branchId/loaders
- * @desc    Get all loaders of a specific branch (with optional filters)
- * @access  Supervisor, Manager, Admin
- */
+
 supervisorRouter.get(
   "/branches/:branchId/loaders",
   ...supMgrAdmin,
   getMyLoaders
 );
 
-/**
- * @route   GET /api/supervisor/branches/:branchId/loaders/:loaderId
- * @desc    Get a specific loader by ID
- * @access  Supervisor, Manager, Admin
- */
+
 supervisorRouter.get(
   "/branches/:branchId/loaders/:loaderId",
   ...supMgrAdmin,
   getLoader
 );
 
-/**
- * @route   PATCH /api/supervisor/branches/:branchId/loaders/:loaderId
- * @desc    Update a loader's information (including temporary branch assignment)
- * @access  Supervisor, Manager, Admin
- */
+
 supervisorRouter.patch(
   "/branches/:branchId/loaders/:loaderId",
   ...supMgrAdmin,
   updateLoader
 );
 
-/**
- * @route   PATCH /api/supervisor/branches/:branchId/loaders/:loaderId/toggle-block
- * @desc    Toggle loader status (activate/suspend)
- * @access  Supervisor, Manager, Admin
- */
+
 supervisorRouter.patch(
   "/branches/:branchId/loaders/:loaderId/toggle-block",
   ...supMgrAdmin,
   toggleBlockLoader
 );
 
-/**
- * @route   DELETE /api/supervisor/branches/:branchId/cashiers/:cashierId
- * @desc    Delete a cashier and their user account
- * @access  Supervisor, Manager, Admin
- */
+
 supervisorRouter.delete(
   "/branches/:branchId/cashiers/:cashierId",
   ...supMgrAdmin,
   deleteCashier
 );
 
-/**
- * @route   DELETE /api/supervisor/branches/:branchId/loaders/:loaderId
- * @desc    Delete a loader and their user account
- * @access  Supervisor, Manager, Admin
- */
+
 supervisorRouter.delete(
   "/branches/:branchId/loaders/:loaderId",
   ...supMgrAdmin,

@@ -462,7 +462,7 @@ export const createCompany = catchAsyncError(
       return next(error);
 
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -669,7 +669,7 @@ export const updateCompany = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -680,7 +680,7 @@ export const updateCompany = catchAsyncError(
 
 type CompanyStatus = "active" | "suspended";
 
-//toggle between suspend and activate company
+
 export const toggleBlockCompany = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const session = await mongoose.startSession();
@@ -768,7 +768,7 @@ export const toggleBlockCompany = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -776,7 +776,7 @@ export const toggleBlockCompany = catchAsyncError(
   },
 );
 
-//get company
+
 export const getCompany = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -855,7 +855,7 @@ export const getMyCompany = catchAsyncError(
       return next(new ErrorHandler("You are not a manager of any company", 404));
     }
 
-    // ✅ Fetch branches separately (IMPORTANT FIX)
+
     const BranchModel = mongoose.model("Branch");
 
     const branches = await BranchModel.find({
@@ -897,7 +897,7 @@ export const getMyCompany = catchAsyncError(
       data: {
         company: {
           ...company,
-          branches, // ✅ FIXED HERE
+          branches, 
           branchCount: branches.length,
         },
 
@@ -1006,13 +1006,11 @@ export const getAllRoutes = catchAsyncError(
   }
 );
 
-// ─────────────────────────────────────────────
-//  BRANCH FUNCTIONS
-// ─────────────────────────────────────────────
+
 
 interface IBranchLocation {
   type: "Point";
-  coordinates: [number, number]; // [longitude, latitude]
+  coordinates: [number, number];
 }
 
 interface IBranchAddressBody {
@@ -1331,7 +1329,7 @@ export const createBranch = catchAsyncError(
         try {
           await session.abortTransaction();
         } catch (abortErr: any) {
-          // Ignore "transaction not in progress" errors — nothing to roll back
+          
           if (!abortErr.message?.includes('no transaction')) {
             console.error('Failed to abort transaction:', abortErr);
           }
@@ -1342,7 +1340,7 @@ export const createBranch = catchAsyncError(
   },
 );
 
-//  UPDATE BRANCH
+
 
 export const updateBranch = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1535,7 +1533,7 @@ export const updateBranch = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();;
@@ -1544,7 +1542,7 @@ export const updateBranch = catchAsyncError(
   },
 );
 
-//  TOGGLE BLOCK / ACTIVATE BRANCH
+
 
 export const toggleBlockBranch = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1653,7 +1651,7 @@ export const toggleBlockBranch = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -1834,14 +1832,14 @@ export const switchBranchHub = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
   },
 );
-//  GET BRANCH BY ID
+
 
 export const getBranch = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1890,7 +1888,7 @@ export const getBranch = catchAsyncError(
     });
   },
 );
-//  GET ALL BRANCHES OF MANAGER'S COMPANY
+
 
 export const getMyBranches = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1958,7 +1956,7 @@ export const getMyBranches = catchAsyncError(
 );
 
 
-//supervisor functions and interfaces
+
 
 interface IWorkScheduleDayBody {
   start: string;
@@ -1992,7 +1990,7 @@ interface IUpdateSupervisor {
   };
 }
 
-//  CREATE SUPERVISOR
+
 export const createSupervisor = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -2054,9 +2052,7 @@ export const createSupervisor = catchAsyncError(
 
       const normalizedPhone = userModel.normalizePhone(phone);
 
-      // ─── FIX: Run session queries SEQUENTIALLY, not concurrently ──────────
-      // MongoDB sessions cannot handle concurrent operations — Promise.all on
-      // the same session causes "transaction number does not match" errors.
+
       const manager = await ManagerModel.findOne({ userId: managerId, companyId }).session(session);
       const branch = await BranchModel.findOne({ _id: branchId, companyId }).session(session);
       const existingUser = await userModel.findOne({
@@ -2152,14 +2148,16 @@ export const createSupervisor = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
   },
 );
-//  UPDATE SUPERVISOR
+
+
+
 export const updateSupervisor = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -2312,7 +2310,7 @@ export const updateSupervisor = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2321,7 +2319,7 @@ export const updateSupervisor = catchAsyncError(
   },
 );
 
-//  TOGGLE BLOCK / ACTIVATE SUPERVISOR
+
 export const toggleBlockSupervisor = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
 
@@ -2433,7 +2431,7 @@ export const toggleBlockSupervisor = catchAsyncError(
 
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -2442,7 +2440,7 @@ export const toggleBlockSupervisor = catchAsyncError(
   },
 );
 
-//  GET BRANCH SUPERVISOR
+
 export const getBranchSupervisor = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const managerId = req.user?._id;
@@ -2497,7 +2495,7 @@ export const getBranchSupervisor = catchAsyncError(
   },
 );
 
-//  GET ALL ACTIVE SUPERVISORS OF MY COMPANY
+
 export const getMySupervisors = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const managerId = req.user?._id;
@@ -2653,10 +2651,7 @@ export function buildUserFieldUpdates(
 
 
 
-//  UPDATE ME — MANAGER
-//  PATCH /manager/me
-//  Updatable: firstName, lastName
-//  Everything on ManagerModel is blocked — only an admin can change that.
+
 
 
 export const updateMeManager = catchAsyncError(
@@ -2667,7 +2662,7 @@ export const updateMeManager = catchAsyncError(
       return next(new ErrorHandler("Unauthorized, you are not authenticated.", 401));
     }
 
-    // Block any attempt to touch manager-level fields
+
     const blocked = ["accessLevel", "permissions", "branchAccess", "companyId", "isActive"];
     const blockedFound = blocked.filter((f) => f in req.body);
     if (blockedFound.length) {
@@ -2707,10 +2702,7 @@ export const updateMeManager = catchAsyncError(
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET WILAYA LIST (reference data for frontend dropdowns)
-//  GET /manager/wilayas
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const getWilayaList = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -2732,11 +2724,7 @@ export const getWilayaList = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET ALL TARIFFS FOR MY COMPANY
-//  GET /manager/tariffs
-//  Query params: ?search=Alger  (filter by wilaya name)
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const getMyTariffs = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -2771,11 +2759,11 @@ export const getMyTariffs = catchAsyncError(
       let tariffs = (tariff.entries ?? []).map(e => ({
         from: { id: e.wilayaA, name: wilayaName(e.wilayaA) },
         to: { id: e.wilayaB, name: wilayaName(e.wilayaB) },
-        domicile: e.domicile,   // adjust field names to match your schema
-        stopdesk: e.stopdesk,   // adjust field names to match your schema
+        domicile: e.domicile,   
+        stopdesk: e.stopdesk,   
       }));
 
-      // Search
+
       if (req.query.search) {
         const search = (req.query.search as string).toLowerCase();
         tariffs = tariffs.filter(
@@ -2785,10 +2773,10 @@ export const getMyTariffs = catchAsyncError(
         );
       }
 
-      // Sort
+
       tariffs.sort((a, b) => a.from.id - b.from.id || a.to.id - b.to.id);
 
-      // Pagination
+
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
       const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string) || 100));
       const total = tariffs.length;
@@ -2812,10 +2800,7 @@ export const getMyTariffs = catchAsyncError(
   },
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  DASHBOARD OVERVIEW
-//  GET /manager/dashboard/overview?range=7d|30d|12m
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const getManagerDashboardOverview = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -2827,10 +2812,6 @@ export const getManagerDashboardOverview = catchAsyncError(
       }
 
 
-      // ─────────────────────────────────────────────────────────────────────────────
-      //  DASHBOARD ANALYTICS
-      //  GET /manager/dashboard/analytics?range=7d|30d|90d|12m
-      // ─────────────────────────────────────────────────────────────────────────────
 
       const getManagerAnalytics = catchAsyncError(
         async (req: Request, res: Response, next: NextFunction) => {
@@ -4048,10 +4029,9 @@ export const getManagerDashboardOverview = catchAsyncError(
   },
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  DASHBOARD ANALYTICS
-//  GET /manager/dashboard/analytics?range=7d|30d|90d|12m
-// ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 export const getManagerAnalytics = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -4111,35 +4091,35 @@ export const getManagerAnalytics = catchAsyncError(
       const monthlyStart = startOfMonth(now);
 
       const results = await Promise.all([
-        // 0
+
         PaymentModel.aggregate([
           { $match: { companyId: companyObjectId, collectedAt: { $gte: timeline.currentStart, $lt: timeline.currentEnd }, status: { $in: ["collected", "settled"] } } },
           { $group: { _id: null, total: { $sum: "$amount" } } },
         ]),
-        // 1
+
         PaymentModel.aggregate([
           { $match: { companyId: companyObjectId, collectedAt: { $gte: timeline.previousStart, $lt: timeline.previousEnd }, status: { $in: ["collected", "settled"] } } },
           { $group: { _id: null, total: { $sum: "$amount" } } },
         ]),
-        // 2
+
         PackageModel.countDocuments({ companyId: companyObjectId, createdAt: { $gte: timeline.currentStart, $lt: timeline.currentEnd } }),
-        // 3
+
         PackageModel.countDocuments({ companyId: companyObjectId, createdAt: { $gte: timeline.previousStart, $lt: timeline.previousEnd } }),
-        // 4
+
         PackageModel.countDocuments({ companyId: companyObjectId, deliveredAt: { $gte: timeline.currentStart, $lt: timeline.currentEnd } }),
-        // 5
+  
         PackageModel.countDocuments({ companyId: companyObjectId, deliveredAt: { $gte: timeline.previousStart, $lt: timeline.previousEnd } }),
-        // 6
+
         PaymentModel.aggregate([
           { $match: { companyId: companyObjectId, collectedAt: { $gte: timeline.currentStart, $lt: timeline.currentEnd }, status: { $in: ["collected", "settled"] } } },
           { $group: { _id: { $dateToString: { format: timeline.bucketFormat, date: "$collectedAt" } }, revenue: { $sum: "$amount" } } },
         ]),
-        // 7
+   
         PaymentModel.aggregate([
           { $match: { companyId: companyObjectId, collectedAt: { $gte: timeline.previousStart, $lt: timeline.previousEnd }, status: { $in: ["collected", "settled"] } } },
           { $group: { _id: { $dateToString: { format: timeline.bucketFormat, date: "$collectedAt" } }, revenue: { $sum: "$amount" } } },
         ]),
-        // 8
+
         PackageModel.aggregate([
           { $match: { companyId: companyObjectId, createdAt: { $gte: timeline.currentStart, $lt: timeline.currentEnd } } },
           {
@@ -4155,7 +4135,7 @@ export const getManagerAnalytics = catchAsyncError(
             },
           },
         ]),
-        // 9
+
         PackageModel.aggregate([
           { $match: { companyId: companyObjectId, createdAt: { $gte: timeline.previousStart, $lt: timeline.previousEnd } } },
           {
@@ -4171,7 +4151,7 @@ export const getManagerAnalytics = catchAsyncError(
             },
           },
         ]),
-        // 10 - operational series (grouped by bucket)
+
         PackageModel.aggregate([
           { $match: { companyId: companyObjectId, createdAt: { $gte: timeline.currentStart, $lt: timeline.currentEnd } } },
           {
@@ -4187,7 +4167,7 @@ export const getManagerAnalytics = catchAsyncError(
             },
           },
         ]),
-        // 11 - lifecycle summary (grouped as _id: null)
+
         PackageModel.aggregate([
           { $match: { companyId: companyObjectId, createdAt: { $gte: timeline.currentStart, $lt: timeline.currentEnd } } },
           {
@@ -4203,7 +4183,7 @@ export const getManagerAnalytics = catchAsyncError(
             },
           },
         ]),
-        // 12 - financial series
+
         PaymentModel.aggregate([
           { $match: { companyId: companyObjectId, collectedAt: { $gte: timeline.currentStart, $lt: timeline.currentEnd }, status: { $in: ["collected", "settled"] } } },
           {
@@ -4215,17 +4195,17 @@ export const getManagerAnalytics = catchAsyncError(
             },
           },
         ]),
-        // 13 - weekday heatmap
+
         PackageModel.aggregate([
           { $match: { companyId: companyObjectId, createdAt: { $gte: timeline.currentStart, $lt: timeline.currentEnd } } },
           { $group: { _id: { weekday: { $dayOfWeek: "$createdAt" } }, count: { $sum: 1 } } },
         ]),
-        // 14 - hour heatmap
+
         PackageModel.aggregate([
           { $match: { companyId: companyObjectId, createdAt: { $gte: timeline.currentStart, $lt: timeline.currentEnd } } },
           { $group: { _id: { hour: { $hour: "$createdAt" } }, count: { $sum: 1 } } },
         ]),
-        // 15 - delivery timing
+
         PackageModel.aggregate([
           {
             $match: {
@@ -4264,25 +4244,25 @@ export const getManagerAnalytics = catchAsyncError(
       }
 
       const [
-        currentRevenueTotalRows,    // 0
-        previousRevenueTotalRows,   // 1
-        currentPackageTotal,        // 2
-        previousPackageTotal,       // 3
-        currentDeliveredTotal,      // 4
-        previousDeliveredTotal,     // 5
-        currentRevenueSeriesRows,   // 6
-        previousRevenueSeriesRows,  // 7
-        currentPackageSeriesRows,   // 8
-        previousPackageSeriesRows,  // 9
-        currentOperationalRows,     // 10
-        currentLifecycleSummaryRows, // 11
-        currentFinancialRows,       // 12
-        currentWeekdayRows,         // 13
-        currentHourRows,            // 14
-        currentDeliveredTimingRows, // 15
-        dailyRevenueRows,           // 16
-        weeklyRevenueRows,          // 17
-        monthlyRevenueRows,         // 18
+        currentRevenueTotalRows,    
+        previousRevenueTotalRows,   
+        currentPackageTotal,        
+        previousPackageTotal,       
+        currentDeliveredTotal,      
+        previousDeliveredTotal,     
+        currentRevenueSeriesRows,   
+        previousRevenueSeriesRows,  
+        currentPackageSeriesRows,  
+        previousPackageSeriesRows,  
+        currentOperationalRows,     
+        currentLifecycleSummaryRows, 
+        currentFinancialRows,       
+        currentWeekdayRows,         
+        currentHourRows,            
+        currentDeliveredTimingRows, 
+        dailyRevenueRows,           
+        weeklyRevenueRows,          
+        monthlyRevenueRows,         
       ] = results as any;
 
       const revenueMap = new Map<string, number>(
@@ -4532,10 +4512,7 @@ export const getManagerAnalytics = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  GET SINGLE TARIFF PRICE
-//  GET /manager/tariffs/price?from=16&to=31
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const getTariffPrice = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -4598,11 +4575,7 @@ export const getTariffPrice = catchAsyncError(
   },
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  UPSERT TARIFF (set price for one wilaya pair)
-//  POST /manager/tariffs
-//  Body: { wilayaFrom: 16, wilayaTo: 31, stopdesk: 500, domicile: 700 }
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 interface IUpsertTariffBody {
   wilayaFrom: number;
@@ -4706,7 +4679,7 @@ export const upsertTariff = catchAsyncError(
       return next(error);
     } finally {
 
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -4715,14 +4688,7 @@ export const upsertTariff = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  BULK UPSERT TARIFFS (replace all entries at once)
-//  POST /manager/tariffs/bulk
-//  Body: { tariffs: [{ wilayaA, wilayaB, stopdesk, domicile }, ...] }
-//
-//  NOTE: This REPLACES the entire entries array. Use for seeding or full import.
-//  For incremental updates, call POST /manager/tariffs for each pair.
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 interface IBulkTariffEntry {
   wilayaA: number;
@@ -4828,7 +4794,7 @@ export const bulkUpsertTariffs = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -4837,13 +4803,7 @@ export const bulkUpsertTariffs = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  DELETE TARIFF ENTRY (remove one wilaya pair)
-//  DELETE /manager/tariffs?wilayaA=16&wilayaB=31
-//
-//  Removes a single entry from the company's entries array.
-//  The company's tariff document continues to exist with remaining entries.
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const deleteTariff = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -4915,7 +4875,7 @@ export const deleteTariff = catchAsyncError(
     } catch (error: any) {
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
+      if (!transactionCommitted && session.inTransaction()) { 
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -4924,23 +4884,8 @@ export const deleteTariff = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
+
 //  ASSIGN HUB LINE  (hub_to_hub transporter)
-//
-//  POST /manager/transporters/:id/assign-hub-line
-//  Body: { hubAId: string, hubBId: string }
-//
-//  Sets this transporter's type to hub_to_hub and records the two main-hub
-//  branch IDs they shuttle between.  The transporter may travel in either
-//  direction; the optimizer decides direction based on available manifests.
-//
-//  Validations:
-//    • Both IDs are valid ObjectIds
-//    • Both IDs are distinct
-//    • Both branches belong to this company
-//    • Both branches are regional_main_hub
-//    • Transporter belongs to this company
-// ─────────────────────────────────────────────────────────────────────────────
 
 export const assignTransporterHubLine = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -4953,7 +4898,7 @@ export const assignTransporterHubLine = catchAsyncError(
       const { id: transporterDocId } = req.params;
       const { hubAId, hubBId } = req.body as { hubAId?: string; hubBId?: string };
 
-      // ── Basic input validation ──────────────────────────────────────────────
+
       if (!transporterDocId || !mongoose.Types.ObjectId.isValid(transporterDocId.toString())) {
         return next(new ErrorHandler("Invalid transporter ID.", 400));
       }
@@ -4967,7 +4912,7 @@ export const assignTransporterHubLine = catchAsyncError(
         return next(new ErrorHandler("hubAId and hubBId must be different branches.", 400));
       }
 
-      // ── Manager resolution ─────────────────────────────────────────────────
+
       const manager = await ManagerModel.findOne({
         userId: managerId,
         isActive: true,
@@ -4991,7 +4936,6 @@ export const assignTransporterHubLine = catchAsyncError(
         );
       }
 
-      // ── Validate both hubs exist, belong to this company, are regional_main_hub
       const hubAOid = new mongoose.Types.ObjectId(hubAId);
       const hubBOid = new mongoose.Types.ObjectId(hubBId);
 
@@ -5017,7 +4961,6 @@ export const assignTransporterHubLine = catchAsyncError(
         );
       }
 
-      // ── Apply assignment using the model's instance method ─────────────────
       await transporter.assignHubLine(hubAOid, hubBOid);
 
       return res.status(200).json({
@@ -5033,7 +4976,7 @@ export const assignTransporterHubLine = catchAsyncError(
         },
       });
     } catch (error: any) {
-      // The model's assignHubLine throws a plain Error for bad input
+
       if (error.name === "ValidationError") {
         return next(
           new ErrorHandler(
@@ -5048,24 +4991,9 @@ export const assignTransporterHubLine = catchAsyncError(
 );
 
 
-// ─────────────────────────────────────────────────────────────────────────────
+
 //  ASSIGN BRANCHES  (hub_to_branch transporter)
-//
-//  POST /manager/transporters/:id/assign-branches
-//  Body: { branchIds: string[] }
-//
-//  Sets this transporter's type to hub_to_branch and records the set of local
-//  branches they deliver manifests to from their home hub.
-//  The optimizer will only build stops at branches in this list.
-//
-//  Validations:
-//    • branchIds is a non-empty array
-//    • All IDs are valid ObjectIds
-//    • All IDs are distinct
-//    • All branches belong to this company
-//    • All branches are local_branch (not hubs)
-//    • Transporter belongs to this company
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 export const assignTransporterBranches = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -5078,7 +5006,6 @@ export const assignTransporterBranches = catchAsyncError(
       const { id: transporterDocId } = req.params;
       const { branchIds } = req.body as { branchIds?: string[] };
 
-      // ── Basic input validation ──────────────────────────────────────────────
       if (!transporterDocId || !mongoose.Types.ObjectId.isValid(transporterDocId.toString())) {
         return next(new ErrorHandler("Invalid transporter ID.", 400));
       }
@@ -5101,7 +5028,7 @@ export const assignTransporterBranches = catchAsyncError(
         return next(new ErrorHandler("branchIds must not contain duplicates.", 400));
       }
 
-      // ── Manager resolution ─────────────────────────────────────────────────
+
       const manager = await ManagerModel.findOne({
         userId: managerId,
         isActive: true,
@@ -5113,7 +5040,7 @@ export const assignTransporterBranches = catchAsyncError(
 
       const companyId = manager.companyId;
 
-      // ── Validate transporter belongs to this company ────────────────────────
+
       const transporter = await TransporterModel.findOne({
         _id: transporterDocId,
         companyId,
@@ -5125,7 +5052,7 @@ export const assignTransporterBranches = catchAsyncError(
         );
       }
 
-      // ── Validate all branches exist, belong to this company, are local_branch ─
+
       const branchOids = uniqueBranchIds.map((id) => new mongoose.Types.ObjectId(id));
 
       const foundBranches = await BranchModel.find({
@@ -5159,7 +5086,7 @@ export const assignTransporterBranches = catchAsyncError(
         );
       }
 
-      // ── Apply assignment using the model's instance method ─────────────────
+
       await transporter.assignBranches(branchOids);
 
       return res.status(200).json({
@@ -5189,8 +5116,7 @@ export const assignTransporterBranches = catchAsyncError(
   },
 );
 
-// GET MANAGER PERFORMANCE DASHBOARD
-// GET /manager/dashboard/performance?range=7d|30d|90d|12m
+
 export const getManagerPerformance = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -5229,7 +5155,7 @@ export const getManagerPerformance = catchAsyncError(
 
       const companyObjectId = new mongoose.Types.ObjectId(companyId);
 
-      // 1. Fetch branches and deliverers for company
+
       const [branches, deliverers] = await Promise.all([
         BranchModel.find({ companyId: companyObjectId }).select("_id name code status").lean(),
         DelivererModel.find({ companyId: companyObjectId })
@@ -5240,7 +5166,7 @@ export const getManagerPerformance = catchAsyncError(
       const branchIds = branches.map(b => b._id);
       const delivererIds = deliverers.map(d => d._id);
 
-      // 2. Aggregate Packages by Branch
+
       const branchStats = await PackageModel.aggregate([
         {
           $match: {
@@ -5259,7 +5185,7 @@ export const getManagerPerformance = catchAsyncError(
         }
       ]);
 
-      // 3. Aggregate Revenue by Branch
+
       const branchRevenues = await PaymentModel.aggregate([
         {
           $match: {
@@ -5276,11 +5202,11 @@ export const getManagerPerformance = catchAsyncError(
         }
       ]);
 
-      // Map branch statistics
+
       const statsMap = new Map(branchStats.map(s => [s._id?.toString(), s]));
       const revMap = new Map(branchRevenues.map(r => [r._id?.toString(), r.revenue]));
 
-      // 4. Build Branch Performance and Ranking arrays
+
       const branchRankingsRaw = branches.map(branch => {
         const idStr = branch._id.toString();
         const stats = statsMap.get(idStr) ?? { total: 0, delivered: 0, returned: 0, cancelled: 0 };
@@ -5301,14 +5227,14 @@ export const getManagerPerformance = catchAsyncError(
         };
       });
 
-      // Sort and assign ranks
+
       branchRankingsRaw.sort((a, b) => b.successRate - a.successRate);
       const branchRankings = branchRankingsRaw.map((b, idx) => ({
         ...b,
         rank: idx + 1
       }));
 
-      // Sort revenue
+
       const revenueByBranch = [...branchRankings]
         .sort((a, b) => b.revenue - a.revenue)
         .map(b => ({ name: b.name, revenue: b.revenue, revenueFormatted: b.revenueFormatted }));
@@ -5321,12 +5247,12 @@ export const getManagerPerformance = catchAsyncError(
         .sort((a, b) => b.successRate - a.successRate)
         .map(b => ({ name: b.name, successRate: b.successRate }));
 
-      // Find best/worst branches
+
       const bestBranch = branchRankings[0] ?? { name: "N/A", successRate: 0, revenueFormatted: "0 DA" };
       const worstBranch = branchRankings[branchRankings.length - 1] ?? { name: "N/A", successRate: 0 };
       const topRevenueBranch = [...branchRankings].sort((a, b) => b.revenue - a.revenue)[0] ?? { name: "N/A", revenueFormatted: "0 DA" };
 
-      // 5. Deliverer stats querying
+
       const delivererStats = await PackageModel.aggregate([
         {
           $match: {
@@ -5368,14 +5294,14 @@ export const getManagerPerformance = catchAsyncError(
         };
       });
 
-      // Sort leaderboard
+
       delivererLeaderboardRaw.sort((a, b) => b.successRate - a.successRate || b.deliveries - a.deliveries);
       const delivererLeaderboard = delivererLeaderboardRaw.map((d, idx) => ({ ...d, rank: idx + 1 }));
 
       const topDeliverer = delivererLeaderboard[0] ?? { name: "N/A", deliveries: 0, rating: 0 };
       const lowestDeliverer = delivererLeaderboard[delivererLeaderboard.length - 1] ?? { name: "N/A", deliveries: 0 };
 
-      // Rating distribution
+
       const ratings = deliverers.map(d => Math.round(d.rating ?? 0));
       const ratingDist = [5, 4, 3, 2, 1].map(star => ({
         rating: star,
@@ -5397,7 +5323,7 @@ export const getManagerPerformance = catchAsyncError(
       const totalPackages = delivererLeaderboard.reduce((acc, d) => acc + d.deliveries, 0);
       const avgSuccessRateVal = totalPackages > 0 ? (totalDelivered / totalPackages) * 100 : 0;
 
-      // 6. Productivity
+
       const dailyDeliveries = await PackageModel.aggregate([
         {
           $match: {
@@ -5420,7 +5346,7 @@ export const getManagerPerformance = catchAsyncError(
         deliveries: d.deliveries
       }));
 
-      // Average deliveries per deliverer by branch
+
       const deliveriesPerDeliverer = branchRankings.map(b => {
         const branchDeliverers = deliverers.filter(d => d.branchId?.toString() === b.branchId);
         const branchPackages = b.packages;
@@ -5431,7 +5357,7 @@ export const getManagerPerformance = catchAsyncError(
         };
       });
 
-      // Average revenue per deliverer by branch
+
       const revenuePerDeliverer = branchRankings.map(b => {
         const branchDeliverers = deliverers.filter(d => d.branchId?.toString() === b.branchId);
         const branchRevenue = b.revenue;
@@ -5443,7 +5369,7 @@ export const getManagerPerformance = catchAsyncError(
         };
       });
 
-      // 7. Quality Metrics
+
       const returnRateByBranch = branchRankings.map(b => ({ name: b.name, rate: b.returnRate }));
 
       const cancellationStats = await PackageModel.aggregate([
@@ -5473,7 +5399,7 @@ export const getManagerPerformance = catchAsyncError(
         return { name: b.name, rate };
       });
 
-      // 8. Performance Insights cards
+
       const insights: any[] = [];
       if (bestBranch.name !== "N/A") {
         insights.push({
@@ -5527,7 +5453,7 @@ export const getManagerPerformance = catchAsyncError(
         });
       }
 
-      // Check if database is empty of data to determine if we send mockup fallbacks
+
       const hasRealData = branchRankings.some(b => b.packages > 0) || delivererLeaderboard.some(d => d.deliveries > 0);
 
       const generateMockDataForBackend = (r: string) => {
@@ -5825,11 +5751,6 @@ export const getManagerPerformance = catchAsyncError(
 
 
 
-
-//functions from the tarrifs and below are not tested
-//in the supervisor controller i made the verification status and the status active for the create transproter and deliverer and freelancer
-//we can add later a function to activate them / desactivate    
-//missing stats update (in the supervisor and the other controllers) when creating deliverer / transporter / accepting a package by cashier , creating cashier or a loader ..etc
 
 
 

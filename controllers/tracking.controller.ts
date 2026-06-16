@@ -1,5 +1,3 @@
-// controllers/tracking.controller.ts (CORRECTED)
-
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import PackageModel from '../models/package.model';
@@ -12,7 +10,6 @@ import UserModel from '../models/user.model';
 import { SocketService } from '../services/socket.service';
 
 
-// Statuses that are NOT viewable by clients
 const RESTRICTED_STATUSES = new Set([
   'cancelled',
   'lost',
@@ -20,7 +17,7 @@ const RESTRICTED_STATUSES = new Set([
   'failed_delivery',
 ]);
 
-// Terminal/ended statuses
+
 const TERMINAL_STATUSES = new Set([
   'delivered',
   'returned',
@@ -35,10 +32,7 @@ export class TrackingController {
     this.socketService = socketService;
   }
 
-  /**
-   * Track package by tracking number (public endpoint)
-   * No authentication required - just tracking number
-   */
+
   trackPackage = async (req: Request, res: Response) => {
     try {
       const { trackingNumber } = req.params;
@@ -51,7 +45,7 @@ export class TrackingController {
         });
       }
 
-      // Find package with population
+
       const pkg = await PackageModel.findOne({ 
         trackingNumber: trackingNumber.toString().toUpperCase() 
       })
@@ -67,7 +61,7 @@ export class TrackingController {
         });
       }
 
-      // Check if package is restricted from client view
+
       if (RESTRICTED_STATUSES.has(pkg.status)) {
         return res.status(403).json({
           success: false,
@@ -77,10 +71,10 @@ export class TrackingController {
         });
       }
 
-      // Build tracking response
+
       const trackingResponse = await this.buildTrackingResponse(pkg);
 
-      // If package is active (not terminal), establish socket connection for real-time updates
+
       const isActive = !TERMINAL_STATUSES.has(pkg.status);
       
       res.status(200).json({
@@ -102,9 +96,7 @@ export class TrackingController {
     }
   };
 
-  /**
-   * Subscribe to real-time package tracking (WebSocket handshake info)
-   */
+
   subscribeToTracking = async (req: Request, res: Response) => {
     try {
       const { trackingNumber } = req.params;
@@ -127,7 +119,7 @@ export class TrackingController {
         });
       }
 
-      // Check restrictions
+
       if (RESTRICTED_STATUSES.has(pkg.status)) {
         return res.status(403).json({
           success: false,
@@ -135,7 +127,7 @@ export class TrackingController {
         });
       }
 
-      // Get current location data based on package status
+
       const locationData = await this.getCurrentLocationData(pkg);
 
       res.status(200).json({
@@ -160,17 +152,10 @@ export class TrackingController {
     }
   };
 
-  /**
-   * Get current location data for active package
-   * NOTE: Transporters don't have direct location tracking.
-   * Location for in_transit packages comes from:
-   * 1. The route they're assigned to (stops)
-   * 2. Or the manifest's estimated arrival
-   */
+
   private async getCurrentLocationData(pkg: any): Promise<any> {
     const status = pkg.status;
 
-    // Case 1: Package is at a branch (origin or destination)
     if (status === 'at_origin_branch' && pkg.originBranchId) {
       const branch = await BranchModel.findById(pkg.originBranchId)
         .select('name address location phone')
@@ -203,9 +188,9 @@ export class TrackingController {
       };
     }
 
-    // Case 2: Package is in transit - get route/manifest information
+
     if (status === 'in_transit_to_branch') {
-      // Find the manifest containing this package
+
       const manifest = await ManifestModel.findOne({
         'packages.packageId': pkg._id,
         status: { $in: ['in_transit', 'arrived', 'loaded', 'sealed'] },
@@ -215,7 +200,7 @@ export class TrackingController {
         .lean();
 
       if (manifest) {
-        // Get the route that's transporting this manifest
+
         const route = await RouteModel.findOne({
           'stops.manifestIds': manifest._id,
           status: { $in: ['active', 'in_transit'] },
@@ -223,7 +208,7 @@ export class TrackingController {
           .populate('assignedTransporterId', 'userId')
           .lean();
 
-        // Get current stop information if available
+
         let currentStopLocation = null;
         let estimatedArrival = manifest.estimatedArrival;
         
@@ -237,7 +222,7 @@ export class TrackingController {
           }
         }
 
-        // Get destination branch
+
         const destBranch = manifest.destinationBranchId as any;
         
         return {
@@ -260,7 +245,7 @@ export class TrackingController {
         };
       }
       
-      // If no manifest found, return destination branch info
+
       if (pkg.destinationBranchId) {
         const branch = await BranchModel.findById(pkg.destinationBranchId)
           .select('name address location')
@@ -279,7 +264,7 @@ export class TrackingController {
       }
     }
 
-    // Case 3: Package is out for delivery - get deliverer location
+
     if (status === 'out_for_delivery' && pkg.assignedDelivererId) {
       const deliverer = await DelivererModel.findOne({ 
         userId: pkg.assignedDelivererId 
@@ -302,7 +287,7 @@ export class TrackingController {
         };
       }
       
-      // If deliverer location not available, return destination address
+
       if (pkg.destination?.location?.coordinates) {
         return {
           type: 'destination',
@@ -314,7 +299,7 @@ export class TrackingController {
       }
     }
 
-    // Default: return destination location
+
     if (pkg.destination?.location?.coordinates) {
       return {
         type: 'destination',
@@ -328,11 +313,9 @@ export class TrackingController {
     return null;
   }
 
-  /**
-   * Build complete tracking response
-   */
+
   private async buildTrackingResponse(pkg: any): Promise<any> {
-    // Get origin branch details
+
     let originBranch = null;
     if (pkg.originBranchId) {
       const branch = await BranchModel.findById(pkg.originBranchId)
@@ -341,7 +324,7 @@ export class TrackingController {
       originBranch = branch;
     }
 
-    // Get destination branch details (if branch pickup)
+
     let destinationBranch = null;
     if (pkg.deliveryType === 'branch_pickup' && pkg.destinationBranchId) {
       const branch = await BranchModel.findById(pkg.destinationBranchId)
@@ -350,10 +333,9 @@ export class TrackingController {
       destinationBranch = branch;
     }
 
-    // Get current location
     const currentLocation = await this.getCurrentLocationData(pkg);
 
-    // Determine if package can be tracked in real-time
+
     const canTrackRealTime = !TERMINAL_STATUSES.has(pkg.status) && 
       !RESTRICTED_STATUSES.has(pkg.status);
 
