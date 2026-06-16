@@ -1397,7 +1397,7 @@ export const createPackage = catchAsyncError(
       // needed. The CVRP deliverer pass handles this correctly.
 
       // Always start as pending — cashier claim/accept handles the rest
-      const initialStatus: PackageStatus = "pending";
+      const initialStatus: PackageStatus = createdByRole === "freelancer" ? "pending" : 'at_origin_branch';
 
 
       // ── Build destination object ────────────────────────────────────────────

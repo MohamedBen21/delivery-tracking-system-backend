@@ -29,7 +29,7 @@ freelancerRouter.get("/packages/delivered", isFreelancer, getMyDeliveredPackages
 freelancerRouter.get("/packages/:packageId/track", isFreelancer, trackPackage);
 freelancerRouter.patch("/packages/:packageId/cancel", isFreelancer, cancelPackage);
 
-freelancerRouter.post("/packages", isAuthenticated, authorizeRoles("cashier", "freelancer"), createPackage);
+freelancerRouter.post("/packages", isAuthenticated, authorizeRoles("cashier", "freelancer", "supervisor"), createPackage);
 
 freelancerRouter.post("/packages", isAuthenticated, authorizeRoles("freelancer", "cashier"), createPackageWithImages);
 

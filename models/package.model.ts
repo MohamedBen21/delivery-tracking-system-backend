@@ -3,16 +3,16 @@ import mongoose, { Document, Model, Schema } from "mongoose";
 
 export type PackageType = 'document' | 'parcel' | 'fragile' | 'heavy' | 'perishable' | 'electronic' | 'clothing';
 
-export type DeliveryType = 'home' | 'branch_pickup' ;
+export type DeliveryType = 'home' | 'branch_pickup';
 
-export type PackageStatus = 
+export type PackageStatus =
   | 'pending'
 
-  | 'cashier_claimed'      
+  | 'cashier_claimed'
   | 'accepted'
   | 'at_origin_branch'
 
-  | 'manifested'           
+  | 'manifested'
   | 'in_transit_to_branch'
   | 'at_destination_branch'
   | 'out_for_delivery'
@@ -36,7 +36,7 @@ export type RefundStatus = 'pending' | 'processed' | 'rejected';
 export type SenderType = 'freelancer' | 'client';
 
 export interface IDimensions {
-  length: number; 
+  length: number;
   width: number;
   height: number;
 }
@@ -106,13 +106,13 @@ export interface IPackageImage {
 export interface IPackage extends Document {
   trackingNumber: string;
   companyId: mongoose.Types.ObjectId;
-  
+
   senderId: mongoose.Types.ObjectId;
   senderType: SenderType;
 
   clientId?: mongoose.Types.ObjectId;
 
-  weight: number; 
+  weight: number;
   volume?: number;
   dimensions?: IDimensions;
   isFragile: boolean;
@@ -120,7 +120,7 @@ export interface IPackage extends Document {
   description?: string;
   declaredValue?: number;
   images: IPackageImage[];
-  
+
   originBranchId: mongoose.Types.ObjectId;
   currentBranchId?: mongoose.Types.ObjectId;
   destinationBranchId?: mongoose.Types.ObjectId;
@@ -131,7 +131,7 @@ export interface IPackage extends Document {
 
   deliveryType: DeliveryType;
   deliveryPriority: 'standard' | 'express' | 'same_day';
-  
+
   totalPrice: number;
   paymentStatus: PaymentStatus;
   paymentMethod?: PaymentMethod;
@@ -141,26 +141,26 @@ export interface IPackage extends Document {
   assignedDelivererId?: mongoose.Types.ObjectId;
   assignedVehicleId?: mongoose.Types.ObjectId;
   currentRouteId?: mongoose.Types.ObjectId;
-  
+
   attemptCount: number;
   lastAttemptDate?: Date;
   nextAttemptDate?: Date;
   maxAttempts: number;
-  
+
   issues: IIssue[];
 
   returnInfo: IReturnInfo;
 
   trackingHistory: ITrackingEvent[];
-  
+
   createdAt: Date;
   estimatedDeliveryTime?: Date;
   deliveredAt?: Date;
   updatedAt: Date;
 
 
-  currentManifestId?: mongoose.Types.ObjectId;   
-  claimedByCashierId?: mongoose.Types.ObjectId; 
+  currentManifestId?: mongoose.Types.ObjectId;
+  claimedByCashierId?: mongoose.Types.ObjectId;
   claimedAt?: Date;
 
 
@@ -194,38 +194,38 @@ export interface IPackage extends Document {
     notes?: string,
     location?: string
   ) => Promise<IPackage>;
-  
+
   assignDelivery: (
     delivererId: mongoose.Types.ObjectId,
     vehicleId?: mongoose.Types.ObjectId
   ) => Promise<IPackage>;
-  
+
   markAsDelivered: (
     deliveredBy: mongoose.Types.ObjectId,
     notes?: string
   ) => Promise<IPackage>;
-  
+
   addIssue: (
     type: IIssue['type'],
     description: string,
     reportedBy: mongoose.Types.ObjectId,
     priority?: IIssue['priority']
   ) => Promise<IPackage>;
-  
+
   resolveIssue: (
     issueIndex: number,
     resolution: string,
     resolvedBy: mongoose.Types.ObjectId
   ) => Promise<IPackage>;
-  
+
   initiateReturn: (
     reason: string,
     refundAmount?: number,
     notes?: string
   ) => Promise<IPackage>;
-  
+
   canBeAccepted: () => boolean;
-  
+
 }
 
 
@@ -302,7 +302,7 @@ const destinationSchema = new Schema<IDestination>({
               Array.isArray(v) &&
               v.length === 2 &&
               v[0] >= -180 && v[0] <= 180 &&
-              v[1] >= -90  && v[1] <= 90
+              v[1] >= -90 && v[1] <= 90
             );
           },
           message: 'Coordinates must be valid [longitude, latitude] values',
@@ -340,7 +340,7 @@ const issueSchema = new Schema<IIssue>({
     ref: 'User',
     required: true,
   },
-  
+
   reportedAt: {
     type: Date,
     default: Date.now,
@@ -363,8 +363,8 @@ const issueSchema = new Schema<IIssue>({
   priority: {
     type: String,
     enum: {
-        values: ['low', 'medium', 'high'],
-        message: "priority entered : {VALUE} is not valid.",
+      values: ['low', 'medium', 'high'],
+      message: "priority entered : {VALUE} is not valid.",
     },
     default: 'medium',
   },
@@ -441,35 +441,43 @@ const trackingEventSchema = new Schema<ITrackingEvent>({
 
 const deliveryOtpSchema = new Schema<IDeliveryOtp>({
 
-  code:{ 
-    type: String,  
-    required: true, 
-    trim: true },
+  code: {
+    type: String,
+    required: true,
+    trim: true
+  },
 
-  expiresAt:{ 
+  expiresAt: {
     type: Date,
-    required: true },
+    required: true
+  },
 
-  stopIndex:{ 
-    type: Number,  
-    required: true, 
-    min: 0 },
+  stopIndex: {
+    type: Number,
+    required: true,
+    min: 0
+  },
 
-  routeId:{ 
-    type: Schema.Types.ObjectId, 
-    ref: 'Route', 
-    required: true },
-    
-  generatedAt: 
-  { type: Date,    
-    default: Date.now },
+  routeId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Route',
+    required: true
+  },
 
-  verified:{ 
-    type: Boolean, 
-    default: false },
+  generatedAt:
+  {
+    type: Date,
+    default: Date.now
+  },
 
-  verifiedAt:{ 
-    type: Date },
+  verified: {
+    type: Boolean,
+    default: false
+  },
+
+  verifiedAt: {
+    type: Date
+  },
 
 }, { _id: false });
 
@@ -503,13 +511,13 @@ const packageSchema = new Schema<IPackage>({
     ref: 'Company',
     required: [true, 'Company reference is required'],
   },
-  
+
   senderId: {
     type: Schema.Types.ObjectId,
     ref: 'User',
     required: [true, 'Sender ID is required'],
   },
-  
+
   senderType: {
     type: String,
     enum: {
@@ -523,7 +531,7 @@ const packageSchema = new Schema<IPackage>({
     type: Schema.Types.ObjectId,
     ref: 'User',
   },
-  
+
   weight: {
     type: Number,
     required: [true, 'Weight is required'],
@@ -568,13 +576,13 @@ const packageSchema = new Schema<IPackage>({
     type: [packageImageSchema],
     default: [],
     validate: {
-      validator: function(images: IPackageImage[]) {
+      validator: function (images: IPackageImage[]) {
         return images.length <= 10;
       },
       message: 'Cannot have more than 10 images',
     },
   },
-  
+
   originBranchId: {
     type: Schema.Types.ObjectId,
     ref: 'Branch',
@@ -590,51 +598,51 @@ const packageSchema = new Schema<IPackage>({
     type: Schema.Types.ObjectId,
     ref: 'Branch',
   },
-  
+
   destination: {
     type: destinationSchema,
     required: [true, 'Destination is required'],
   },
-  
+
   status: {
     type: String,
     enum: ['pending', 'accepted', 'at_origin_branch', 'in_transit_to_branch', 'cashier_claimed',
-           'at_destination_branch', 'out_for_delivery', 'delivered', 'manifested',
-           'failed_delivery', 'failed_delivery_attempt' , 'rescheduled', 'returned', 'cancelled', 
-           'lost', 'damaged', 'on_hold'],
+      'at_destination_branch', 'out_for_delivery', 'delivered', 'manifested',
+      'failed_delivery', 'failed_delivery_attempt', 'rescheduled', 'returned', 'cancelled',
+      'lost', 'damaged', 'on_hold'],
     default: 'pending',
-    
+
   },
-  
+
   deliveryType: {
     type: String,
     enum: ['home', 'branch_pickup', 'locker'],
     default: 'home',
   },
-  
+
   deliveryPriority: {
     type: String,
     enum: ['standard', 'express', 'same_day'],
     default: 'standard',
   },
-  
+
   totalPrice: {
     type: Number,
     required: [true, 'Total price is required'],
     min: 0,
   },
-  
+
   paymentStatus: {
     type: String,
     enum: ['pending', 'paid', 'partially_paid', 'refunded', 'failed'],
     default: 'pending',
   },
-  
+
   paymentMethod: {
     type: String,
     enum: ['cash', 'card', 'cod', 'wallet', 'bank_transfer', 'branch_payment'],
   },
-  
+
   paidAt: {
     type: Date,
   },
@@ -643,22 +651,22 @@ const packageSchema = new Schema<IPackage>({
     type: Schema.Types.ObjectId,
     ref: 'Transporter',
   },
-  
+
   assignedDelivererId: {
     type: Schema.Types.ObjectId,
     ref: 'Deliverer',
   },
-  
+
   assignedVehicleId: {
     type: Schema.Types.ObjectId,
     ref: 'Vehicle',
   },
-  
+
   currentRouteId: {
     type: Schema.Types.ObjectId,
     ref: 'Route',
   },
-  
+
   attemptCount: {
     type: Number,
     default: 0,
@@ -680,28 +688,28 @@ const packageSchema = new Schema<IPackage>({
     max: 10,
   },
 
-  
+
   issues: {
     type: [issueSchema],
     default: [],
   },
-  
+
   returnInfo: {
     type: returnInfoSchema,
     default: () => ({
       isReturn: false,
     }),
   },
-  
+
   trackingHistory: {
     type: [trackingEventSchema],
     default: [],
   },
-  
+
   estimatedDeliveryTime: {
     type: Date,
   },
-  
+
   deliveredAt: {
     type: Date,
   },
@@ -748,11 +756,11 @@ const packageSchema = new Schema<IPackage>({
 });
 
 
-packageSchema.virtual('isDelivered').get(function() {
+packageSchema.virtual('isDelivered').get(function () {
   return this.status === 'delivered';
 });
 
-packageSchema.virtual('isInTransit').get(function() {
+packageSchema.virtual('isInTransit').get(function () {
   const transitStatuses: PackageStatus[] = [
     'in_transit_to_branch',
     'out_for_delivery',
@@ -761,7 +769,7 @@ packageSchema.virtual('isInTransit').get(function() {
   return transitStatuses.includes(this.status);
 });
 
-packageSchema.virtual('isAtBranch').get(function() {
+packageSchema.virtual('isAtBranch').get(function () {
   const branchStatuses: PackageStatus[] = [
     'at_origin_branch',
     'at_destination_branch',
@@ -769,7 +777,7 @@ packageSchema.virtual('isAtBranch').get(function() {
   return branchStatuses.includes(this.status);
 });
 
-packageSchema.virtual('needsAttention').get(function() {
+packageSchema.virtual('needsAttention').get(function () {
   const attentionStatuses: PackageStatus[] = [
     'failed_delivery',
 
@@ -778,12 +786,12 @@ packageSchema.virtual('needsAttention').get(function() {
     'lost',
     'on_hold',
   ];
-  return attentionStatuses.includes(this.status) || 
-         this.issues.some(issue => !issue.resolved) ||
-         (this.nextAttemptDate && this.nextAttemptDate < new Date());
+  return attentionStatuses.includes(this.status) ||
+    this.issues.some(issue => !issue.resolved) ||
+    (this.nextAttemptDate && this.nextAttemptDate < new Date());
 });
 
-packageSchema.virtual('deliveryProgress').get(function() {
+packageSchema.virtual('deliveryProgress').get(function () {
   const statusOrder: Record<PackageStatus, number> = {
     'pending': 0,
 
@@ -791,16 +799,16 @@ packageSchema.virtual('deliveryProgress').get(function() {
 
     'accepted': 10,
     'at_origin_branch': 20,
-    
+
     'manifested': 30,
-    
+
     'in_transit_to_branch': 40,
     'at_destination_branch': 60,
     'out_for_delivery': 80,
     'delivered': 100,
     'failed_delivery': 80,
 
-    'failed_delivery_attempt':75,
+    'failed_delivery_attempt': 75,
     'rescheduled': 70,
     'returned': 100,
     'cancelled': 0,
@@ -811,20 +819,20 @@ packageSchema.virtual('deliveryProgress').get(function() {
   return statusOrder[this.status] || 0;
 });
 
-packageSchema.virtual('estimatedTimeRemaining').get(function() {
+packageSchema.virtual('estimatedTimeRemaining').get(function () {
   if (!this.estimatedDeliveryTime || this.isDelivered) return undefined;
-  
+
   const now = new Date();
   const diffMs = this.estimatedDeliveryTime.getTime() - now.getTime();
-  return Math.max(0, Math.round(diffMs / (1000 * 60 * 60))); 
+  return Math.max(0, Math.round(diffMs / (1000 * 60 * 60)));
 });
 
-packageSchema.virtual('isOverdue').get(function() {
+packageSchema.virtual('isOverdue').get(function () {
   if (!this.estimatedDeliveryTime || this.isDelivered) return false;
   return this.estimatedDeliveryTime < new Date();
 });
 
-packageSchema.virtual('canBeDelivered').get(function() {
+packageSchema.virtual('canBeDelivered').get(function () {
   return (
     this.status === 'at_destination_branch' ||
     this.status === 'out_for_delivery' ||
@@ -833,7 +841,7 @@ packageSchema.virtual('canBeDelivered').get(function() {
 });
 
 
-packageSchema.methods.updateStatus = function(
+packageSchema.methods.updateStatus = function (
   newStatus: PackageStatus,
   userId?: mongoose.Types.ObjectId,
   branchId?: mongoose.Types.ObjectId,
@@ -842,7 +850,7 @@ packageSchema.methods.updateStatus = function(
 ) {
   const oldStatus = this.status;
   this.status = newStatus;
-  
+
   this.trackingHistory.push({
     status: newStatus,
     location,
@@ -851,7 +859,7 @@ packageSchema.methods.updateStatus = function(
     notes: notes || `Status changed from ${oldStatus} to ${newStatus}`,
     timestamp: new Date(),
   });
-  
+
   if (newStatus === 'delivered') {
     this.deliveredAt = new Date();
   } else if (newStatus === 'out_for_delivery') {
@@ -859,37 +867,37 @@ packageSchema.methods.updateStatus = function(
   } else if (newStatus === 'failed_delivery') {
     this.attemptCount += 1;
     this.lastAttemptDate = new Date();
-    
+
     if (this.attemptCount < this.maxAttempts) {
       const nextDate = new Date();
       nextDate.setDate(nextDate.getDate() + 1);
       this.nextAttemptDate = nextDate;
     }
   }
-  
+
   return this.save();
 };
 
 
-packageSchema.methods.assignDelivery = function(
+packageSchema.methods.assignDelivery = function (
   delivererId: mongoose.Types.ObjectId,
   vehicleId?: mongoose.Types.ObjectId
 ) {
   this.assignedDelivererId = delivererId;
   if (vehicleId) this.assignedVehicleId = vehicleId;
   this.status = 'out_for_delivery';
-  
+
   this.trackingHistory.push({
     status: 'out_for_delivery',
     notes: `Assigned to deliverer ${delivererId}`,
     timestamp: new Date(),
   });
-  
+
   return this.save();
 };
 
 
-packageSchema.methods.markAsDelivered = function(
+packageSchema.methods.markAsDelivered = function (
   deliveredBy: mongoose.Types.ObjectId,
   notes?: string
 ) {
@@ -903,7 +911,7 @@ packageSchema.methods.markAsDelivered = function(
 };
 
 
-packageSchema.methods.addIssue = function(
+packageSchema.methods.addIssue = function (
   type: IIssue['type'],
   description: string,
   reportedBy: mongoose.Types.ObjectId,
@@ -925,11 +933,11 @@ packageSchema.methods.addIssue = function(
   } else if (type === 'delay') {
     this.status = 'on_hold';
   }
-  
+
   return this.save();
 };
 
-packageSchema.methods.resolveIssue = function(
+packageSchema.methods.resolveIssue = function (
   issueIndex: number,
   resolution: string,
   resolvedBy: mongoose.Types.ObjectId
@@ -939,25 +947,25 @@ packageSchema.methods.resolveIssue = function(
     this.issues[issueIndex].resolvedAt = new Date();
     this.issues[issueIndex].resolution = resolution;
   }
-  
-  if (this.status === 'on_hold' && this.issues.every((issue : IIssue) => issue.resolved)) {
+
+  if (this.status === 'on_hold' && this.issues.every((issue: IIssue) => issue.resolved)) {
     const lastNormalStatus = this.trackingHistory
       .slice()
       .reverse()
-      .find((event : any) => 
+      .find((event: any) =>
         !['on_hold', 'damaged', 'lost'].includes(event.status as PackageStatus)
       );
-    
+
     if (lastNormalStatus) {
       this.status = lastNormalStatus.status as PackageStatus;
     }
   }
-  
+
   return this.save();
 };
 
 
-packageSchema.methods.initiateReturn = function(
+packageSchema.methods.initiateReturn = function (
   reason: string,
   refundAmount?: number,
   notes?: string
@@ -970,20 +978,20 @@ packageSchema.methods.initiateReturn = function(
     refundStatus: refundAmount ? 'pending' : undefined,
     returnNotes: notes,
   };
-  
+
   this.status = 'returned';
-  
+
   this.trackingHistory.push({
     status: 'returned',
     notes: `Return initiated: ${reason}`,
     timestamp: new Date(),
   });
-  
+
   return this.save();
 };
 
 
-packageSchema.methods.canBeAccepted = function(): boolean {
+packageSchema.methods.canBeAccepted = function (): boolean {
   return (
     this.status === 'pending' &&
     this.weight > 0 &&
@@ -993,7 +1001,7 @@ packageSchema.methods.canBeAccepted = function(): boolean {
 };
 
 
-packageSchema.pre('save', function(next) {
+packageSchema.pre('save', function (next) {
   if (this.isNew && !this.trackingNumber) {
     const prefix = 'PKG';
     const timestamp = Date.now().toString().slice(-6);
@@ -1010,22 +1018,22 @@ packageSchema.pre('save', function(next) {
     return next(new Error('Destination branch is required for branch pickup'));
   }
 
-  
+
   if (!this.volume && this.dimensions) {
     const { length, width, height } = this.dimensions;
-    this.volume = (length * width * height) / 1000000; 
+    this.volume = (length * width * height) / 1000000;
   }
-  
+
   if (this.paidAt && this.paymentStatus === 'pending') {
     this.paymentStatus = 'paid';
   }
-  
+
   if (this.attemptCount >= this.maxAttempts && this.status === 'failed_delivery_attempt') {
 
-  this.status = 'failed_delivery';
-  this.returnInfo.isReturn = true;
-  this.returnInfo.reason = 'Maximum delivery attempts exceeded';
-  
+    this.status = 'failed_delivery';
+    this.returnInfo.isReturn = true;
+    this.returnInfo.reason = 'Maximum delivery attempts exceeded';
+
   }
 
 
@@ -1043,7 +1051,7 @@ packageSchema.pre('save', function(next) {
       return next(new Error('GPS coordinates (deliveryLat, deliveryLon) are required for home delivery'));
     }
   }
-  
+
   next();
 });
 
