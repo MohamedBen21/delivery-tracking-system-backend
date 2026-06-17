@@ -227,3 +227,7 @@ function generateRouteNumber(date: Date): string {
   const seq      = String(routeCounter).padStart(3, "0");
   return `R-${yyyymmdd}-${seq}`;
 }
+
+
+
+// manich n utilisi fih doka (legacy).

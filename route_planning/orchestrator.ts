@@ -407,3 +407,10 @@ function buildScheduledStart(date: Date): Date {
   d.setUTCHours(5, 0, 0, 0); // 05:00 UTC = 06:00 Algeria (UTC+1)
   return d;
 }
+
+
+
+
+
+
+// manich n utilisi fih doka (legacy).

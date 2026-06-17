@@ -235,3 +235,7 @@ export function formatLoadSummary(
     `${load.leftover.length} leftover`
   );
 }
+
+
+
+//manich n utilisi fih doka (legacy)

@@ -229,3 +229,9 @@ export function formatTSPSummary(result: TSPResult): string {
     `[${stopIds}]`
   );
 }
+
+
+
+
+
+//manich n  utilisi fih dorka. (legacy)

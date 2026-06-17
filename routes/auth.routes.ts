@@ -9,6 +9,7 @@ import {
   googleLogin,
   login,
   logout,
+  manualRoutePlanning,
   meUser,
   passwordRecovery,
   refreshTokens,
@@ -95,6 +96,14 @@ authRouter.post(
   "/change-contact/confirm",
   isAuthenticated,
   confirmContactChange,
+);
+
+
+authRouter.post(
+  "/routes/plan",
+  isAuthenticated,
+  // authorizeRoles("admin", "manager"),
+  manualRoutePlanning
 );
 
 export default authRouter;
