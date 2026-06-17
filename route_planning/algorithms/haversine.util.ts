@@ -86,6 +86,12 @@ export function estimatedDriveMinutes(
   return Math.round((distanceKm / speed) * 60);
 }
 
+
+
+
+
+
+//// legacy ---- not used anymore
 /**
  * Builds an N×N distance matrix from an array of coordinates.
  * Used by TSP when it needs all pairwise distances upfront.

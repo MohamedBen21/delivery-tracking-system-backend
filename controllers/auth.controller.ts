@@ -42,6 +42,7 @@ import { fetchWeatherFactor } from "../services/weather.service";
 import LoaderModel from "../models/loader.model";
 import CashierModel from "../models/cashier.model";
 import { v2 } from 'cloudinary';
+import { triggerManualPlan } from "../route_planning/scheduler"; 
 
 
 v2.config({
@@ -1415,27 +1416,30 @@ export const reverseGeocodeAddress = catchAsyncError(
 //
 // Body:
 // {
-//   currentLat : number,   // user's current GPS latitude
-//   currentLon : number,   // user's current GPS longitude
-//   destinationLat : number,  // branch hub / branch / delivery address lat
-//   destinationLon : number,  // branch hub / branch / delivery address lon
+//   // Option 1: Coordinates-based ETA
+//   currentLat? : number,   // user's current GPS latitude
+//   currentLon? : number,   // user's current GPS longitude
+//   destinationLat? : number,  // branch hub / branch / delivery address lat
+//   destinationLon? : number,  // branch hub / branch / delivery address lon
+//   
+//   // Option 2: Manual duration input
+//   estimatedDurationMin? : number,  // User-provided estimated time in minutes
 // }
 //
 // Returns:
 // {
 //   success          : true,
 //   data: {
-//     baseDurationMin  : number,   // raw OSRM time
+//     baseDurationMin  : number,   // raw OSRM time OR user-provided time
 //     finalDurationMin : number,   // smart-adjusted time
 //     adjustmentPercent: number,   // total % added
 //     estimatedArrival : ISO string,
 //     confidence       : 'high' | 'medium' | 'low',
-//     distanceKm       : number,
+//     distanceKm       : number,   // optional (only if coordinates provided)
 //     traffic          : { factor, level, label },
 //     weather          : { factor, severity, label },
 //   }
 // }
-
 
 export const calculateETA = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -1445,77 +1449,169 @@ export const calculateETA = catchAsyncError(
       return next(new ErrorHandler("Authentication required.", 401));
     }
 
-    const { currentLat, currentLon, destinationLat, destinationLon } =
-      req.body as Record<string, unknown>;
+    const { 
+      currentLat, 
+      currentLon, 
+      destinationLat, 
+      destinationLon,
+      estimatedDurationMin 
+    } = req.body as Record<string, unknown>;
 
-    if (
-      currentLat === undefined ||
-      currentLon === undefined ||
-      destinationLat === undefined ||
-      destinationLon === undefined
-    ) {
+    // ─── Determine which mode we're using ──────────────────────────────────
+    const hasCoordinates = 
+      currentLat !== undefined &&
+      currentLon !== undefined &&
+      destinationLat !== undefined &&
+      destinationLon !== undefined;
+
+    const hasManualDuration = 
+      estimatedDurationMin !== undefined && 
+      estimatedDurationMin !== null;
+
+    // Validate: must have either coordinates OR manual duration, not both, not neither
+    if (hasCoordinates && hasManualDuration) {
       return next(
         new ErrorHandler(
-          "currentLat, currentLon, destinationLat and destinationLon are required.",
+          "Please provide either coordinates OR estimatedDurationMin, not both.",
           400
         )
       );
     }
 
-    const cLat = parseFloat(String(currentLat));
-    const cLon = parseFloat(String(currentLon));
-    const dLat = parseFloat(String(destinationLat));
-    const dLon = parseFloat(String(destinationLon));
-
-    if (
-      isNaN(cLat) || cLat < -90 || cLat > 90 ||
-      isNaN(cLon) || cLon < -180 || cLon > 180 ||
-      isNaN(dLat) || dLat < -90 || dLat > 90 ||
-      isNaN(dLon) || dLon < -180 || dLon > 180
-    ) {
-      return next(
-        new ErrorHandler("One or more coordinates are out of valid range.", 400)
-      );
-    }
-
-
-    const [deliverer, transporter] = await Promise.all([
-      delivererModel.findOne({ userId, isActive: true, isSuspended: false }),
-      transporterModel.findOne({ userId, isActive: true, isSuspended: false }),
-    ]);
-
-    if (!deliverer && !transporter) {
+    if (!hasCoordinates && !hasManualDuration) {
       return next(
         new ErrorHandler(
-          "Access denied. Only active deliverers and transporters can request ETA.",
-          403
+          "Either provide coordinates (currentLat, currentLon, destinationLat, destinationLon) OR estimatedDurationMin.",
+          400
         )
       );
     }
 
+    // ─── Parse and validate coordinates if provided ──────────────────────
+    let origin: Coordinates | null = null;
+    let destination: Coordinates | null = null;
+    let baseDurationSec: number = 0;
+    let distanceKm: number | null = null;
+    let avgSpeedKmh: number | null = null;
 
-    const origin: Coordinates = { lat: cLat, lon: cLon };
-    const destination: Coordinates = { lat: dLat, lon: dLon };
+    if (hasCoordinates) {
+      const cLat = parseFloat(String(currentLat));
+      const cLon = parseFloat(String(currentLon));
+      const dLat = parseFloat(String(destinationLat));
+      const dLon = parseFloat(String(destinationLon));
 
-    const midpoint: Coordinates = {
-      lat: (cLat + dLat) / 2,
-      lon: (cLon + dLon) / 2,
-    };
+      if (
+        isNaN(cLat) || cLat < -90 || cLat > 90 ||
+        isNaN(cLon) || cLon < -180 || cLon > 180 ||
+        isNaN(dLat) || dLat < -90 || dLat > 90 ||
+        isNaN(dLon) || dLon < -180 || dLon > 180
+      ) {
+        return next(
+          new ErrorHandler("One or more coordinates are out of valid range.", 400)
+        );
+      }
 
+      origin = { lat: cLat, lon: cLon };
+      destination = { lat: dLat, lon: dLon };
 
-    let osrmResult;
+      // ─── Verify user is authorized ──────────────────────────────────────
+      const [deliverer, transporter] = await Promise.all([
+        delivererModel.findOne({ userId, isActive: true, isSuspended: false }),
+        transporterModel.findOne({ userId, isActive: true, isSuspended: false }),
+      ]);
 
-    try {
-      osrmResult = await getOSRMRoute(origin, destination);
-    } catch {
-      return next(
-        new ErrorHandler(
-          "Could not calculate route. Make sure coordinates are reachable by road.",
-          502
-        )
-      );
+      if (!deliverer && !transporter) {
+        return next(
+          new ErrorHandler(
+            "Access denied. Only active deliverers and transporters can request ETA.",
+            403
+          )
+        );
+      }
+
+      // ─── Get OSRM route ──────────────────────────────────────────────────
+      let osrmResult;
+      try {
+        osrmResult = await getOSRMRoute(origin, destination);
+      } catch {
+        return next(
+          new ErrorHandler(
+            "Could not calculate route. Make sure coordinates are reachable by road.",
+            502
+          )
+        );
+      }
+
+      baseDurationSec = Math.max(osrmResult.baseDuration, 60);
+      distanceKm = parseFloat((osrmResult.distance / 1000).toFixed(2));
+      avgSpeedKmh = osrmResult.avgSpeedKmh;
+
+    } else {
+      // ─── Manual duration mode ──────────────────────────────────────────
+      // Skip authorization check? Or keep it? 
+      // I'd recommend keeping it for consistency
+      const [deliverer, transporter] = await Promise.all([
+        delivererModel.findOne({ userId, isActive: true, isSuspended: false }),
+        transporterModel.findOne({ userId, isActive: true, isSuspended: false }),
+      ]);
+
+      if (!deliverer && !transporter) {
+        return next(
+          new ErrorHandler(
+            "Access denied. Only active deliverers and transporters can request ETA.",
+            403
+          )
+        );
+      }
+
+      const manualMin = parseFloat(String(estimatedDurationMin));
+      if (isNaN(manualMin) || manualMin <= 0) {
+        return next(
+          new ErrorHandler("estimatedDurationMin must be a positive number.", 400)
+        );
+      }
+
+      // Convert to seconds
+      baseDurationSec = Math.max(manualMin * 60, 60);
+
+      // For manual mode, we need a midpoint for weather. 
+      // We'll use the user's location if available, or a default
+      // Since we don't have coordinates, we can skip weather or use a fallback
+      // Let's keep this flexible - we can still fetch weather for a default location
+      // or make weather optional
     }
 
+    // ─── Get midpoint for weather ────────────────────────────────────────
+    let midpoint: Coordinates;
+    if (origin && destination) {
+      midpoint = {
+        lat: (origin.lat + destination.lat) / 2,
+        lon: (origin.lon + destination.lon) / 2,
+      };
+    } else {
+      // In manual mode, we don't have coordinates. 
+      // We could use a default location (e.g., Algiers) or make weather optional.
+      // Option 1: Use a default midpoint
+      midpoint = { lat: 36.7538, lon: 3.0588 }; // Algiers
+      
+      // Option 2: Skip weather entirely for manual mode
+      // return res.status(200).json({
+      //   success: true,
+      //   data: {
+      //     baseDurationMin: Math.round(baseDurationSec / 60),
+      //     finalDurationMin: Math.round(baseDurationSec / 60),
+      //     adjustmentPercent: 0,
+      //     estimatedArrival: new Date(Date.now() + baseDurationSec * 1000),
+      //     confidence: 'high',
+      //     distanceKm: null,
+      //     avgSpeedKmh: null,
+      //     traffic: { factor: 0, level: 'low', label: 'No traffic data' },
+      //     weather: { factor: 0, severity: 'clear', label: 'No weather data' },
+      //   },
+      // });
+    }
+
+    // ─── Get traffic and weather ──────────────────────────────────────────
     const now = new Date();
 
     const [trafficResult, weatherResult] = await Promise.all([
@@ -1523,71 +1619,79 @@ export const calculateETA = catchAsyncError(
       fetchWeatherFactor(midpoint),
     ]);
 
+    // ─── Apply adjustments ────────────────────────────────────────────────
+    let adjustment: number;
 
-    const avgSpeed = osrmResult.avgSpeedKmh || 1;
+    if (origin && destination && avgSpeedKmh) {
+      // Coordinates mode: use speed-based correction
+      const isUrban = (distanceKm || 0) < 15;
+      const REFERENCE_SPEED = isUrban ? 35 : 55;
+      const speedRatio = avgSpeedKmh / REFERENCE_SPEED;
+      
+      const speedCorrection = isUrban
+        ? Math.min(1.50, Math.max(0.75, 1 / speedRatio))
+        : Math.min(1.40, Math.max(0.75, 1 / speedRatio));
 
-    const isUrban = osrmResult.distance < 15_000;
+      const adjustedTrafficFactor = trafficResult.factor * speedCorrection;
+      const rawSum = adjustedTrafficFactor + weatherResult.factor;
+      
+      const MAX_ADJUSTMENT = 0.60;
+      adjustment = Math.min(1 - Math.exp(-rawSum), MAX_ADJUSTMENT);
+    } else {
+      // Manual mode: use direct traffic + weather adjustment
+      const rawSum = trafficResult.factor + weatherResult.factor;
+      const MAX_ADJUSTMENT = 0.60;
+      adjustment = Math.min(1 - Math.exp(-rawSum), MAX_ADJUSTMENT);
+    }
 
-    const REFERENCE_SPEED = isUrban ? 35 : 55;
+    // ─── Calculate final duration ────────────────────────────────────────
+    const finalDurationSec = baseDurationSec * (1 + adjustment);
 
-    const speedRatio = avgSpeed / REFERENCE_SPEED;
+    const baseDurationMin = Math.round(baseDurationSec / 60);
+    const finalDurationMin = Math.ceil(finalDurationSec / 60);
+    const adjustmentPercent = Math.round(adjustment * 100);
+    const estimatedArrival = new Date(now.getTime() + finalDurationSec * 1000);
 
 
-    const speedCorrection = isUrban
-      ? Math.min(1.50, Math.max(0.75, 1 / speedRatio))
-      : Math.min(1.40, Math.max(0.75, 1 / speedRatio));
-
-    const adjustedTrafficFactor =
-      trafficResult.factor * speedCorrection;
-
-    const rawSum = adjustedTrafficFactor + weatherResult.factor;
-
-    const MAX_ADJUSTMENT = 0.60;
-    const MIN_DURATION_SEC = 60;
-
-    const dampened = Math.min(
-      1 - Math.exp(-rawSum),
-      MAX_ADJUSTMENT
-    );
-
-    const baseSec = Math.max(osrmResult.baseDuration, MIN_DURATION_SEC);
-    const finalSec = baseSec * (1 + dampened);
-
-    const baseDurationMin = Math.round(baseSec / 60);
-    const finalDurationMin = Math.ceil(finalSec / 60);
-
-    const adjustmentPercent = Math.round(dampened * 100);
-
-    const estimatedArrival = new Date(now.getTime() + finalSec * 1000);
-
+    const rawSum = trafficResult.factor + weatherResult.factor;
     const confidence: "high" | "medium" | "low" =
       rawSum < 0.10 ? "high" :
-        rawSum < 0.30 ? "medium" :
-          "low";
+      rawSum < 0.30 ? "medium" :
+      "low";
+
+
+    const responseData: any = {
+      baseDurationMin,
+      finalDurationMin,
+      adjustmentPercent,
+      estimatedArrival,
+      confidence,
+      traffic: {
+        factor: trafficResult.factor,
+        level: trafficResult.level,
+        label: trafficResult.label,
+      },
+      weather: {
+        factor: weatherResult.factor,
+        severity: weatherResult.severity,
+        label: weatherResult.label,
+      },
+    };
+
+    // Add optional fields if coordinates mode was used
+    if (distanceKm !== null) {
+      responseData.distanceKm = distanceKm;
+    }
+    if (avgSpeedKmh !== null) {
+      responseData.avgSpeedKmh = avgSpeedKmh;
+    }
+
+    // Add source mode indicator (useful for debugging)
+    responseData.source = hasCoordinates ? 'coordinates' : 'manual';
 
     return res.status(200).json({
       success: true,
-      data: {
-        baseDurationMin,
-        finalDurationMin,
-        adjustmentPercent,
-        estimatedArrival,
-        confidence,
-        distanceKm: parseFloat((osrmResult.distance / 1000).toFixed(2)),
-        avgSpeedKmh: osrmResult.avgSpeedKmh,
-
-        traffic: {
-          factor: trafficResult.factor,
-          level: trafficResult.level,
-          label: trafficResult.label,
-        },
-
-        weather: {
-          factor: weatherResult.factor,
-          severity: weatherResult.severity,
-          label: weatherResult.label,
-        },
-      },
+      data: responseData,
     });
   }
 );
@@ -1908,4 +2012,64 @@ export const confirmContactChange = catchAsyncError(
       );
     }
   },
+);
+
+
+
+
+
+
+
+
+
+export const manualRoutePlanning = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { date } = req.body as { date?: string };
+
+
+      const userId = req.user?._id;
+      if (!userId) {
+        return next(new ErrorHandler("Unauthorized.", 401));
+      }
+
+      const user = await userModel.findById(userId);
+      if (!user) {
+        return next(new ErrorHandler("User not found.", 404));
+      }
+
+      // if (!["admin", "manager"].includes(user.role)) {
+      //   return next(
+      //     new ErrorHandler(
+      //       "Access denied. Only Admins and Managers can trigger route planning.",
+      //       403
+      //     )
+      //   );
+      // }
+
+
+      console.log(
+        `[manualRoutePlanning] User ${user.email} (${user.role}) triggered manual route planning`
+      );
+
+
+      const result = await triggerManualPlan(date);
+
+      res.status(200).json({
+        success: true,
+        message: "Route planning completed successfully",
+        data: result,
+      });
+
+      return; 
+
+    } catch (error: any) {
+      return next(
+        new ErrorHandler(
+          error.message || "Error triggering route planning.",
+          500
+        )
+      );
+    }
+  }
 );
