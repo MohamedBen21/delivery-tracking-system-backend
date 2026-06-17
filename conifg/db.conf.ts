@@ -18,8 +18,6 @@ export interface DbConf {
 export const dbConf: DbConf = {
   mongodb: {
     options: {
-      replicaSet: "rs0",
-      directConnection: true,
       serverSelectionTimeoutMS: 5000,
       // maxPoolSize: 10,
       maxPoolSize: 3,
