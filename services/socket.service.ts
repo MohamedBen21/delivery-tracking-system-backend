@@ -1288,20 +1288,28 @@ export class SocketService {
                 const allManifestIds = route.stops.flatMap(
                   (s: any) => s.manifestIds ?? [],
                 );
+                
                 if (allManifestIds.length > 0) {
-                  await ManifestModel.updateMany(
-                    {
-                      _id: { $in: allManifestIds },
-                      status: { $in: ["sealed", "loaded"] },
-                    },
-                    {
-                      $set: {
-                        status: "in_transit",
-                        departedAt: new Date(),
-                        "transportLeg.departedAt": new Date(),
-                      },
-                    },
-                  );
+                  // ── Update manifests to 'in_transit' and mark departed ──────
+                  for (const manifestId of allManifestIds) {
+                    const manifest = await ManifestModel.findById(manifestId);
+                    if (manifest && manifest.status === 'loaded') {
+                      // This will call markDeparted which cascades to packages
+                      await manifest.markDeparted(new mongoose.Types.ObjectId(userId));
+                    } else if (manifest && manifest.status === 'sealed') {
+                      // If not loaded yet, just update status
+                      manifest.status = 'in_transit';
+                      manifest.departedAt = new Date();
+                      if (manifest.transportLeg) {
+                        manifest.transportLeg.departedAt = new Date();
+                      }
+                      await manifest.save();
+                      // Also cascade to packages
+                      await (manifest as any)._cascadeDepartedToPackages(
+                        new mongoose.Types.ObjectId(userId)
+                      );
+                    }
+                  }
                 }
               }
 
@@ -2185,25 +2193,14 @@ export class SocketService {
 
               await route.completeStop(data.stopIndex, [], [], data.notes);
 
+              // ── Update manifests and packages ───────────────────────────────────
               if (finalCompletedManifests.length > 0) {
-                await ManifestModel.updateMany(
-                  {
-                    _id: { $in: finalCompletedManifests },
-                    status: "in_transit",
-                  },
-                  {
-                    $set: {
-                      status: "arrived",
-                      arrivedAt: new Date(),
-                      "transportLeg.arrivedAt": new Date(),
-                    },
-                  },
-                );
                 for (const manifestId of finalCompletedManifests) {
                   const manifest = await ManifestModel.findById(manifestId);
-                  if (manifest) {
+                  if (manifest && manifest.status === 'in_transit') {
+                    // This will cascade to packages and update their statuses
                     await manifest.markArrived(
-                      new mongoose.Types.ObjectId(userId),
+                      new mongoose.Types.ObjectId(userId)
                     );
                   }
                 }
@@ -2212,7 +2209,7 @@ export class SocketService {
               if (discrepancyManifestOids.length > 0) {
                 await ManifestModel.updateMany(
                   { _id: { $in: discrepancyManifestOids } },
-                  { $set: { status: "discrepancy" } },
+                  { $set: { status: "discrepancy" } }
                 );
               }
 
@@ -2245,9 +2242,8 @@ export class SocketService {
                 });
 
                 if (transportation) {
-                  transportation.status = 'arrived';
-                  transportation.actualDeliveryTime = new Date();
-                  await transportation.save();
+                  // Use the model's markArrived method
+                  await transportation.markArrived();
                 }
 
                 if (route.type === "hub_to_hub" && stop.branchId) {
@@ -2378,7 +2374,6 @@ export class SocketService {
             }
           },
         );
-
 
         // Add this method to your SocketService class
 
