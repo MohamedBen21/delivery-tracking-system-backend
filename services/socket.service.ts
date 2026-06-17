@@ -554,7 +554,10 @@ export class SocketService {
         timestamp: Date.now(),
       };
 
-      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrPayload));
+      
+      const encodedPayload = Buffer.from(JSON.stringify(qrPayload)).toString('base64');
+
+      const qrDataUrl = await QRCode.toDataURL(encodedPayload);
 
       this.io
         .to(this.getBranchRoom(originBranchId))
@@ -654,7 +657,9 @@ export class SocketService {
         timestamp: Date.now(),
       };
 
-      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrPayload));
+      const encodedPayload = Buffer.from(JSON.stringify(qrPayload)).toString('base64');
+
+      const qrDataUrl = await QRCode.toDataURL(encodedPayload);
 
       this.io
         .to(this.getBranchRoom(destinationBranchId))
