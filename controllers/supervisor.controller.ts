@@ -17370,7 +17370,7 @@ export const getTransportationsHistory = catchAsyncError(
     }
 
 
-    const transporter = await TransporterModel.findById(transporterId).lean();
+    const transporter = await TransporterModel.findById(transporterId);
     if (!transporter) {
       return next(new ErrorHandler("Transporter not found.", 404));
     }
@@ -17513,13 +17513,13 @@ export const getTransportationsHistory = catchAsyncError(
     let total = 0;
 
     if (needsAdvancedFiltering) {
-      const allTransportations = await TransportationModel.find(query).lean();
+      const allTransportations = await TransportationModel.find(query);
       const routeIds = allTransportations.map(t => t.sourceRouteId).filter(id => id);
 
       const routes = await RouteModel.find(
         { _id: { $in: routeIds } },
         { status: 1, originBranchId: 1, destinationBranchId: 1, stops: 1, name: 1, code: 1 }
-      ).lean();
+      );
 
       const routeMap = new Map();
       routes.forEach(route => {
@@ -17541,10 +17541,14 @@ export const getTransportationsHistory = catchAsyncError(
 
       total = filtered.length;
       transportations = filtered.slice(skip, skip + limit);
-      transportations = transportations.map(t => ({
-        ...t,
-        _route: routeMap.get(t.sourceRouteId?.toString()),
-      }));
+
+      // Attach _route directly on the existing Mongoose documents instead of
+      // spreading them ({...t}) — spreading a Mongoose doc only copies its
+      // internal own properties and silently drops schema fields like
+      // `source`/`destination`, which broke this branch's response.
+      transportations.forEach((t: any) => {
+        t._route = routeMap.get(t.sourceRouteId?.toString());
+      });
     } else {
       const [countResult, transportationsResult] = await Promise.all([
         TransportationModel.countDocuments(query),
@@ -17552,16 +17556,36 @@ export const getTransportationsHistory = catchAsyncError(
           .sort(sort)
           .skip(skip)
           .limit(limit)
-          .lean(),
+          ,
       ]);
       total = countResult;
       transportations = transportationsResult;
     }
 
 
+    // Resolve branch names for source/destination.
+    // source.name / destination.name are snapshots saved on the transportation
+    // document at creation time. If they were never set, or the branch was
+    // renamed since, fall back to a live lookup against the Branch collection.
+    const branchIdsToResolve = new Set<string>();
+    transportations.forEach((t: any) => {
+      if (t.source?.branchId) branchIdsToResolve.add(t.source.branchId.toString());
+      if (t.destination?.branchId) branchIdsToResolve.add(t.destination.branchId.toString());
+    });
+
+    const branchNameMap = new Map<string, string>();
+    if (branchIdsToResolve.size > 0) {
+      const branches = await BranchModel.find(
+        { _id: { $in: Array.from(branchIdsToResolve).map(toObjectId) } },
+        { name: 1 }
+      );
+      branches.forEach((b: any) => branchNameMap.set(b._id.toString(), b.name));
+    }
+
+
     const allTransporterTransportations = await TransportationModel.find({
       assignedTransporterId: transporterId,
-    }).lean();
+    });
 
     const completedTransportations = allTransporterTransportations.filter(t => t.status === 'completed');
     const cancelledTransportations = allTransporterTransportations.filter(t => t.status === 'cancelled');
@@ -17599,12 +17623,13 @@ export const getTransportationsHistory = catchAsyncError(
       sourceRouteId: t.sourceRouteId,
       source: t.source ? {
         branchId: t.source.branchId,
-        name: t.source.name,
+
+        name: t.source.name || (t.source.branchId ? branchNameMap.get(t.source.branchId.toString()) : undefined) || null,
         location: t.source.location,
       } : null,
       destination: t.destination ? {
         branchId: t.destination.branchId,
-        name: t.destination.name,
+        name: t.destination.name || (t.destination.branchId ? branchNameMap.get(t.destination.branchId.toString()) : undefined) || null,
         location: t.destination.location,
       } : null,
       manifestIds: t.manifestIds,

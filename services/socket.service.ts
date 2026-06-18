@@ -1260,15 +1260,15 @@ export class SocketService {
                       (originBranch as any).location.coordinates,
                     ) * 1000;
 
-                  if (distanceMeters > 500) {
-                    socket.emit("route_error", {
-                      code: "TOO_FAR",
-                      message: `Must be within 500m of the origin branch to start the route. Current: ${Math.round(distanceMeters)}m.`,
-                      distanceMeters: Math.round(distanceMeters),
-                      requiredMeters: 500,
-                    });
-                    return;
-                  }
+                  // if (distanceMeters > 500) {
+                  //   socket.emit("route_error", {
+                  //     code: "TOO_FAR",
+                  //     message: `Must be within 500m of the origin branch to start the route. Current: ${Math.round(distanceMeters)}m.`,
+                  //     distanceMeters: Math.round(distanceMeters),
+                  //     requiredMeters: 500,
+                  //   });
+                  //   return;
+                  // }
                 }
               }
 
@@ -1345,15 +1345,36 @@ export class SocketService {
                 const firstStop = route.stops[0];
                 const lastStop = route.stops[route.stops.length - 1];
 
+                // ── Get branch names for source and destination ──────────────────
+                let sourceBranchName = null;
+                let destinationBranchName = null;
+
+                if (route.originBranchId) {
+                  const sourceBranch = await BranchModel.findById(route.originBranchId)
+                    .select('name')
+                    .lean();
+                  sourceBranchName = sourceBranch?.name || null;
+                }
+
+                const destBranchId = route.destinationBranchId ?? lastStop?.branchId;
+                if (destBranchId) {
+                  const destBranch = await BranchModel.findById(destBranchId)
+                    .select('name')
+                    .lean();
+                  destinationBranchName = destBranch?.name || null;
+                }
+
                 const created = await TransportationModel.create({
                   companyId: route.companyId,
                   sourceRouteId: route._id,
                   source: {
                     branchId: route.originBranchId,
+                    name: sourceBranchName, // ← ADD THIS
                     location: firstStop?.location,
                   },
                   destination: {
                     branchId: route.destinationBranchId ?? lastStop?.branchId,
+                    name: destinationBranchName, // ← ADD THIS
                     location: lastStop?.location,
                   },
                   manifestIds,
@@ -1698,15 +1719,36 @@ export class SocketService {
                 const firstStop = route.stops[0];
                 const lastStop = route.stops[route.stops.length - 1];
 
+                // ── Get branch names for source and destination ──────────────────
+                let sourceBranchName = null;
+                let destinationBranchName = null;
+
+                if (route.originBranchId) {
+                  const sourceBranch = await BranchModel.findById(route.originBranchId)
+                    .select('name')
+                    .lean();
+                  sourceBranchName = sourceBranch?.name || null;
+                }
+
+                const destBranchId = route.destinationBranchId ?? lastStop?.branchId;
+                if (destBranchId) {
+                  const destBranch = await BranchModel.findById(destBranchId)
+                    .select('name')
+                    .lean();
+                  destinationBranchName = destBranch?.name || null;
+                }
+
                 const created = await TransportationModel.create({
                   companyId: route.companyId,
                   sourceRouteId: route._id,
                   source: {
                     branchId: route.originBranchId,
+                    name: sourceBranchName, // ← ADD THIS
                     location: firstStop?.location,
                   },
                   destination: {
                     branchId: route.destinationBranchId ?? lastStop?.branchId,
+                    name: destinationBranchName, // ← ADD THIS
                     location: lastStop?.location,
                   },
                   manifestIds,
@@ -2196,9 +2238,16 @@ export class SocketService {
               stop.completedManifests = finalCompletedManifests;
               stop.discrepancyManifests = discrepancyManifestOids;
 
-              await route.completeStop(data.stopIndex, [], [], data.notes);
+              // ── Mark the stop as completed ──────────────────────────────────────
+              stop.status = 'completed';
+              stop.actualDeparture = new Date();
+              
+              // Update stop completion stats
+              route.completedStops += 1;
+              route.currentStopIndex = data.stopIndex + 1;
 
               // ── Update manifests and packages ───────────────────────────────────
+              // 1. Mark completed manifests as 'arrived' and cascade to packages
               if (finalCompletedManifests.length > 0) {
                 for (const manifestId of finalCompletedManifests) {
                   const manifest = await ManifestModel.findById(manifestId);
@@ -2207,15 +2256,112 @@ export class SocketService {
                     await manifest.markArrived(
                       new mongoose.Types.ObjectId(userId)
                     );
+                  } else if (manifest && manifest.status === 'loaded') {
+                    // If still loaded, mark as arrived directly
+                    manifest.status = 'arrived';
+                    manifest.arrivedAt = new Date();
+                    if (manifest.transportLeg) {
+                      manifest.transportLeg.arrivedAt = new Date();
+                    }
+                    await manifest.save();
+                    // Cascade to packages
+                    await (manifest as any)._cascadeArrivedToPackages(
+                      new mongoose.Types.ObjectId(userId)
+                    );
                   }
                 }
               }
 
+              // 2. Mark discrepancy manifests
               if (discrepancyManifestOids.length > 0) {
                 await ManifestModel.updateMany(
                   { _id: { $in: discrepancyManifestOids } },
-                  { $set: { status: "discrepancy" } }
+                  { 
+                    $set: { 
+                      status: "discrepancy",
+                      updatedAt: new Date()
+                    } 
+                  }
                 );
+                
+                // Also update packages in discrepancy manifests
+                for (const manifestId of discrepancyManifestOids) {
+                  const manifest = await ManifestModel.findById(manifestId);
+                  if (manifest && manifest.packages) {
+                    const packageIds = manifest.packages.map((p: any) => p.packageId);
+                    if (packageIds.length > 0) {
+                      await PackageModel.updateMany(
+                        { _id: { $in: packageIds } },
+                        {
+                          $set: {
+                            status: 'discrepancy_found',
+                          },
+                          $push: {
+                            trackingHistory: {
+                              status: 'discrepancy_found',
+                              userId: new mongoose.Types.ObjectId(userId),
+                              notes: `Manifest ${manifest.manifestCode} flagged as discrepancy at stop ${data.stopIndex + 1}`,
+                              timestamp: new Date(),
+                            },
+                          },
+                        }
+                      );
+                    }
+                  }
+                }
+              }
+
+              // 3. Handle packages that were in this stop but NOT in any completed manifest
+              // These are packages that might have been unloaded individually
+              if (stop.packageIds && stop.packageIds.length > 0) {
+                // Find which packageIds are NOT in any completed manifest
+                const packagesInCompletedManifests: mongoose.Types.ObjectId[] = [];
+                for (const manifestId of finalCompletedManifests) {
+                  const manifest = await ManifestModel.findById(manifestId);
+                  if (manifest && manifest.packages) {
+                    const pkgIds = manifest.packages.map((p: any) => p.packageId);
+                    packagesInCompletedManifests.push(...pkgIds);
+                  }
+                }
+                
+                // Get package IDs that are not in any completed manifest
+                const stopPackageIds = stop.packageIds.map((id: mongoose.Types.ObjectId) => id.toString());
+                const completedPkgIds = packagesInCompletedManifests.map((id: mongoose.Types.ObjectId) => id.toString());
+                const remainingPackageIds = stopPackageIds.filter(id => !completedPkgIds.includes(id));
+                
+                if (remainingPackageIds.length > 0) {
+                  // Mark these packages as arrived at destination branch
+                  const remainingOids = remainingPackageIds.map(id => new mongoose.Types.ObjectId(id));
+                  await PackageModel.updateMany(
+                    { _id: { $in: remainingOids } },
+                    {
+                      $set: {
+                        status: 'at_destination_branch',
+                        currentBranchId: stop.branchId,
+                      },
+                      $push: {
+                        trackingHistory: {
+                          status: 'at_destination_branch',
+                          branchId: stop.branchId,
+                          userId: new mongoose.Types.ObjectId(userId),
+                          notes: `Package arrived at destination branch via stop ${data.stopIndex + 1}`,
+                          timestamp: new Date(),
+                        },
+                      },
+                    }
+                  );
+                }
+              }
+
+              // ── Save the route ──────────────────────────────────────────────────
+              await route.save();
+
+              // ── Set next stop if exists ─────────────────────────────────────────
+              if (route.currentStopIndex < route.stops.length) {
+                const nextStop = route.stops[route.currentStopIndex];
+                nextStop.status = 'pending';
+                nextStop.expectedArrival = new Date();
+                await route.save();
               }
 
               if (stop.branchId) {
@@ -2249,6 +2395,28 @@ export class SocketService {
                 if (transportation) {
                   // Use the model's markArrived method
                   await transportation.markArrived();
+                }
+
+                // ── Update all remaining manifests (if any) ──────────────────────
+                // Get all manifest IDs from all stops that haven't been completed
+                const allManifestIds = route.stops.flatMap(
+                  (s: any) => s.manifestIds ?? [],
+                );
+                const completedManifestIdStrings = finalCompletedManifests.map(id => id.toString());
+                const remainingManifestIds = allManifestIds.filter(
+                  (id: mongoose.Types.ObjectId) => !completedManifestIdStrings.includes(id.toString())
+                );
+                
+                if (remainingManifestIds.length > 0) {
+                  await ManifestModel.updateMany(
+                    { _id: { $in: remainingManifestIds } },
+                    {
+                      $set: {
+                        status: 'arrived',
+                        arrivedAt: new Date(),
+                      },
+                    }
+                  );
                 }
 
                 if (route.type === "hub_to_hub" && stop.branchId) {
@@ -2377,7 +2545,7 @@ export class SocketService {
                 message: err.message || "Failed to process QR scan.",
               });
             }
-          },
+          }
         );
 
         // Add this method to your SocketService class
@@ -2449,6 +2617,92 @@ export class SocketService {
               // ── Cancel the transportation ─────────────────────────────────────
               await transportation.cancel(data.reason);
 
+              // ── Update all stops in the route to 'skipped' or 'failed' ──────
+              // Mark all pending/active stops as skipped
+              for (let i = 0; i < route.stops.length; i++) {
+                const stop = route.stops[i];
+                // Skip stops that are already completed
+                if (stop.status === 'completed') continue;
+                
+                // Mark as skipped
+                stop.status = 'skipped';
+                stop.issues = [...(stop.issues || []), `Route cancelled: ${data.reason}`];
+                
+                // If the stop had manifestIds, update the manifests
+                if (stop.manifestIds && stop.manifestIds.length > 0) {
+                  // Update all manifests in this stop to 'cancelled'
+                  await ManifestModel.updateMany(
+                    { _id: { $in: stop.manifestIds } },
+                    { 
+                      $set: { 
+                        status: 'cancelled',
+                        cancelledAt: new Date(),
+                        notes: `Route ${route.routeNumber} cancelled: ${data.reason}`
+                      }
+                    }
+                  );
+                  
+                  // Also update packages inside these manifests
+                  for (const manifestId of stop.manifestIds) {
+                    const manifest = await ManifestModel.findById(manifestId);
+                    if (manifest && manifest.packages) {
+                      // Update all packages in this manifest
+                      const packageIds = manifest.packages.map((p: any) => p.packageId);
+                      if (packageIds.length > 0) {
+                        await PackageModel.updateMany(
+                          { _id: { $in: packageIds } },
+                          {
+                            $set: {
+                              status: 'cancelled',
+                              currentManifestId: null,
+                            },
+                            $push: {
+                              trackingHistory: {
+                                status: 'cancelled',
+                                userId: new mongoose.Types.ObjectId(userId),
+                                notes: `Manifest ${manifest.manifestCode} cancelled due to route cancellation: ${data.reason}`,
+                                timestamp: new Date(),
+                              },
+                            },
+                          }
+                        );
+                      }
+                    }
+                  }
+                }
+                
+                // If the stop had packageIds (for local delivery), update the packages
+                if (stop.packageIds && stop.packageIds.length > 0) {
+                  await PackageModel.updateMany(
+                    { _id: { $in: stop.packageIds } },
+                    {
+                      $set: {
+                        status: 'cancelled',
+                        assignedDelivererId: null,
+                      },
+                      $push: {
+                        trackingHistory: {
+                          status: 'cancelled',
+                          userId: new mongoose.Types.ObjectId(userId),
+                          notes: `Route ${route.routeNumber} cancelled: ${data.reason}`,
+                          timestamp: new Date(),
+                        },
+                      },
+                    }
+                  );
+                }
+              }
+
+              // Save route after updating stops
+              await route.save();
+
+              // ── Update transporter status ─────────────────────────────────────
+              await TransporterModel.findByIdAndUpdate(transporter._id, {
+                availabilityStatus: "available",
+                currentRouteId: null,
+                lastActiveAt: new Date(),
+              });
+
               // ── Fetch the updated transportation ──────────────────────────────
               const updatedTransportation = await TransportationModel.findById(
                 transportation._id
@@ -2458,13 +2712,6 @@ export class SocketService {
                 .populate('assignedTransporterId', 'userId fullName')
                 .populate('assignedVehicleId', 'licensePlate type brand')
                 .lean();
-
-              // ── Update transporter status ─────────────────────────────────────
-              await TransporterModel.findByIdAndUpdate(transporter._id, {
-                availabilityStatus: "available",
-                currentRouteId: null,
-                lastActiveAt: new Date(),
-              });
 
               // ── Build structured response ─────────────────────────────────────
               const transportationData = updatedTransportation as any;
@@ -5498,7 +5745,7 @@ export class SocketService {
       sourceRouteId: route._id,
     }).lean();
 
-    // If no transportation exists, create one (shouldn't happen if route is active)
+    // ── Find or create transportation for this route ──────────────────────────
     if (!transportation) {
       // Flatten manifestIds across all stops
       const manifestIds = route.stops.reduce<mongoose.Types.ObjectId[]>(
@@ -5521,12 +5768,34 @@ export class SocketService {
       const firstStop = route.stops[0];
       const lastStop = route.stops[route.stops.length - 1];
 
+      // ── Get branch names for source and destination ──────────────────
+      let sourceBranchName = null;
+      let destinationBranchName = null;
+
+      if (route.originBranchId) {
+        const sourceBranch = await BranchModel.findById(route.originBranchId)
+          .select('name')
+          .lean();
+        sourceBranchName = sourceBranch?.name || null;
+      }
+
+      const destBranchId = route.destinationBranchId ?? lastStop?.branchId;
+      if (destBranchId) {
+        const destBranch = await BranchModel.findById(destBranchId)
+          .select('name')
+          .lean();
+        destinationBranchName = destBranch?.name || null;
+      }
+
       const sourcePoint = {
         branchId: route.originBranchId,
+        name: sourceBranchName, // ← ADD THIS
         location: firstStop?.location,
       };
+      
       const destinationPoint = {
         branchId: route.destinationBranchId ?? lastStop?.branchId,
+        name: destinationBranchName, // ← ADD THIS
         location: lastStop?.location,
       };
 
@@ -5547,6 +5816,7 @@ export class SocketService {
         actualDeliveryTime: route.actualEnd,
         departedAt: route.actualStart,
       });
+      
       transportation = created.toObject();
     } else {
       // ── Sync transportation status with route status ────────────────────────
