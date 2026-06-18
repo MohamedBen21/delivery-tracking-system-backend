@@ -17356,7 +17356,6 @@ export const getTransportationsHistory = catchAsyncError(
 
     let transporterId: mongoose.Types.ObjectId;
 
-
     if (req.user?.role === 'transporter') {
       const transporter = await TransporterModel.findOne({ userId: req.user._id });
       if (!transporter) {
@@ -17369,17 +17368,14 @@ export const getTransportationsHistory = catchAsyncError(
       return next(new ErrorHandler("Valid transporterId is required.", 400));
     }
 
-
     const transporter = await TransporterModel.findById(transporterId);
     if (!transporter) {
       return next(new ErrorHandler("Transporter not found.", 404));
     }
 
-
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
     const skip = (page - 1) * limit;
-
 
     const validSortFields = [
       'createdAt', 'updatedAt', 'departedAt', 'actualDeliveryTime',
@@ -17391,7 +17387,6 @@ export const getTransportationsHistory = catchAsyncError(
       : 'createdAt';
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort: Record<string, 1 | -1> = { [sortBy]: sortOrder };
-
 
     const VALID_TRANSPORTATION_STATUSES: TransportationStatus[] = [
       "pending", "in_transit", "arrived", "completed", "cancelled",
@@ -17412,7 +17407,6 @@ export const getTransportationsHistory = catchAsyncError(
     if (dateFrom && dateTo && dateFrom > dateTo) {
       return next(new ErrorHandler("dateFrom cannot be after dateTo.", 400));
     }
-
 
     const parseNum = (key: string): number | null => {
       if (req.query[key] === undefined) return null;
@@ -17439,7 +17433,6 @@ export const getTransportationsHistory = catchAsyncError(
     const minManifestCount = parseNum("minManifestCount");
     const maxManifestCount = parseNum("maxManifestCount");
 
-
     const sourceBranchId = req.query.sourceBranchId as string;
     const destinationBranchId = req.query.destinationBranchId as string;
 
@@ -17450,11 +17443,19 @@ export const getTransportationsHistory = catchAsyncError(
       return next(new ErrorHandler("Invalid destinationBranchId format.", 400));
     }
 
-
+    // Base query
     const query: any = { assignedTransporterId: transporterId };
 
-
-    if (req.query.status) {
+    // ADDED: Statuses filter (arrived or cancelled)
+    if (req.query.statuses) {
+      const statuses = (req.query.statuses as string).split(",").map(s => s.trim());
+      const invalid = statuses.filter(s => !VALID_TRANSPORTATION_STATUSES.includes(s as TransportationStatus));
+      if (invalid.length > 0) {
+        return next(new ErrorHandler(`Invalid statuses: ${invalid.join(", ")}.`, 400));
+      }
+      query.status = { $in: statuses };
+    } else if (req.query.status) {
+      // Keep single status filter as fallback
       const status = req.query.status as string;
       if (!VALID_TRANSPORTATION_STATUSES.includes(status as TransportationStatus)) {
         return next(new ErrorHandler(`Invalid status: ${status}.`, 400));
@@ -17462,22 +17463,33 @@ export const getTransportationsHistory = catchAsyncError(
       query.status = status;
     }
 
-
-    if (dateFrom || dateTo) {
+    // ADDED: Search filter
+    if (req.query.search) {
+      const searchRe = new RegExp(req.query.search as string, "i");
       query.$or = [
-        { createdAt: {} as any },
-        { actualDeliveryTime: {} as any },
+        ...(query.$or || []),
+        { manifestCode: searchRe },
+        { internalReference: searchRe },
+        { notes: searchRe },
+        { "packages.trackingNumber": searchRe },
       ];
-      if (dateFrom) {
-        query.$or[0].createdAt.$gte = dateFrom;
-        query.$or[1].actualDeliveryTime.$gte = dateFrom;
-      }
-      if (dateTo) {
-        query.$or[0].createdAt.$lte = dateTo;
-        query.$or[1].actualDeliveryTime.$lte = dateTo;
-      }
     }
 
+    if (dateFrom || dateTo) {
+      query.$or = query.$or || [];
+      query.$or.push(
+        { createdAt: {} as any },
+        { actualDeliveryTime: {} as any }
+      );
+      if (dateFrom) {
+        query.$or[query.$or.length - 2].createdAt.$gte = dateFrom;
+        query.$or[query.$or.length - 1].actualDeliveryTime.$gte = dateFrom;
+      }
+      if (dateTo) {
+        query.$or[query.$or.length - 2].createdAt.$lte = dateTo;
+        query.$or[query.$or.length - 1].actualDeliveryTime.$lte = dateTo;
+      }
+    }
 
     if (minWeight !== null) query.totalWeight = { $gte: minWeight };
     if (maxWeight !== null) {
@@ -17496,7 +17508,6 @@ export const getTransportationsHistory = catchAsyncError(
       query.manifestCount = { ...(query.manifestCount || {}), $lte: maxManifestCount };
     }
 
-
     let routeStatusFilter: string | null = null;
     if (req.query.routeStatus) {
       const rs = req.query.routeStatus as string;
@@ -17505,7 +17516,6 @@ export const getTransportationsHistory = catchAsyncError(
       }
       routeStatusFilter = rs;
     }
-
 
     const needsAdvancedFiltering = routeStatusFilter || sourceBranchId || destinationBranchId;
 
@@ -17542,10 +17552,6 @@ export const getTransportationsHistory = catchAsyncError(
       total = filtered.length;
       transportations = filtered.slice(skip, skip + limit);
 
-      // Attach _route directly on the existing Mongoose documents instead of
-      // spreading them ({...t}) — spreading a Mongoose doc only copies its
-      // internal own properties and silently drops schema fields like
-      // `source`/`destination`, which broke this branch's response.
       transportations.forEach((t: any) => {
         t._route = routeMap.get(t.sourceRouteId?.toString());
       });
@@ -17555,18 +17561,13 @@ export const getTransportationsHistory = catchAsyncError(
         TransportationModel.find(query)
           .sort(sort)
           .skip(skip)
-          .limit(limit)
-          ,
+          .limit(limit),
       ]);
       total = countResult;
       transportations = transportationsResult;
     }
 
-
-    // Resolve branch names for source/destination.
-    // source.name / destination.name are snapshots saved on the transportation
-    // document at creation time. If they were never set, or the branch was
-    // renamed since, fall back to a live lookup against the Branch collection.
+    // Resolve branch names for source/destination
     const branchIdsToResolve = new Set<string>();
     transportations.forEach((t: any) => {
       if (t.source?.branchId) branchIdsToResolve.add(t.source.branchId.toString());
@@ -17581,7 +17582,6 @@ export const getTransportationsHistory = catchAsyncError(
       );
       branches.forEach((b: any) => branchNameMap.set(b._id.toString(), b.name));
     }
-
 
     const allTransporterTransportations = await TransportationModel.find({
       assignedTransporterId: transporterId,
@@ -17606,7 +17606,6 @@ export const getTransportationsHistory = catchAsyncError(
     const totalManifestsTransported = completedTransportations.reduce((sum, t) => sum + (t.manifestCount || 0), 0);
     const totalPackagesTransported = completedTransportations.reduce((sum, t) => sum + (t.packageCount || 0), 0);
 
-
     const statusBreakdown: Record<TransportationStatus, number> = {
       pending: pendingTransportations.length,
       in_transit: inTransitTransportations.length,
@@ -17615,7 +17614,6 @@ export const getTransportationsHistory = catchAsyncError(
       cancelled: cancelledTransportations.length,
     };
 
-
     const formattedTransportations = transportations.map((t: any) => ({
       id: t._id,
       transportationCode: t.transportationCode,
@@ -17623,7 +17621,6 @@ export const getTransportationsHistory = catchAsyncError(
       sourceRouteId: t.sourceRouteId,
       source: t.source ? {
         branchId: t.source.branchId,
-
         name: t.source.name || (t.source.branchId ? branchNameMap.get(t.source.branchId.toString()) : undefined) || null,
         location: t.source.location,
       } : null,
@@ -17646,12 +17643,10 @@ export const getTransportationsHistory = catchAsyncError(
       notes: t.notes ?? null,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
-      // Virtuals
       isInTransit: t.isInTransit,
       isCompleted: t.isCompleted,
       isOverdue: t.isOverdue,
       durationMinutes: t.durationMinutes ?? null,
-      // Route info if available (from advanced filtering)
       route: t._route ? {
         id: t._route._id,
         name: t._route.name,
@@ -17693,6 +17688,8 @@ export const getTransportationsHistory = catchAsyncError(
         filters: {
           transporterId,
           status: req.query.status ?? null,
+          statuses: req.query.statuses ?? null,
+          search: req.query.search ?? null,
           routeStatus: req.query.routeStatus ?? null,
           dateFrom: dateFrom ?? null,
           dateTo: dateTo ?? null,
@@ -17713,7 +17710,6 @@ export const getTransportationsHistory = catchAsyncError(
     });
   },
 );
-
 
 
 
