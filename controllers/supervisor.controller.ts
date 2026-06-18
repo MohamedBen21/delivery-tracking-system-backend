@@ -663,17 +663,10 @@ export const getMyDeliverers = catchAsyncError(
       return next(new ErrorHandler("Invalid branch ID", 400));
     }
 
-    const [branch, supervisor] = await Promise.all([
-      BranchModel.findById(branchId).lean(),
-      SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
-    ]);
+    const branch = await BranchModel.findById(branchId).lean();
 
     if (!branch) {
       return next(new ErrorHandler("Branch not found", 404));
-    }
-
-    if (!supervisor || !supervisor.isActive) {
-      return next(new ErrorHandler("You are not an active supervisor of this branch", 403));
     }
 
     const delivererQuery: mongoose.FilterQuery<typeof DelivererModel> = {
@@ -1358,6 +1351,7 @@ export const getTransporter = catchAsyncError(
 
 export const getMyTransporters = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+    console.log("Fetching transporters for user:", req.user);
     const userId = req.user?._id;
     const userRole = req.user?.role;
     const { companyId } = req.params;
@@ -1392,6 +1386,9 @@ export const getMyTransporters = catchAsyncError(
       if (!supervisor || !supervisor.isActive) {
         return next(new ErrorHandler("You are not an active supervisor of this company", 403));
       }
+      isAuthorized = true;
+    }
+    else if (userRole === "loader") {
       isAuthorized = true;
     }
 
@@ -4965,8 +4962,8 @@ interface IBranchPackagesQuery {
   search?: string;          // trackingNumber prefix OR recipient name/phone
   needsAttention?: string;  // "true" → status ∈ {failed_delivery, damaged, lost, on_hold}
   isOverdue?: string;       // "true" → estimatedDeliveryTime < now AND not terminal
-  page?: string;
-  limit?: string;
+  pageNumber?: string;
+  pageSize?: string;
   sortBy?: string;
   sortOrder?: "asc" | "desc";
 }
@@ -5108,16 +5105,11 @@ const PROJECT_STRIP_HISTORY: mongoose.PipelineStage.Project = {
 export const getBranchPackages = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      console.log("getBranchPackages called with query:", req.query);
 
-      const supervisorUserId = req.user?._id;
       const { branchId } = req.params;
 
 
-      if (!supervisorUserId) {
-        return next(
-          new ErrorHandler("Unauthorized, you are not authenticated.", 401),
-        );
-      }
 
 
       if (!branchId || !mongoose.Types.ObjectId.isValid(branchId.toString())) {
@@ -5136,15 +5128,15 @@ export const getBranchPackages = catchAsyncError(
         search,
         needsAttention,
         isOverdue,
-        page = "1",
-        limit = "20",
+        pageNumber = "1",
+        pageSize = "10",
         sortBy = "createdAt",
         sortOrder = "desc",
       } = req.query as IBranchPackagesQuery;
 
 
-      const pageNum = parseInt(page, 10);
-      const limitNum = parseInt(limit, 10);
+      const pageNum = parseInt(pageNumber, 10);
+      const limitNum = parseInt(pageSize, 10);
 
       if (isNaN(pageNum) || pageNum < 1) {
         return next(new ErrorHandler("page must be a positive integer", 400));
@@ -5255,23 +5247,12 @@ export const getBranchPackages = catchAsyncError(
       }
 
 
-      const [branch, supervisor] = await Promise.all([
-        BranchModel.findById(branchId).lean(),
-        SupervisorModel.findOne({ userId: supervisorUserId, branchId }).lean(),
-      ]);
+      const branch = await BranchModel.findById(branchId).lean();
 
       if (!branch) {
         return next(new ErrorHandler("Branch not found", 404));
       }
 
-      if (!supervisor || !(supervisor as any).isActive) {
-        return next(
-          new ErrorHandler(
-            "You are not an active supervisor of this branch",
-            403,
-          ),
-        );
-      }
 
 
       const baseMatch: Record<string, any> = {
@@ -5326,200 +5307,7 @@ export const getBranchPackages = catchAsyncError(
       const sortDirection = sortOrder === "asc" ? 1 : -1;
       const skip = (pageNum - 1) * limitNum;
 
-      // ─────────────────────────────────────────────────────────────────────
-      //  PATH A — home delivery: split response
-      //
-      //  Groups packages by lifecycle stage:
-      //    pendingPackages   → pending, accepted, at_origin_branch
-      //    inTransit         → in_transit_to_branch, manifested
-      //    atBranch          → at_destination_branch
-      //    outForDelivery    → out_for_delivery, failed_delivery, failed_delivery_attempt, rescheduled
-      //    terminal          → delivered, cancelled, returned, lost, damaged, on_hold
-      // ─────────────────────────────────────────────────────────────────────
-      const isHomePath =
-        deliveryType === "home" || deliveryType === undefined;
-
-      if (isHomePath) {
-        const callerStatuses: string[] | null = baseMatch.status
-          ? baseMatch.status.$in
-            ? baseMatch.status.$in
-            : [baseMatch.status]
-          : null;
-
-        const sharedMatch: Record<string, any> = { ...baseMatch, deliveryType: "home" };
-        delete sharedMatch.status;
-
-        /**
-         * Returns a $match stage for the given target statuses.
-         * If the caller requested specific statuses, only matching ones pass.
-         * If no caller filter, all target statuses pass.
-         */
-        const multiStatusMatch = (targetStatuses: string[]): mongoose.PipelineStage.Match => {
-          if (callerStatuses === null) {
-            return { $match: { status: { $in: targetStatuses } } };
-          }
-          const allowed = targetStatuses.filter((s) => callerStatuses.includes(s));
-          if (allowed.length === 0) {
-            return { $match: { status: "__no_match__" } };
-          }
-          return { $match: { status: allowed.length === 1 ? allowed[0] : { $in: allowed } } };
-        };
-
-        const singleStatusMatch = (targetStatus: string): mongoose.PipelineStage.Match => {
-          if (callerStatuses === null || callerStatuses.includes(targetStatus)) {
-            return { $match: { status: targetStatus } };
-          }
-          return { $match: { status: "__no_match__" } };
-        };
-
-        const splitPipeline: mongoose.PipelineStage[] = [
-          { $match: sharedMatch },
-          COMPUTED_FIELDS_STAGE,
-          ...LOOKUP_STAGES,
-          { $sort: { [sortBy]: sortDirection } },
-          {
-            $facet: {
-
-              pendingPackages: [
-                multiStatusMatch(["pending", "accepted", "at_origin_branch"]),
-                { $skip: skip },
-                { $limit: limitNum },
-                PROJECT_STRIP_HISTORY,
-              ],
-              pendingCount: [
-                multiStatusMatch(["pending", "accepted", "at_origin_branch"]),
-                { $count: "count" },
-              ],
-
-              inTransit: [
-                multiStatusMatch(["in_transit_to_branch", "manifested"]),
-                { $skip: skip },
-                { $limit: limitNum },
-                PROJECT_STRIP_HISTORY,
-              ],
-              inTransitCount: [
-                multiStatusMatch(["in_transit_to_branch", "manifested"]),
-                { $count: "count" },
-              ],
-
-
-              atBranch: [
-                singleStatusMatch("at_destination_branch"),
-                { $skip: skip },
-                { $limit: limitNum },
-                PROJECT_STRIP_HISTORY,
-              ],
-              atBranchCount: [
-                singleStatusMatch("at_destination_branch"),
-                { $count: "count" },
-              ],
-
-
-              outForDelivery: [
-                multiStatusMatch(["out_for_delivery", "failed_delivery", "failed_delivery_attempt", "rescheduled"]),
-                { $skip: skip },
-                { $limit: limitNum },
-                PROJECT_STRIP_HISTORY,
-              ],
-              outForDeliveryCount: [
-                multiStatusMatch(["out_for_delivery", "failed_delivery", "failed_delivery_attempt", "rescheduled"]),
-                { $count: "count" },
-              ],
-
-
-              terminal: [
-                multiStatusMatch(["delivered", "cancelled", "returned", "lost", "damaged", "on_hold"]),
-                { $skip: skip },
-                { $limit: limitNum },
-                PROJECT_STRIP_HISTORY,
-              ],
-              terminalCount: [
-                multiStatusMatch(["delivered", "cancelled", "returned", "lost", "damaged", "on_hold"]),
-                { $count: "count" },
-              ],
-
-
-              statusBreakdown: [
-                { $group: { _id: "$status", count: { $sum: 1 } } },
-              ],
-              actionableCounters: [
-                {
-                  $group: {
-                    _id: null,
-                    readyForDispatch: {
-                      $sum: { $cond: ["$isReadyForDispatch", 1, 0] },
-                    },
-                    needsAttention: {
-                      $sum: { $cond: ["$needsAttentionFlag", 1, 0] },
-                    },
-                    overdue: {
-                      $sum: { $cond: ["$isOverdueFlag", 1, 0] },
-                    },
-                  },
-                },
-              ],
-            },
-          },
-        ];
-
-        const [result] = await PackageModel.aggregate(splitPipeline);
-
-        const pendingTotal = result.pendingCount[0]?.count ?? 0;
-        const inTransitTotal = result.inTransitCount[0]?.count ?? 0;
-        const atBranchTotal = result.atBranchCount[0]?.count ?? 0;
-        const outForDeliveryTotal = result.outForDeliveryCount[0]?.count ?? 0;
-        const terminalTotal = result.terminalCount[0]?.count ?? 0;
-
-        const statusBreakdown = Object.fromEntries(
-          (result.statusBreakdown as { _id: string; count: number }[]).map(
-            ({ _id, count }) => [_id, count],
-          ),
-        );
-
-        const counters = result.actionableCounters[0] ?? {
-          readyForDispatch: 0,
-          needsAttention: 0,
-          overdue: 0,
-        };
-        delete counters._id;
-
-        return res.status(200).json({
-          success: true,
-          deliveryType: "home",
-          data: {
-            pending: {
-              packages: result.pendingPackages,
-              pagination: paginationMeta(pendingTotal, pageNum, limitNum),
-            },
-            inTransit: {
-              packages: result.inTransit,
-              pagination: paginationMeta(inTransitTotal, pageNum, limitNum),
-            },
-            atBranch: {
-              packages: result.atBranch,
-              pagination: paginationMeta(atBranchTotal, pageNum, limitNum),
-            },
-            outForDelivery: {
-              packages: result.outForDelivery,
-              pagination: paginationMeta(outForDeliveryTotal, pageNum, limitNum),
-            },
-            terminal: {
-              packages: result.terminal,
-              pagination: paginationMeta(terminalTotal, pageNum, limitNum),
-            },
-          },
-          summary: {
-            byStatus: statusBreakdown,
-            actionable: counters,
-          },
-        });
-      }
-
-      // ─────────────────────────────────────────────────────────────────────
-      //  PATH B — branch_pickup: flat paginated response
-      // ─────────────────────────────────────────────────────────────────────
-
-      const flatPipeline: mongoose.PipelineStage[] = [
+      const pipeline: mongoose.PipelineStage[] = [
         { $match: baseMatch },
         COMPUTED_FIELDS_STAGE,
         ...LOOKUP_STAGES,
@@ -5531,21 +5319,45 @@ export const getBranchPackages = catchAsyncError(
               { $limit: limitNum },
               PROJECT_STRIP_HISTORY,
             ],
-            totalCount: [{ $count: "count" }],
+            totalCount: [
+              { $count: "count" },
+            ],
             statusBreakdown: [
-              { $group: { _id: "$status", count: { $sum: 1 } } },
+              {
+                $group: {
+                  _id: "$status",
+                  count: { $sum: 1 },
+                },
+              },
             ],
             actionableCounters: [
               {
                 $group: {
                   _id: null,
-                  readyForPickup: {
-                    $sum: { $cond: ["$isReadyForPickup", 1, 0] },
+                  readyForDispatch: {
+                    $sum: {
+                      $cond: [
+                        {
+                          $or: [
+                            "$isReadyForDispatch",
+                            "$isReadyForPickup",
+                          ],
+                        },
+                        1,
+                        0,
+                      ],
+                    },
                   },
                   needsAttention: {
-                    $sum: { $cond: ["$needsAttentionFlag", 1, 0] },
+                    $sum: {
+                      $cond: ["$needsAttentionFlag", 1, 0],
+                    },
                   },
-                  overdue: { $sum: { $cond: ["$isOverdueFlag", 1, 0] } },
+                  overdue: {
+                    $sum: {
+                      $cond: ["$isOverdueFlag", 1, 0],
+                    },
+                  },
                 },
               },
             ],
@@ -5553,10 +5365,10 @@ export const getBranchPackages = catchAsyncError(
         },
       ];
 
-      const [result] = await PackageModel.aggregate(flatPipeline);
+      const [result] = await PackageModel.aggregate(pipeline);
 
-      const total: number = result.totalCount[0]?.count ?? 0;
-      const totalPages = Math.ceil(total / limitNum);
+      const totalCount = result.totalCount[0]?.count ?? 0;
+      const totalPages = Math.ceil(totalCount / limitNum);
 
       const statusBreakdown = Object.fromEntries(
         (result.statusBreakdown as { _id: string; count: number }[]).map(
@@ -5565,24 +5377,26 @@ export const getBranchPackages = catchAsyncError(
       );
 
       const counters = result.actionableCounters[0] ?? {
-        readyForPickup: 0,
+        readyForDispatch: 0,
         needsAttention: 0,
         overdue: 0,
       };
+
       delete counters._id;
 
       return res.status(200).json({
         success: true,
-        deliveryType: "branch_pickup",
         data: result.data,
-        pagination: paginationMeta(total, pageNum, limitNum),
+        pagination: {
+          pageNumber: pageNum,
+          pageSize: limitNum,
+          totalPages,
+        },
         summary: {
           byStatus: statusBreakdown,
           actionable: counters,
         },
       });
-
-
     } catch (error: any) {
 
       if (error.name === "ValidationError") {
@@ -18842,20 +18656,20 @@ export const getManifestsPaginatedFromRoute = catchAsyncError(
         companyId: m.companyId,
         originBranch: m.originBranchId
           ? {
-              id: m.originBranchId._id,
-              name: m.originBranchId.name,
-              code: m.originBranchId.code,
-              city: m.originBranchId.address?.city,
-            }
+            id: m.originBranchId._id,
+            name: m.originBranchId.name,
+            code: m.originBranchId.code,
+            city: m.originBranchId.address?.city,
+          }
           : null,
         destinationBranch: m.destinationBranchId
           ? {
-              id: m.destinationBranchId._id,
-              name: m.destinationBranchId.name,
-              code: m.destinationBranchId.code,
-              city: m.destinationBranchId.address?.city,
-              coordinates: m.destinationBranchId.location?.coordinates,
-            }
+            id: m.destinationBranchId._id,
+            name: m.destinationBranchId.name,
+            code: m.destinationBranchId.code,
+            city: m.destinationBranchId.address?.city,
+            coordinates: m.destinationBranchId.location?.coordinates,
+          }
           : null,
         status: m.status,
         priority: m.priority,
@@ -18864,36 +18678,36 @@ export const getManifestsPaginatedFromRoute = catchAsyncError(
           : null,
         sealInfo: m.sealInfo
           ? {
-              sealedBy: m.sealInfo.sealedBy,
-              sealedAt: m.sealInfo.sealedAt,
-              sealNumber: m.sealInfo.sealNumber,
-              totalWeight: m.sealInfo.totalWeight,
-              packageCount: m.sealInfo.packageCount,
-              notes: m.sealInfo.notes ?? null,
-            }
+            sealedBy: m.sealInfo.sealedBy,
+            sealedAt: m.sealInfo.sealedAt,
+            sealNumber: m.sealInfo.sealNumber,
+            totalWeight: m.sealInfo.totalWeight,
+            packageCount: m.sealInfo.packageCount,
+            notes: m.sealInfo.notes ?? null,
+          }
           : null,
         transportLeg: m.transportLeg
           ? {
-              vehicle: m.transportLeg.vehicleId
-                ? {
-                    id: m.transportLeg.vehicleId._id,
-                    registrationNumber: m.transportLeg.vehicleId.registrationNumber,
-                    type: m.transportLeg.vehicleId.type,
-                  }
-                : null,
-              transporter: m.transportLeg.transporterId
-                ? {
-                    id: m.transportLeg.transporterId._id,
-                    name: m.transportLeg.transporterId.name,
-                    email: m.transportLeg.transporterId.email,
-                    phone: m.transportLeg.transporterId.phone,
-                  }
-                : null,
-              assignedAt: m.transportLeg.assignedAt,
-              departedAt: m.transportLeg.departedAt ?? null,
-              arrivedAt: m.transportLeg.arrivedAt ?? null,
-              estimatedArrival: m.transportLeg.estimatedArrival ?? null,
-            }
+            vehicle: m.transportLeg.vehicleId
+              ? {
+                id: m.transportLeg.vehicleId._id,
+                registrationNumber: m.transportLeg.vehicleId.registrationNumber,
+                type: m.transportLeg.vehicleId.type,
+              }
+              : null,
+            transporter: m.transportLeg.transporterId
+              ? {
+                id: m.transportLeg.transporterId._id,
+                name: m.transportLeg.transporterId.name,
+                email: m.transportLeg.transporterId.email,
+                phone: m.transportLeg.transporterId.phone,
+              }
+              : null,
+            assignedAt: m.transportLeg.assignedAt,
+            departedAt: m.transportLeg.departedAt ?? null,
+            arrivedAt: m.transportLeg.arrivedAt ?? null,
+            estimatedArrival: m.transportLeg.estimatedArrival ?? null,
+          }
           : null,
         totalDeclaredWeight: m.totalDeclaredWeight,
         packageCount: m.packageCount,
@@ -18911,17 +18725,17 @@ export const getManifestsPaginatedFromRoute = catchAsyncError(
         hasDiscrepancy: m.hasDiscrepancy,
         discrepancy: m.discrepancy
           ? {
-              reportedBy: m.discrepancy.reportedBy,
-              reportedAt: m.discrepancy.reportedAt,
-              expectedCount: m.discrepancy.expectedCount,
-              actualCount: m.discrepancy.actualCount,
-              missingPackageIds: m.discrepancy.missingPackageIds,
-              extraPackageIds: m.discrepancy.extraPackageIds,
-              notes: m.discrepancy.notes,
-              resolvedBy: m.discrepancy.resolvedBy ?? null,
-              resolvedAt: m.discrepancy.resolvedAt ?? null,
-              resolution: m.discrepancy.resolution ?? null,
-            }
+            reportedBy: m.discrepancy.reportedBy,
+            reportedAt: m.discrepancy.reportedAt,
+            expectedCount: m.discrepancy.expectedCount,
+            actualCount: m.discrepancy.actualCount,
+            missingPackageIds: m.discrepancy.missingPackageIds,
+            extraPackageIds: m.discrepancy.extraPackageIds,
+            notes: m.discrepancy.notes,
+            resolvedBy: m.discrepancy.resolvedBy ?? null,
+            resolvedAt: m.discrepancy.resolvedAt ?? null,
+            resolution: m.discrepancy.resolution ?? null,
+          }
           : null,
         isSealed: m.isSealed,
         isInTransit: m.isInTransit,

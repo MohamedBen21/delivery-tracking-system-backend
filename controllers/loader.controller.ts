@@ -151,13 +151,13 @@ export const checkOut = catchAsyncError(
       message: "Shift ended. You are now checked out.",
       data: {
         shiftSummary: {
-          startedAt:              shiftSnapshot.startedAt,
-          endedAt:                new Date(),
-          packagesLoadedCount:    shiftSnapshot.packagesLoadedCount,
-          packagesUnloadedCount:  shiftSnapshot.packagesUnloadedCount,
-          manifestsLoadedCount:   shiftSnapshot.manifestsLoadedCount,
+          startedAt: shiftSnapshot.startedAt,
+          endedAt: new Date(),
+          packagesLoadedCount: shiftSnapshot.packagesLoadedCount,
+          packagesUnloadedCount: shiftSnapshot.packagesUnloadedCount,
+          manifestsLoadedCount: shiftSnapshot.manifestsLoadedCount,
           manifestsUnloadedCount: shiftSnapshot.manifestsUnloadedCount,
-          durationMinutes:        Math.round(
+          durationMinutes: Math.round(
             (Date.now() - new Date(shiftSnapshot.startedAt).getTime()) / 60000,
           ),
         },
@@ -204,7 +204,7 @@ export const createManifest = catchAsyncError(
 
       if (activeBranchId.toString() === destinationBranchId) {
 
-          throw new ErrorHandler("Origin and destination branches cannot be the same.", 400
+        throw new ErrorHandler("Origin and destination branches cannot be the same.", 400
         );
       }
 
@@ -338,8 +338,8 @@ export const createManifest = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { 
-        await session.abortTransaction().catch(() => {});
+      if (!committed && session.inTransaction()) {
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -569,8 +569,8 @@ export const scanPackageIn = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { 
-        await session.abortTransaction().catch(() => {});
+      if (!committed && session.inTransaction()) {
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -715,8 +715,8 @@ export const removePackageFromManifest = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { 
-        await session.abortTransaction().catch(() => {});
+      if (!committed && session.inTransaction()) {
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -775,7 +775,7 @@ export const sealManifest = catchAsyncError(
         throw new ErrorHandler("Cannot seal an empty manifest.", 400);
       }
 
-     
+
       await manifest.seal(
         loaderUserId as mongoose.Types.ObjectId,
         sealNumber.trim().toUpperCase(),
@@ -876,7 +876,7 @@ export const sealManifest = catchAsyncError(
     } finally {
 
       if (!committed && session.inTransaction()) { // Vérifie si elle est encore valide
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -1075,7 +1075,7 @@ export const loadManifestOnTruck = catchAsyncError(
         manifest.manifestCode,
         manifest.packageCount,
         transporterUserId,
-        transporterUserId, 
+        transporterUserId,
         manifest.destinationBranchId.toString()
       ).catch(error => {
 
@@ -1105,7 +1105,7 @@ export const loadManifestOnTruck = catchAsyncError(
       return next(err);
     } finally {
       if (!committed && session.inTransaction()) {
-        await session.abortTransaction().catch(() => {});
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -1130,7 +1130,7 @@ export const markManifestDeparted = catchAsyncError(
       const { manifestId } = req.params;
       const { notes } = req.body as { notes?: string };
 
-      if(!loaderUserId){
+      if (!loaderUserId) {
         return next(new ErrorHandler("Unauthorized.", 401));
       }
 
@@ -1258,8 +1258,8 @@ export const markManifestDeparted = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { 
-        await session.abortTransaction().catch(() => {});
+      if (!committed && session.inTransaction()) {
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -1422,8 +1422,8 @@ export const markManifestArrived = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
-      if (!committed && session.inTransaction()) { 
-        await session.abortTransaction().catch(() => {});
+      if (!committed && session.inTransaction()) {
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -1490,7 +1490,7 @@ export const scanPackageOut = catchAsyncError(
         throw new ErrorHandler(`No package found with tracking number ${trackingNumber}.`, 404);
       }
 
-      
+
       const entry = manifest.packages.find(
         (p: IManifestPackageEntry) =>
           p.packageId.toString() === (packageDoc._id as mongoose.Types.ObjectId).toString(),
@@ -1554,7 +1554,7 @@ export const scanPackageOut = catchAsyncError(
         { session },
       );
 
-      const isFirstScan = manifest.status === "arrived"; 
+      const isFirstScan = manifest.status === "arrived";
 
       await ManifestEventModel.create(
         [
@@ -1606,7 +1606,7 @@ export const scanPackageOut = catchAsyncError(
         { session },
       );
 
-      
+
       const remaining = manifest.packages.filter(
         (p: IManifestPackageEntry) => p.entryStatus === "in_manifest",
       ).length;
@@ -1672,8 +1672,8 @@ export const scanPackageOut = catchAsyncError(
     } catch (err: any) {
       return next(err);
     } finally {
-      if (!committed && session.inTransaction()) { 
-        await session.abortTransaction().catch(() => {});
+      if (!committed && session.inTransaction()) {
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -1694,10 +1694,10 @@ export const remanifestPackage = catchAsyncError(
 
     try {
       const loaderUserId = req.user?._id;
-      const { manifestId } = req.params;   
+      const { manifestId } = req.params;
       const { trackingNumber, newManifestId, notes } = req.body as {
         trackingNumber: string;
-        newManifestId: string;             
+        newManifestId: string;
         notes?: string;
       };
 
@@ -1730,7 +1730,7 @@ export const remanifestPackage = catchAsyncError(
 
       if (!sourceManifest) throw new ErrorHandler("Source manifest not found.", 404);
       if (!targetManifest) throw new ErrorHandler("Target manifest not found.", 404);
-      if (!packageDoc)     throw new ErrorHandler(`Package ${trackingNumber} not found.`, 404);
+      if (!packageDoc) throw new ErrorHandler(`Package ${trackingNumber} not found.`, 404);
 
 
       if (sourceManifest.destinationBranchId.toString() !== activeBranchId.toString()) {
@@ -1892,8 +1892,8 @@ export const remanifestPackage = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { 
-        await session.abortTransaction().catch(() => {});
+      if (!committed && session.inTransaction()) {
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -2050,10 +2050,10 @@ export const closeManifest = catchAsyncError(
           status: "closed",
           closedAt: now,
           summary: {
-            totalPackages:   manifest.packageCount,
-            unloaded:        manifest.packages.filter((p: IManifestPackageEntry) => p.entryStatus === "unloaded").length,
-            remanifested:    manifest.packages.filter((p: IManifestPackageEntry) => p.entryStatus === "remanifested").length,
-            missingOnClose:  missingEntries.length,
+            totalPackages: manifest.packageCount,
+            unloaded: manifest.packages.filter((p: IManifestPackageEntry) => p.entryStatus === "unloaded").length,
+            remanifested: manifest.packages.filter((p: IManifestPackageEntry) => p.entryStatus === "remanifested").length,
+            missingOnClose: missingEntries.length,
           },
         },
       });
@@ -2062,8 +2062,8 @@ export const closeManifest = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { 
-        await session.abortTransaction().catch(() => {});
+      if (!committed && session.inTransaction()) {
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -2125,18 +2125,18 @@ export const flagDiscrepancy = catchAsyncError(
       const [missingPackages, extraPackages] = await Promise.all([
         missingTrackingNumbers.length > 0
           ? PackageModel.find({
-              trackingNumber: { $in: missingTrackingNumbers.map((t: string) => t.toUpperCase()) },
-            }).select("_id").session(session).lean()
+            trackingNumber: { $in: missingTrackingNumbers.map((t: string) => t.toUpperCase()) },
+          }).select("_id").session(session).lean()
           : Promise.resolve([]),
         extraTrackingNumbers.length > 0
           ? PackageModel.find({
-              trackingNumber: { $in: extraTrackingNumbers.map((t: string) => t.toUpperCase()) },
-            }).select("_id").session(session).lean()
+            trackingNumber: { $in: extraTrackingNumbers.map((t: string) => t.toUpperCase()) },
+          }).select("_id").session(session).lean()
           : Promise.resolve([]),
       ]);
 
       const missingIds = missingPackages.map((p: any) => p._id);
-      const extraIds   = extraPackages.map((p: any) => p._id);
+      const extraIds = extraPackages.map((p: any) => p._id);
 
       await manifest.flagDiscrepancy(
         loaderUserId as mongoose.Types.ObjectId,
@@ -2202,7 +2202,7 @@ export const flagDiscrepancy = catchAsyncError(
         manifest.manifestCode,
         missingIds.length,
         extraIds.length
-        
+
       ).catch(error => {
 
         console.error('Manifest discrepancy notification failed:', error);
@@ -2230,8 +2230,8 @@ export const flagDiscrepancy = catchAsyncError(
       return next(err);
     } finally {
 
-      if (!committed && session.inTransaction()) { 
-        await session.abortTransaction().catch(() => {});
+      if (!committed && session.inTransaction()) {
+        await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
     }
@@ -2291,11 +2291,214 @@ export const getMyShift = catchAsyncError(
         currentShift: isCheckedIn ? { ...shift, durationMinutes } : null,
         stats: loader.stats,
         recentScans: (loader.recentScans as any[]).slice(0, 20),
-        activeManifests,      
-        arrivingManifests,   
+        activeManifests,
+        arrivingManifests,
       },
     });
   },
+);
+
+
+export const getManifests = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const loaderUserId = req.user?._id;
+
+    if (!loaderUserId) {
+      return next(new ErrorHandler("Unauthorized.", 401));
+    }
+
+    const loader = await LoaderModel.findOne({
+      userId: loaderUserId,
+      status: "active",
+    }).lean();
+
+    if (!loader) {
+      return next(new ErrorHandler("Active loader profile not found.", 404));
+    }
+
+    const {
+      pageNumber = "1",
+      pageSize = "10",
+      status,
+      priority,
+      search,
+      originBranchId,
+      destinationBranchId,
+      sortBy = "createdAt",
+      sortOrder = "desc",
+    } = req.query;
+
+    const pageNum = Number(pageNumber);
+    const limitNum = Number(pageSize);
+    const skip = (pageNum - 1) * limitNum;
+
+    const match: Record<string, any> = {};
+
+    if (status) {
+      match.status = status;
+    }
+
+    if (priority) {
+      match.priority = priority;
+    }
+
+    if (
+      originBranchId &&
+      mongoose.Types.ObjectId.isValid(originBranchId.toString())
+    ) {
+      match.originBranchId = new mongoose.Types.ObjectId(
+        originBranchId.toString()
+      );
+    }
+
+    if (
+      destinationBranchId &&
+      mongoose.Types.ObjectId.isValid(destinationBranchId.toString())
+    ) {
+      match.destinationBranchId = new mongoose.Types.ObjectId(
+        destinationBranchId.toString()
+      );
+    }
+
+    if (search) {
+      match.$or = [
+        {
+          manifestCode: {
+            $regex: search.toString().trim(),
+            $options: "i",
+          },
+        },
+        {
+          internalReference: {
+            $regex: search.toString().trim(),
+            $options: "i",
+          },
+        },
+      ];
+    }
+
+    const sortDirection = sortOrder === "asc" ? 1 : -1;
+
+    const [result] = await ManifestModel.aggregate([
+      { $match: match },
+
+      {
+        $lookup: {
+          from: "branches",
+          localField: "originBranchId",
+          foreignField: "_id",
+          as: "originBranch",
+        },
+      },
+
+      {
+        $lookup: {
+          from: "branches",
+          localField: "destinationBranchId",
+          foreignField: "_id",
+          as: "destinationBranch",
+        },
+      },
+
+      {
+        $lookup: {
+          from: "users",
+          localField: "createdBy",
+          foreignField: "_id",
+          as: "createdByUser",
+        },
+      },
+
+      {
+        $unwind: {
+          path: "$originBranch",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      {
+        $unwind: {
+          path: "$destinationBranch",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      {
+        $unwind: {
+          path: "$createdByUser",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+
+      {
+        $facet: {
+          data: [
+            {
+              $sort: {
+                [sortBy.toString()]: sortDirection,
+              },
+            },
+            { $skip: skip },
+            { $limit: limitNum },
+
+            {
+              $project: {
+                manifestCode: 1,
+                status: 1,
+                priority: 1,
+                packageCount: 1,
+                totalDeclaredWeight: 1,
+                createdAt: 1,
+                sealedAt: 1,
+                departedAt: 1,
+                arrivedAt: 1,
+                estimatedArrival: 1,
+
+                originBranch: {
+                  _id: "$originBranch._id",
+                  name: "$originBranch.name",
+                  code: "$originBranch.code",
+                },
+
+                destinationBranch: {
+                  _id: "$destinationBranch._id",
+                  name: "$destinationBranch.name",
+                  code: "$destinationBranch.code",
+                },
+
+                createdBy: {
+                  _id: "$createdByUser._id",
+                  firstName: "$createdByUser.firstName",
+                  lastName: "$createdByUser.lastName",
+                },
+
+                transportLeg: 1,
+                sealInfo: 1,
+              },
+            },
+          ],
+
+          totalCount: [
+            {
+              $count: "count",
+            },
+          ],
+        },
+      },
+    ]);
+
+    const totalCount = result.totalCount?.[0]?.count ?? 0;
+
+    return res.status(200).json({
+      success: true,
+      data: result.data,
+      pagination: {
+        pageNumber: pageNum,
+        pageSize: limitNum,
+        totalPages: Math.ceil(totalCount / limitNum),
+      },
+    });
+  }
 );
 
 
@@ -2314,10 +2517,10 @@ export const getManifestDetail = catchAsyncError(
     const [loader, manifest] = await Promise.all([
       LoaderModel.findOne({ userId: loaderUserId, status: "active" }).lean(),
       ManifestModel.findById(manifestId)
-        .populate("originBranchId",      "name code address")
+        .populate("originBranchId", "name code address")
         .populate("destinationBranchId", "name code address")
-        .populate("createdBy",           "firstName lastName")
-        .populate("sealInfo.sealedBy",   "firstName lastName")
+        .populate("createdBy", "firstName lastName")
+        .populate("sealInfo.sealedBy", "firstName lastName")
         .populate("transportLeg.transporterId", "firstName lastName phone")
         .lean(),
     ]);
@@ -2377,12 +2580,12 @@ export const getPackagesToManifest = catchAsyncError(
     if (!loader) return;
 
     const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
-    
+
     // Pagination parameters
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 50;
     const skip = (page - 1) * limit;
-    
+
     // Filter parameters
     const {
       search,
@@ -2391,7 +2594,7 @@ export const getPackagesToManifest = catchAsyncError(
       sortBy = "createdAt",
       sortOrder = "desc",
     } = req.query;
-    
+
 
     const query: any = {
       currentBranchId: activeBranchId,
@@ -2401,10 +2604,10 @@ export const getPackagesToManifest = catchAsyncError(
         { currentManifestId: null },
       ],
     };
-    
+
 
     query.destinationBranchId = { $ne: activeBranchId };
-    
+
 
     if (search) {
       query.$or = [
@@ -2414,17 +2617,17 @@ export const getPackagesToManifest = catchAsyncError(
         { description: { $regex: search, $options: "i" } },
       ];
     }
-    
+
     if (packageType) {
       query.type = packageType;
     }
-    
+
     if (isFragile === "true") {
       query.isFragile = true;
     } else if (isFragile === "false") {
       query.isFragile = false;
     }
-    
+
     // Sorting configuration
     const sortConfig: any = {};
     const sortFields: Record<string, string> = {
@@ -2435,10 +2638,10 @@ export const getPackagesToManifest = catchAsyncError(
       "destination.recipientName": "destination.recipientName",
       deliveryPriority: "deliveryPriority",
     };
-    
+
     const sortField = sortFields[sortBy as string] || "createdAt";
     sortConfig[sortField] = sortOrder === "asc" ? 1 : -1;
-    
+
 
     const [packages, totalCount] = await Promise.all([
       PackageModel.find(query)
@@ -2455,7 +2658,7 @@ export const getPackagesToManifest = catchAsyncError(
         .lean(),
       PackageModel.countDocuments(query),
     ]);
-    
+
 
     const stats = {
       total: totalCount,
@@ -2472,7 +2675,7 @@ export const getPackagesToManifest = catchAsyncError(
         return acc;
       }, {}),
     };
-    
+
     return res.status(200).json({
       success: true,
       message: `Found ${totalCount} package(s) ready to be manifested.`,
@@ -2487,8 +2690,8 @@ export const getPackagesToManifest = catchAsyncError(
         },
         branchContext: {
           branchId: activeBranchId,
-          branchName: loader.temporaryBranchId 
-            ? "Temporary assignment" 
+          branchName: loader.temporaryBranchId
+            ? "Temporary assignment"
             : "Home branch",
         },
       },
@@ -2509,7 +2712,7 @@ export const getPackagesToManifestGroupedByDestination = catchAsyncError(
     if (!loader) return;
 
     const activeBranchId = (loader as any).temporaryBranchId ?? loader.assignedBranchId;
-    
+
 
     const packages = await PackageModel.find({
       currentBranchId: activeBranchId,
@@ -2522,7 +2725,7 @@ export const getPackagesToManifestGroupedByDestination = catchAsyncError(
     })
       .populate("destinationBranchId", "name code address")
       .lean();
-    
+
 
     const groupedByDestination: Record<string, {
       branchId: string;
@@ -2534,13 +2737,13 @@ export const getPackagesToManifestGroupedByDestination = catchAsyncError(
       fragileCount: number;
       expressCount: number;
     }> = {};
-    
+
     for (const pkg of packages) {
       const destinationBranch = pkg.destinationBranchId as any;
       const destBranchId = destinationBranch?._id?.toString() || destinationBranch?.toString();
-      
+
       if (!destBranchId) continue;
-      
+
       if (!groupedByDestination[destBranchId]) {
         groupedByDestination[destBranchId] = {
           branchId: destBranchId,
@@ -2553,7 +2756,7 @@ export const getPackagesToManifestGroupedByDestination = catchAsyncError(
           expressCount: 0,
         };
       }
-      
+
       groupedByDestination[destBranchId].packages.push({
         trackingNumber: pkg.trackingNumber,
         weight: pkg.weight,
@@ -2563,23 +2766,23 @@ export const getPackagesToManifestGroupedByDestination = catchAsyncError(
         description: pkg.description,
         recipientName: pkg.destination?.recipientName,
       });
-      
+
       groupedByDestination[destBranchId].totalWeight += pkg.weight || 0;
       groupedByDestination[destBranchId].packageCount++;
-      
+
       if (pkg.isFragile) {
         groupedByDestination[destBranchId].fragileCount++;
       }
-      
+
       if (pkg.deliveryPriority === "express" || pkg.deliveryPriority === "same_day") {
         groupedByDestination[destBranchId].expressCount++;
       }
     }
-    
+
 
     const destinations = Object.values(groupedByDestination)
       .sort((a, b) => b.packageCount - a.packageCount);
-    
+
     return res.status(200).json({
       success: true,
       message: `Found packages for ${destinations.length} destination(s).`,
@@ -2588,8 +2791,8 @@ export const getPackagesToManifestGroupedByDestination = catchAsyncError(
         destinations,
         currentBranch: {
           id: activeBranchId,
-          name: loader.temporaryBranchId 
-            ? "Temporary Assignment" 
+          name: loader.temporaryBranchId
+            ? "Temporary Assignment"
             : "Home Branch",
         },
       },

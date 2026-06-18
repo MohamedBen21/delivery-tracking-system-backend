@@ -46,7 +46,7 @@ vehicleRouter.get(
 vehicleRouter.get(
   "/company/:companyId/vehicles",
   isAuthenticated,
-  authorizeRoles("manager", "supervisor"),
+  authorizeRoles("manager", "supervisor", "loader"),
   getCompanyVehicles
 );
 

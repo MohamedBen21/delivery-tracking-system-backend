@@ -1912,6 +1912,7 @@ export const getBranch = catchAsyncError(
 
 export const getMyBranches = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+    console.log("getMyBranches called with query:", req.query);
     const userId = req.user?._id;
     const { companyId } = req.params;
 
@@ -1927,26 +1928,13 @@ export const getMyBranches = catchAsyncError(
       return next(new ErrorHandler("Invalid company ID", 400));
     }
 
-    const [company, manager] = await Promise.all([
-      CompanyModel.findById(companyId).lean(),
-      ManagerModel.findOne({ userId, companyId }).lean(),
-    ]);
+    const company = await CompanyModel.findById(companyId).lean();
 
     if (!company) {
       return next(new ErrorHandler("Company not found", 404));
     }
 
-    if (!manager || !manager.isActive) {
-      return next(
-        new ErrorHandler("You are not an active manager of this company", 403),
-      );
-    }
-
     const branchQuery: mongoose.FilterQuery<typeof BranchModel> = { companyId };
-
-    if (!manager.branchAccess.allBranches) {
-      branchQuery._id = { $in: manager.branchAccess.specificBranches };
-    }
 
     const { status, city, search } = req.query;
 

@@ -19,6 +19,7 @@ import {
   getMyStats,
   getPackagesToManifest,
   getPackagesToManifestGroupedByDestination,
+  getManifests,
 } from "../controllers/loader.controller";
 
 const loaderRouter = Router();
@@ -34,6 +35,7 @@ loaderRouter.get("/my-stats", getMyStats);
 
 
 loaderRouter.post("/manifests", createManifest);
+loaderRouter.get("/manifests", getManifests);
 loaderRouter.get("/manifests/:manifestId", getManifestDetail);
 
 

@@ -59,7 +59,7 @@ managerRouter.patch("/companies/:companyId", ...managerOrAdmin, updateCompany);
 managerRouter.patch("/companies/:companyId/toggle-block", ...managerOrAdmin, toggleBlockCompany);
 
 managerRouter.post("/companies/:companyId/branches", ...managerOrAdmin, createBranch);
-managerRouter.get("/companies/:companyId/branches", ...managerOrAdmin, getMyBranches);
+managerRouter.get("/companies/:companyId/branches", isAuthenticated, getMyBranches);
 managerRouter.get("/companies/:companyId/branches/:branchId", ...managerOrAdmin, getBranch);
 managerRouter.patch("/companies/:companyId/branches/:branchId", ...managerOrAdmin, updateBranch);
 managerRouter.patch(
@@ -90,7 +90,7 @@ managerRouter.post(
   assignTransporter,
 );
 
-managerRouter.get("/companies/:companyId/transporters", isAuthenticated, authorizeRoles("admin", "manager", "supervisor"), getMyTransporters);
+managerRouter.get("/companies/:companyId/transporters", isAuthenticated, authorizeRoles("admin", "manager", "supervisor", "loader"), getMyTransporters);
 managerRouter.get(
   "/companies/:companyId/transporters/:transporterId",
   isAuthenticated,

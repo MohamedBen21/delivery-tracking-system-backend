@@ -80,7 +80,7 @@ supervisorRouter.patch("/me", ...supOrAdmin, updateMeSupervisor);
 supervisorRouter.get("/routes/by-branch", ...supOrAdmin, getRoutesByBranch);
 
 supervisorRouter.post("/branches/:branchId/deliverers", ...supOrAdmin, createDeliverer);
-supervisorRouter.get("/branches/:branchId/deliverers", ...supOrAdmin, getMyDeliverers);
+supervisorRouter.get("/branches/:branchId/deliverers", isAuthenticated, getMyDeliverers);
 supervisorRouter.get("/branches/:branchId/deliverers/:delivererId", ...supOrAdmin, getDeliverer);
 supervisorRouter.patch("/branches/:branchId/deliverers/:delivererId", ...supOrAdmin, updateDeliverer);
 supervisorRouter.patch(
@@ -102,7 +102,7 @@ supervisorRouter.patch(
 );
 
 supervisorRouter.post("/branches/:branchId/packages", ...supOrAdmin, createPackage);
-supervisorRouter.get("/branches/:branchId/packages", ...supOrAdmin, getBranchPackages);
+supervisorRouter.get("/branches/:branchId/packages", isAuthenticated, getBranchPackages);
 supervisorRouter.get("/branches/:branchId/packages/compact", ...supOrAdmin, getMyBranchPackages);
 supervisorRouter.get("/branches/:branchId/packages/by-status", ...supOrAdmin, getPackagesByStatus);
 supervisorRouter.get("/branches/:branchId/packages/by-branch-role", ...supOrAdmin, getPackagesByBranch);
@@ -264,7 +264,7 @@ supervisorRouter.get("/deliveries/search", isAuthenticated, authorizeRoles("deli
 supervisorRouter.get(
   "/transportation/today",
   isAuthenticated,
-  authorizeRoles( "transporter"),
+  authorizeRoles("transporter"),
   getOrCreateTodayTransportation
 );
 
@@ -272,7 +272,7 @@ supervisorRouter.get(
 supervisorRouter.get(
   "/transportation/history",
   isAuthenticated,
-  authorizeRoles( "transporter"),
+  authorizeRoles("transporter"),
   getTransportationsHistory
 );
 
@@ -280,7 +280,7 @@ supervisorRouter.get(
 supervisorRouter.get(
   "/manifest/history",
   isAuthenticated,
-  authorizeRoles( "transporter"),
+  authorizeRoles("transporter"),
   getManifestsHistory
 );
 

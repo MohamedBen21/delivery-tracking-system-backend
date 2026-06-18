@@ -11,6 +11,7 @@ import { notifyAdminsNewEntityPending } from "../services/notification.service";
 import DelivererModel from "../models/deliverer.model";
 import TransporterModel from "../models/transporter.model";
 import SupervisorModel from "../models/supervisor.model";
+import LoaderModel from "../models/loader.model";
 
 const VEHICLE_TYPES: VehicleType[] = [
   "motorcycle",
@@ -469,7 +470,7 @@ export const createVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -849,7 +850,7 @@ export const updateVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -933,7 +934,7 @@ export const toggleVehicleStatus = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -1110,11 +1111,12 @@ export const getCompanyVehicles = catchAsyncError(
       }
 
 
-      const [company, manager, requestingUser, supervisor] = await Promise.all([
+      const [company, manager, requestingUser, supervisor, loader] = await Promise.all([
         CompanyModel.findById(companyId).lean(),
         ManagerModel.findOne({ userId: userId, companyId }).lean(),
         userModel.findById(userId).select("role").lean(),
         SupervisorModel.findOne({ userId: userId, companyId }).lean(),
+        LoaderModel.findOne({ userId: userId, companyId }).lean(),
       ]);
 
       if (!company) {
@@ -1124,7 +1126,8 @@ export const getCompanyVehicles = catchAsyncError(
       const isAdmin = requestingUser?.role === "admin";
       const isAuthorizedManager = manager && manager.isActive;
       const isAuthorizedSupervisor = supervisor && supervisor.isActive;
-      if (!isAdmin && !isAuthorizedManager && !isAuthorizedSupervisor) {
+      const isAuthorizedLoader = loader;
+      if (!isAdmin && !isAuthorizedManager && !isAuthorizedSupervisor && !isAuthorizedLoader) {
         return next(
           new ErrorHandler(
             "Not authorized to view vehicles for this company",
@@ -1499,7 +1502,7 @@ export const assignVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();
@@ -1556,13 +1559,13 @@ export const releaseVehicle = catchAsyncError(
           const updated = await DelivererModel.findOneAndUpdate(
             { userId: vehicle.assignedUserId },
             {
-              $unset: { currentVehicleId: "" },      
+              $unset: { currentVehicleId: "" },
               $set: {
                 availabilityStatus: "available",
                 lastActiveAt: new Date(),
               },
             },
-            { new: true, session },                   
+            { new: true, session },
           );
 
         } else if (assignedRole === "transporter") {
@@ -1608,7 +1611,7 @@ export const releaseVehicle = catchAsyncError(
       }
       return next(error);
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { 
+      if (!transactionCommitted && session.inTransaction()) {
         await session.abortTransaction().catch(() => { });
       }
       await session.endSession();

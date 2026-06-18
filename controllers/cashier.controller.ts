@@ -199,6 +199,7 @@ export const lookupFreelancer = catchAsyncError(
 
 export const claimPackage = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
+    console.log("Claim package request received at", new Date().toISOString());
 
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -206,71 +207,85 @@ export const claimPackage = catchAsyncError(
 
     try {
       const cashierUserId = req.user?._id;
-      const cashier = await resolveCashier(cashierUserId, next, session);
-      if (!cashier) return;
+
+      // ── Get cashier with proper error handling ──
+      const cashier = await CashierModel.findOne({ userId: cashierUserId }).session(session);
+      if (!cashier) {
+        throw new ErrorHandler("Cashier not found.", 404);
+      }
 
       const { trackingNumber, notes } = req.body as {
         trackingNumber: string;
         notes?: string;
       };
 
-      if (!trackingNumber?.trim()) {
+      console.log(`Cashier ${cashier._id} attempting to claim package with tracking number: ${trackingNumber}`);
 
+      if (!trackingNumber?.trim()) {
         throw new ErrorHandler("trackingNumber is required.", 400);
       }
 
       const now = new Date();
+      const trimmedTrackingNumber = trackingNumber.trim().toUpperCase();
 
-
+      // ── Find package with proper error handling ──
       const packageDoc = await PackageModel.findOne({
-        trackingNumber: trackingNumber.trim().toUpperCase(),
+        trackingNumber: trimmedTrackingNumber,
       }).session(session);
 
       if (!packageDoc) {
-
         throw new ErrorHandler(
           `No package found with tracking number ${trackingNumber}.`,
           404,
         );
       }
 
-      // ── Guard: must be at this cashier's branch
-      if (
-        packageDoc.originBranchId.toString() !==
-        cashier.assignedBranchId.toString()
-      ) {
+      // ── Guard: must be at this cashier's branch ──
+      const cashierBranchId = cashier.assignedBranchId?.toString();
+      const packageOriginBranchId = packageDoc.originBranchId?.toString();
 
+      if (!cashierBranchId) {
+        throw new ErrorHandler("Cashier has no assigned branch.", 400);
+      }
+
+      if (packageOriginBranchId !== cashierBranchId) {
         throw new ErrorHandler(
           "This package belongs to a different branch and cannot be claimed here.",
           403,
         );
       }
 
-      // ── Guard: must be 'pending' (not already claimed or further)
+      // ── Guard: must be 'pending' (not already claimed or further) ──
       if (packageDoc.status !== "pending") {
-
         throw new ErrorHandler(
           `Package is already in status '${packageDoc.status}' and cannot be claimed again.`,
           400,
         );
       }
 
-      const noteText =
-        notes?.trim() ||
+      // ── Guard: check if package is already claimed by another cashier ──
+      if (packageDoc.claimedByCashierId) {
+        throw new ErrorHandler(
+          "This package has already been claimed by another cashier.",
+          400,
+        );
+      }
+
+      const noteText = notes?.trim() ||
         `Package physically received at counter by cashier. Bordereau verified.`;
 
-      //  Update the package 
-      await PackageModel.findByIdAndUpdate(
+      // ── Update the package ──
+      const updatedPackage = await PackageModel.findByIdAndUpdate(
         packageDoc._id,
         {
           $set: {
-            status: "cashier_claimed" as PackageStatus,
+            status: "at_origin_branch" as PackageStatus,
             claimedByCashierId: cashier._id,
             claimedAt: now,
           },
           $push: {
             trackingHistory: {
-              status: "cashier_claimed",
+              status: "at_origin_branch",
               branchId: cashier.assignedBranchId,
               userId: cashierUserId,
               notes: noteText,
@@ -278,35 +293,64 @@ export const claimPackage = catchAsyncError(
             },
           },
         },
-        { session },
+        {
+          session,
+          new: true // Return the updated document
+        }
       );
 
-      // PackageHistory record
+      if (!updatedPackage) {
+        throw new ErrorHandler("Failed to update package.", 500);
+      }
+
+      // ── PackageHistory record ──
       await PackageHistoryModel.create(
-        [
-          {
-            packageId: packageDoc._id,
-            status: "cashier_claimed" as PackageStatus,
-            branchId: cashier.assignedBranchId,
-            handledBy: cashierUserId,
-            handlerName: `${(req.user as any)?.firstName} ${(req.user as any)?.lastName}`,
-            handlerRole: "cashier",
-            notes: noteText,
-            timestamp: now,
-          },
-        ],
+        [{
+          packageId: packageDoc._id,
+          status: "at_origin_branch" as PackageStatus,
+          branchId: cashier.assignedBranchId,
+          handledBy: cashierUserId,
+          handlerName: `${(req.user as any)?.firstName || ''} ${(req.user as any)?.lastName || ''}`.trim() || "Cashier",
+          handlerRole: "cashier",
+          notes: noteText,
+          timestamp: now,
+        }],
         { session },
       );
 
-      // ── Increment branch currentLoad (package is now physically at branch) 
-      await BranchModel.findByIdAndUpdate(
+      // ── Increment branch currentLoad ──
+      const branchUpdate = await BranchModel.findByIdAndUpdate(
         cashier.assignedBranchId,
         { $inc: { currentLoad: 1 } },
-        { session },
+        { session }
       );
 
-      // ── Update cashier shift counters + recentScans 
-      await CashierModel.findByIdAndUpdate(
+      if (!branchUpdate) {
+        // Log but don't fail the transaction
+        console.warn(`Branch ${cashier.assignedBranchId} not found for load update`);
+      }
+
+      // ── FIX: Initialize currentShift if it's null ──
+      // First, check if currentShift exists and initialize if needed
+      if (!cashier.currentShift) {
+        await CashierModel.findByIdAndUpdate(
+          cashier._id,
+          {
+            $set: {
+              currentShift: {
+                packagesClaimedCount: 0,
+                packagesScannedCount: 0,
+                startTime: now,
+                isActive: true
+              }
+            }
+          },
+          { session }
+        );
+      }
+
+      // ── Update cashier shift counters + recentScans ──
+      const cashierUpdate = await CashierModel.findByIdAndUpdate(
         cashier._id,
         {
           $inc: {
@@ -318,43 +362,48 @@ export const claimPackage = catchAsyncError(
           },
           $push: {
             recentScans: {
-              $each: [
-                {
-                  action: "claim_package",
-                  packageId: packageDoc._id,
-                  trackingNumber: packageDoc.trackingNumber,
-                  branchId: cashier.assignedBranchId,
-                  timestamp: now,
-                  notes: noteText,
-                  success: true,
-                },
-              ],
-              $slice: -200,   // keep last 200 scans (most recent at the end)
+              $each: [{
+                action: "claim_package",
+                packageId: packageDoc._id,
+                trackingNumber: packageDoc.trackingNumber,
+                branchId: cashier.assignedBranchId,
+                timestamp: now,
+                notes: noteText,
+                success: true,
+              }],
+              $slice: -200, // keep last 200 scans
               $position: 0,
             },
           },
         },
-        { session },
+        { session }
       );
+
+      if (!cashierUpdate) {
+        throw new ErrorHandler("Failed to update cashier stats.", 500);
+      }
 
       await session.commitTransaction();
       transactionCommitted = true;
 
+      // ── Send notification (non-blocking) ──
+      try {
+        const branchName = (cashier as any).branchName || "Branch";
+        sendPackageClaimedByCashierNotification(
+          packageDoc.senderId?.toString(),
+          packageDoc.senderType,
+          packageDoc._id.toString(),
+          packageDoc.trackingNumber,
+          branchName
+        ).catch(error => {
+          console.error('Package claimed notification sending failed:', error);
+        });
+      } catch (notifError) {
+        // Don't fail the response if notification fails
+        console.error('Notification error:', notifError);
+      }
 
-
-      sendPackageClaimedByCashierNotification(
-
-        packageDoc.senderId.toString(),
-        packageDoc.senderType,
-        packageDoc._id.toString(),
-        packageDoc.trackingNumber,
-        (cashier as any).branchName || "Branch"
-
-      ).catch(error => {
-        console.error('Package claimed notification sending failed:', error);
-
-      });
-
+      // ── Success response ──
       return res.status(200).json({
         success: true,
         message: "Package claimed successfully.",
@@ -362,40 +411,56 @@ export const claimPackage = catchAsyncError(
           packageId: packageDoc._id,
           trackingNumber: packageDoc.trackingNumber,
           previousStatus: "pending",
-          currentStatus: "cashier_claimed",
+          currentStatus: "at_origin_branch",
           claimedAt: now,
           package: {
             type: packageDoc.type,
             weight: packageDoc.weight,
             isFragile: packageDoc.isFragile,
-            declaredValue: (packageDoc as any).declaredValue ?? null,
+            declaredValue: (packageDoc as any)?.declaredValue ?? null,
             deliveryType: packageDoc.deliveryType,
-            totalPrice: (packageDoc as any).totalPrice,
+            totalPrice: (packageDoc as any)?.totalPrice,
             recipient: {
-              name: packageDoc.destination.recipientName,
-              phone: packageDoc.destination.recipientPhone,
-              city: packageDoc.destination.city,
-              state: packageDoc.destination.state,
+              name: packageDoc.destination?.recipientName,
+              phone: packageDoc.destination?.recipientPhone,
+              city: packageDoc.destination?.city,
+              state: packageDoc.destination?.state,
             },
           },
         },
       });
 
     } catch (error: any) {
+      // ── Handle specific error types ──
       if (error.name === "ValidationError") {
-        return next(
-          new ErrorHandler(
-            Object.values(error.errors)
-              .map((e: any) => e.message)
-              .join(", "),
-            400,
-          ),
-        );
+        const messages = Object.values(error.errors)
+          .map((e: any) => e.message)
+          .join(", ");
+        return next(new ErrorHandler(messages, 400));
       }
-      return next(error);
+
+      // ── Handle duplicate key errors ──
+      if (error.code === 11000) {
+        return next(new ErrorHandler("Duplicate entry found.", 400));
+      }
+
+      // ── Pass through existing ErrorHandler instances ──
+      if (error instanceof ErrorHandler) {
+        return next(error);
+      }
+
+      // ── Log unexpected errors ──
+      console.error("Unexpected error in claimPackage:", error);
+      return next(new ErrorHandler("An unexpected error occurred.", 500));
+
     } finally {
-      if (!transactionCommitted && session.inTransaction()) { // Vérifie si elle est encore valide
-        await session.abortTransaction().catch(() => { });
+      // ── Clean up transaction ──
+      if (!transactionCommitted && session.inTransaction()) {
+        try {
+          await session.abortTransaction();
+        } catch (abortError) {
+          console.error("Error aborting transaction:", abortError);
+        }
       }
       await session.endSession();
     }
